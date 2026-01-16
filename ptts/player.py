@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -305,6 +306,12 @@ def create_app(root_dir: Path) -> FastAPI:
         manifest_path = book_dir / "tts" / "manifest.json"
         manifest = _load_json(manifest_path)
         progress = _compute_progress(manifest) if manifest else None
+        manifest_created = 0
+        if manifest:
+            try:
+                manifest_created = int(manifest.get("created_unix") or 0)
+            except (TypeError, ValueError):
+                manifest_created = 0
 
         job = jobs.get(book_id)
         running = False
@@ -319,6 +326,10 @@ def create_app(root_dir: Path) -> FastAPI:
                 if job.log_handle:
                     job.log_handle.close()
                     job.log_handle = None
+        if running and job and job.rechunk:
+            started_at = int(job.started_at)
+            if manifest_created and manifest_created < started_at:
+                progress = None
 
         log_path = ""
         if job:
@@ -361,6 +372,10 @@ def create_app(root_dir: Path) -> FastAPI:
 
         tts_dir = book_dir / "tts"
         tts_dir.mkdir(parents=True, exist_ok=True)
+        if payload.rechunk:
+            seg_dir = tts_dir / "segments"
+            if seg_dir.exists():
+                shutil.rmtree(seg_dir)
         log_path = tts_dir / "synth.log"
         log_handle = log_path.open("w", encoding="utf-8")
 

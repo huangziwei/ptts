@@ -193,6 +193,52 @@
         font-family: var(--ui);
       }
 
+      .voice-groups {
+        display: grid;
+        gap: 10px;
+      }
+
+      .voice-group-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .voice-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .voice-button {
+        border: 1px solid #d8caba;
+        background: #fff;
+        color: var(--ink);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .voice-button.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .voice-button:focus-visible {
+        outline: 2px solid var(--accent-2);
+        outline-offset: 2px;
+      }
+
+      .voice-empty {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
       .tts-actions {
         display: flex;
         flex-wrap: wrap;
@@ -565,28 +611,14 @@
           </div>
           <div class="tts-grid">
             <div class="tts-field">
-              <label for="voiceSelect">Voice</label>
-              <select id="voiceSelect"></select>
-            </div>
-            <div class="tts-field">
-              <label for="maxCharsInput">Max chars</label>
-              <input id="maxCharsInput" type="number" min="100" step="50" value="800" />
-            </div>
-            <div class="tts-field">
-              <label for="padMsInput">Pad ms</label>
-              <input id="padMsInput" type="number" min="0" step="10" value="150" />
-            </div>
-            <div class="tts-field">
-              <label for="chunkModeSelect">Chunk mode</label>
-              <select id="chunkModeSelect">
-                <option value="sentence">Sentence</option>
-                <option value="packed">Packed</option>
-              </select>
+              <div class="voice-groups" id="voiceGroup">
+                <div class="voice-empty">Loading voices...</div>
+              </div>
             </div>
           </div>
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
-            <label><input id="rechunkInput" type="checkbox" /> Rechunk</label>
+            <label title="Rebuild chunks and delete existing audio."><input id="rechunkInput" type="checkbox" /> Rechunk (delete audio)</label>
           </div>
           <div class="progress-track">
             <div class="progress-fill" id="progressFill"></div>
@@ -682,10 +714,7 @@
       const bookmarkList = document.getElementById("bookmarkList");
       const bookmarkPanel = document.getElementById("bookmarkPanel");
       const saveBookmarkBtn = document.getElementById("saveBookmarkBtn");
-      const voiceSelect = document.getElementById("voiceSelect");
-      const maxCharsInput = document.getElementById("maxCharsInput");
-      const padMsInput = document.getElementById("padMsInput");
-      const chunkModeSelect = document.getElementById("chunkModeSelect");
+      const voiceGroup = document.getElementById("voiceGroup");
       const rechunkInput = document.getElementById("rechunkInput");
       const startTts = document.getElementById("startTts");
       const progressFill = document.getElementById("progressFill");
@@ -758,19 +787,46 @@
         return res.json();
       }
 
-      function appendVoiceGroup(select, label, items) {
+      function setSelectedVoice(value) {
+        state.voicePreference = value;
+        const buttons = voiceGroup.querySelectorAll(".voice-button");
+        buttons.forEach((button) => {
+          button.classList.toggle("active", button.dataset.voice === value);
+        });
+        if (value) {
+          localStorage.setItem("ptts.voice", value);
+        }
+      }
+
+      function getSelectedVoice() {
+        return state.voicePreference;
+      }
+
+      function appendVoiceGroup(container, label, items) {
         if (!items.length) {
           return;
         }
-        const group = document.createElement("optgroup");
-        group.label = label;
+        const group = document.createElement("div");
+        group.className = "voice-group";
+        const title = document.createElement("div");
+        title.className = "voice-group-title";
+        title.textContent = label;
+        const buttons = document.createElement("div");
+        buttons.className = "voice-buttons";
         items.forEach((item) => {
-          const option = document.createElement("option");
-          option.value = item.value;
-          option.textContent = item.label;
-          group.appendChild(option);
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "voice-button";
+          button.dataset.voice = item.value;
+          button.textContent = item.label;
+          button.addEventListener("click", () => {
+            setSelectedVoice(item.value);
+          });
+          buttons.appendChild(button);
         });
-        select.appendChild(group);
+        group.appendChild(title);
+        group.appendChild(buttons);
+        container.appendChild(group);
       }
 
       async function loadVoices() {
@@ -780,30 +836,30 @@
           const builtin = Array.isArray(data.builtin) ? data.builtin : [];
           const defaultVoice = data.default || "";
 
-          voiceSelect.innerHTML = "";
-          appendVoiceGroup(voiceSelect, "Local voices", local);
-          appendVoiceGroup(voiceSelect, "Built-in voices", builtin);
+          voiceGroup.innerHTML = "";
+          appendVoiceGroup(voiceGroup, "Local voices", local);
+          appendVoiceGroup(voiceGroup, "Built-in voices", builtin);
 
-          const preferred = state.voicePreference;
-          const options = Array.from(voiceSelect.options).map((o) => o.value);
-          if (preferred && options.includes(preferred)) {
-            voiceSelect.value = preferred;
-          } else if (local.length) {
-            voiceSelect.value = local[0].value;
-          } else if (defaultVoice && options.includes(defaultVoice)) {
-            voiceSelect.value = defaultVoice;
-          } else if (builtin.length) {
-            voiceSelect.value = builtin[0].value;
+          const available = [...local, ...builtin].map((item) => item.value);
+          if (!available.length) {
+            voiceGroup.innerHTML = "<div class=\"voice-empty\">No voices found.</div>";
+            setSelectedVoice(null);
+            return;
           }
-          if (voiceSelect.value) {
-            localStorage.setItem("ptts.voice", voiceSelect.value);
+
+          let selected = state.voicePreference;
+          if (!selected || !available.includes(selected)) {
+            if (local.length) {
+              selected = local[0].value;
+            } else if (defaultVoice && available.includes(defaultVoice)) {
+              selected = defaultVoice;
+            } else {
+              selected = builtin[0].value;
+            }
           }
+          setSelectedVoice(selected);
         } catch (err) {
-          voiceSelect.innerHTML = "";
-          const option = document.createElement("option");
-          option.value = "";
-          option.textContent = "Unable to load voices";
-          voiceSelect.appendChild(option);
+          voiceGroup.innerHTML = "<div class=\"voice-empty\">Unable to load voices.</div>";
         }
       }
 
@@ -884,15 +940,6 @@
 
       function loadSettings() {
         state.voicePreference = localStorage.getItem("ptts.voice");
-        if (!maxCharsInput.value) {
-          maxCharsInput.value = "800";
-        }
-        if (!padMsInput.value) {
-          padMsInput.value = "150";
-        }
-        if (!chunkModeSelect.value) {
-          chunkModeSelect.value = "sentence";
-        }
         const collapsed = localStorage.getItem("ptts.ttsCollapsed") === "1";
         if (collapsed) {
           ttsPanel.classList.add("collapsed");
@@ -901,8 +948,8 @@
       }
 
       function saveSettings() {
-        if (voiceSelect && voiceSelect.value) {
-          localStorage.setItem("ptts.voice", voiceSelect.value);
+        if (state.voicePreference) {
+          localStorage.setItem("ptts.voice", state.voicePreference);
         }
       }
 
@@ -1255,14 +1302,9 @@
           return;
         }
         saveSettings();
-        const maxChars = parseInt(maxCharsInput.value, 10);
-        const padMs = parseInt(padMsInput.value, 10);
         const payload = {
           book_id: state.book.id,
-          voice: voiceSelect.value,
-          max_chars: Number.isNaN(maxChars) ? 800 : maxChars,
-          pad_ms: Number.isNaN(padMs) ? 150 : padMs,
-          chunk_mode: chunkModeSelect.value,
+          voice: getSelectedVoice(),
           rechunk: rechunkInput.checked,
         };
         state.pendingManifestRefresh = payload.rechunk || !state.chapters.length;
@@ -1603,8 +1645,6 @@
           }
         }
       });
-      voiceSelect.addEventListener("change", saveSettings);
-
       loadSettings();
       loadVoices();
       readUrlState();
