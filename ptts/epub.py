@@ -138,7 +138,40 @@ def html_to_text(html: bytes) -> str:
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
         tag.decompose()
     root = soup.body if soup.body else soup
-    text = root.get_text(separator="\n")
+
+    block_tags = {
+        "p",
+        "div",
+        "li",
+        "blockquote",
+        "pre",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+    }
+
+    blocks: List[str] = []
+    for elem in root.find_all(block_tags):
+        if any(getattr(parent, "name", None) in block_tags for parent in elem.parents):
+            continue
+        for br in elem.find_all("br"):
+            br.replace_with("\n")
+        text = elem.get_text(separator="", strip=False)
+        text = text.replace("\xa0", " ")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        text = text.strip()
+        if text:
+            blocks.append(text)
+
+    if blocks:
+        return normalize_text("\n\n".join(blocks))
+
+    text = root.get_text(separator="", strip=False)
     return normalize_text(text)
 
 
