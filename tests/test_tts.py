@@ -8,6 +8,11 @@ def test_make_chunks_adds_punctuation() -> None:
     assert chunks == ["Hello world."]
 
 
+def test_make_chunks_normalizes_abbreviations() -> None:
+    chunks = tts.make_chunks("Mr. Poe went home.", max_chars=50)
+    assert chunks == ["Mr Poe went home."]
+
+
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
     chunk_dir = tmp_path / "chunks"
     chunks = ["One.", "Two."]
@@ -32,6 +37,7 @@ def test_prepare_manifest_writes_chunks(tmp_path: Path) -> None:
         voice="voice.wav",
         max_chars=50,
         pad_ms=150,
+        chunk_mode="sentence",
         rechunk=False,
     )
 

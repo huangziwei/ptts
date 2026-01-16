@@ -168,6 +168,7 @@ def _synth(args: argparse.Namespace) -> int:
             out_dir=out_dir,
             max_chars=args.max_chars,
             pad_ms=args.pad_ms,
+            chunk_mode=args.chunk_mode,
             rechunk=args.rechunk,
         )
 
@@ -181,6 +182,7 @@ def _synth(args: argparse.Namespace) -> int:
         out_dir=out_dir,
         max_chars=args.max_chars,
         pad_ms=args.pad_ms,
+        chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
     )
 
@@ -237,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--voice", required=True, help="Voice prompt: wav path or hf:// URL")
     synth.add_argument("--max-chars", type=int, default=800)
     synth.add_argument("--pad-ms", type=int, default=150)
+    synth.add_argument(
+        "--chunk-mode",
+        choices=["sentence", "packed"],
+        default="sentence",
+        help="Chunking strategy (default: sentence)",
+    )
     synth.add_argument("--rechunk", action="store_true")
     synth.set_defaults(func=_synth)
 

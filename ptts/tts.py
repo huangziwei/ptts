@@ -31,6 +31,7 @@ except Exception:  # pragma: no cover - optional runtime dependency
 
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms)\.", re.IGNORECASE)
 
 
 @dataclass
@@ -80,6 +81,10 @@ def split_paragraphs(text: str) -> List[str]:
     # Split on blank lines (one or more).
     paras = re.split(r"\n\s*\n+", text.strip())
     return [p.strip().replace("\n", " ") for p in paras if p.strip()]
+
+
+def normalize_abbreviations(text: str) -> str:
+    return _ABBREV_DOT_RE.sub(r"\1", text)
 
 
 def split_sentences(paragraph: str) -> List[str]:
@@ -149,13 +154,21 @@ def pack_into_chunks(units: List[str], max_chars: int) -> List[str]:
     return chunks
 
 
-def make_chunks(text: str, max_chars: int) -> List[str]:
+def make_chunks(text: str, max_chars: int, chunk_mode: str = "sentence") -> List[str]:
+    if chunk_mode not in ("sentence", "packed"):
+        raise ValueError(f"Unsupported chunk_mode: {chunk_mode}")
+
+    text = normalize_abbreviations(text)
     chunks: List[str] = []
     for para in split_paragraphs(text):
         sents = split_sentences(para)
         if not sents:
             continue
-        chunks.extend(pack_into_chunks(sents, max_chars=max_chars))
+        if chunk_mode == "sentence":
+            for sent in sents:
+                chunks.extend(pack_into_chunks([sent], max_chars=max_chars))
+        else:
+            chunks.extend(pack_into_chunks(sents, max_chars=max_chars))
     # Ensure each chunk ends with punctuation/newline-like boundary for prosody.
     cleaned: List[str] = []
     for c in chunks:
@@ -380,6 +393,7 @@ def prepare_manifest(
     voice: str,
     max_chars: int,
     pad_ms: int,
+    chunk_mode: str,
     rechunk: bool,
 ) -> Tuple[Dict[str, Any], List[List[str]], int]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -395,6 +409,12 @@ def prepare_manifest(
         manifest_chapters = manifest.get("chapters", [])
         if not isinstance(manifest_chapters, list) or not manifest_chapters:
             raise ValueError("manifest.json contains no chapters.")
+        existing_mode = manifest.get("chunk_mode", "packed")
+        if existing_mode != chunk_mode:
+            raise ValueError(
+                "manifest.json chunk_mode differs from requested. "
+                "Run with --rechunk to regenerate manifest."
+            )
         if len(manifest_chapters) != len(chapters):
             raise ValueError(
                 "manifest.json chapters differ from current input. "
@@ -426,7 +446,7 @@ def prepare_manifest(
         chapter_chunks = []
         manifest_chapters = []
         for ch in chapters:
-            chunks = make_chunks(ch.text, max_chars=max_chars)
+            chunks = make_chunks(ch.text, max_chars=max_chars, chunk_mode=chunk_mode)
             if not chunks:
                 raise ValueError(f"No chunks generated for chapter: {ch.id}")
             chapter_chunks.append(chunks)
@@ -447,6 +467,7 @@ def prepare_manifest(
             "voice": voice,
             "max_chars": int(max_chars),
             "pad_ms": int(pad_ms),
+            "chunk_mode": chunk_mode,
             "chapters": manifest_chapters,
         }
         atomic_write_json(manifest_path, manifest)
@@ -454,6 +475,7 @@ def prepare_manifest(
     manifest["voice"] = voice
     manifest["max_chars"] = int(max_chars)
     manifest["pad_ms"] = int(manifest.get("pad_ms", pad_ms))
+    manifest["chunk_mode"] = chunk_mode
 
     for ch_entry, chunks in zip(manifest["chapters"], chapter_chunks):
         if "durations_ms" not in ch_entry or len(ch_entry["durations_ms"]) != len(chunks):
@@ -474,6 +496,7 @@ def synthesize(
     out_dir: Path,
     max_chars: int = 800,
     pad_ms: int = 150,
+    chunk_mode: str = "sentence",
     rechunk: bool = False,
 ) -> int:
     _require_tts()
@@ -491,6 +514,7 @@ def synthesize(
             voice=voice,
             max_chars=max_chars,
             pad_ms=pad_ms,
+            chunk_mode=chunk_mode,
             rechunk=rechunk,
         )
     except ValueError as exc:
@@ -594,6 +618,7 @@ def synthesize_text(
     out_dir: Path,
     max_chars: int = 800,
     pad_ms: int = 150,
+    chunk_mode: str = "sentence",
     rechunk: bool = False,
 ) -> int:
     chapters = load_text_chapters(text_path)
@@ -603,6 +628,7 @@ def synthesize_text(
         out_dir=out_dir,
         max_chars=max_chars,
         pad_ms=pad_ms,
+        chunk_mode=chunk_mode,
         rechunk=rechunk,
     )
 
@@ -613,6 +639,7 @@ def synthesize_book(
     out_dir: Optional[Path] = None,
     max_chars: int = 800,
     pad_ms: int = 150,
+    chunk_mode: str = "sentence",
     rechunk: bool = False,
 ) -> int:
     if out_dir is None:
@@ -629,6 +656,7 @@ def synthesize_book(
         out_dir=out_dir,
         max_chars=max_chars,
         pad_ms=pad_ms,
+        chunk_mode=chunk_mode,
         rechunk=rechunk,
     )
 
@@ -665,6 +693,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Silence to append to each chunk in ms (default: 150)",
     )
     ap.add_argument(
+        "--chunk-mode",
+        choices=["sentence", "packed"],
+        default="sentence",
+        help="Chunking strategy (default: sentence)",
+    )
+    ap.add_argument(
         "--rechunk",
         action="store_true",
         help="Ignore existing manifest and rechunk the input text",
@@ -682,6 +716,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             out_dir=args.out,
             max_chars=args.max_chars,
             pad_ms=args.pad_ms,
+            chunk_mode=args.chunk_mode,
             rechunk=args.rechunk,
         )
     if not args.out:
@@ -692,6 +727,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         out_dir=args.out,
         max_chars=args.max_chars,
         pad_ms=args.pad_ms,
+        chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
     )
 
