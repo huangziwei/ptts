@@ -16,6 +16,26 @@ def test_prepare_tts_text_normalizes_abbreviations() -> None:
     assert tts.prepare_tts_text("Mr. Poe went home.") == "Mr Poe went home."
 
 
+def test_make_chunks_keeps_name_initials_together() -> None:
+    text = (
+        "We are grateful to Irwin Z. Hoffman for his help."
+    )
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
+def test_make_chunks_skips_k_initial_split() -> None:
+    text = "K. said hello. Then left."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == ["K. said hello.", "Then left."]
+
+
+def test_make_chunks_skips_us_initial_split() -> None:
+    text = "The U.S. Army is here."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
     chunk_dir = tmp_path / "chunks"
     chunks = ["One.", "Two."]

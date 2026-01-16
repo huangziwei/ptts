@@ -33,8 +33,71 @@ except Exception:  # pragma: no cover - optional runtime dependency
 
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-_ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms)\.", re.IGNORECASE)
-_ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms)\.$", re.IGNORECASE)
+_ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.", re.IGNORECASE)
+_ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.$", re.IGNORECASE)
+_SINGLE_INITIAL_RE = re.compile(r"\b[A-Z]\.$")
+_NAME_INITIAL_RE = re.compile(r"\b([A-Z][a-z]+)\s+[A-Z]\.$")
+_MULTI_INITIAL_RE = re.compile(r"(?:\b[A-Z]\.){2,}$")
+_SENTENCE_STARTERS = {
+    "the",
+    "a",
+    "an",
+    "and",
+    "but",
+    "or",
+    "so",
+    "yet",
+    "for",
+    "nor",
+    "in",
+    "on",
+    "at",
+    "by",
+    "to",
+    "from",
+    "with",
+    "without",
+    "as",
+    "if",
+    "when",
+    "while",
+    "after",
+    "before",
+    "because",
+    "since",
+    "however",
+    "therefore",
+    "thus",
+    "then",
+    "this",
+    "that",
+    "these",
+    "those",
+    "i",
+    "we",
+    "you",
+    "he",
+    "she",
+    "it",
+    "they",
+    "there",
+}
+_INITIAL_STOPWORDS = {
+    "chapter",
+    "section",
+    "figure",
+    "fig",
+    "table",
+    "appendix",
+    "part",
+    "volume",
+    "vol",
+    "no",
+    "nos",
+    "item",
+    "book",
+    "act",
+}
 
 
 @dataclass
@@ -101,7 +164,7 @@ def split_sentence_spans(paragraph: str, offset: int) -> List[Tuple[int, int]]:
     start = 0
     for match in _SENT_SPLIT_RE.finditer(paragraph):
         end = match.start()
-        if _ABBREV_SENT_RE.search(paragraph[:end]):
+        if _should_skip_sentence_split(paragraph, end, match.end()):
             continue
         span = _trim_span(paragraph, start, end)
         if span:
@@ -111,6 +174,49 @@ def split_sentence_spans(paragraph: str, offset: int) -> List[Tuple[int, int]]:
     if span:
         spans.append((offset + span[0], offset + span[1]))
     return spans
+
+
+def _next_word(text: str, start: int) -> str:
+    match = re.search(r"[A-Za-z][A-Za-z'’\-]*", text[start:])
+    if not match:
+        return ""
+    return match.group(0)
+
+
+def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool:
+    tail = paragraph[:end]
+    next_word = _next_word(paragraph, next_pos)
+    next_lower = next_word.lower()
+
+    if _ABBREV_SENT_RE.search(tail):
+        if next_lower and next_lower in _SENTENCE_STARTERS:
+            return False
+        return True
+
+    if _MULTI_INITIAL_RE.search(tail):
+        if next_lower and next_lower in _SENTENCE_STARTERS:
+            return False
+        return True
+
+    if not _SINGLE_INITIAL_RE.search(tail):
+        return False
+
+    if next_word and next_word[0].islower():
+        return True
+
+    if next_lower and next_lower in _SENTENCE_STARTERS:
+        return False
+
+    name_match = _NAME_INITIAL_RE.search(tail)
+    if name_match and next_word:
+        prev_word = name_match.group(1).lower()
+        if prev_word not in _INITIAL_STOPWORDS:
+            return True
+
+    if len(next_word) == 1:
+        return True
+
+    return False
 
 
 def split_span_by_words(
