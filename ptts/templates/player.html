@@ -1282,7 +1282,10 @@
         renderChapters();
         applyLastPlayedHighlight();
         if (state.activeQueueIndex !== null) {
-          setActiveChunk(state.activeQueueIndex, false);
+          const activeItem = state.queue[state.activeQueueIndex];
+          if (activeItem && activeItem.chapterId === chapter.id) {
+            setActiveChunk(state.activeQueueIndex, false);
+          }
         }
         updateUrl(state.book ? state.book.id : null, chapter.id);
         updateMarks();
