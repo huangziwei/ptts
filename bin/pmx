@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image="ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
+podman_args=(${PMX_OPTS:-})
+
+exec podman run --rm -it \
+  -v "$PWD":/work -w /work \
+  -e HF_HOME=/work/.cache/huggingface \
+  -e UV_CACHE_DIR=/work/.uv-cache \
+  "${podman_args[@]}" \
+  "$image" \
+  "$@"
