@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PTTS Player</title>
+    <title>pTTS player</title>
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Source+Serif+4:wght@400;600&family=Work+Sans:wght@400;600&display=swap");
 
@@ -545,7 +545,7 @@
   <body>
     <div class="app">
       <aside class="library">
-        <div class="brand">PTTS Player</div>
+        <div class="brand">pTTS player</div>
         <div class="root-path">Root: {{ root_dir }}</div>
         <div id="bookList" class="book-list"></div>
       </aside>
@@ -844,6 +844,11 @@
         }
         if (!chunkModeSelect.value) {
           chunkModeSelect.value = "sentence";
+        }
+        const collapsed = localStorage.getItem("ptts.ttsCollapsed") === "1";
+        if (collapsed) {
+          ttsPanel.classList.add("collapsed");
+          ttsToggle.textContent = "Expand";
         }
       }
 
@@ -1524,6 +1529,10 @@
         ttsToggle.textContent = ttsPanel.classList.contains("collapsed")
           ? "Expand"
           : "Collapse";
+        localStorage.setItem(
+          "ptts.ttsCollapsed",
+          ttsPanel.classList.contains("collapsed") ? "1" : "0"
+        );
       });
       audio.addEventListener("ended", () => {
         playIndex(state.currentQueueIndex + 1);
