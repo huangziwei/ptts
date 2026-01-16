@@ -1,8 +1,9 @@
 # Narrate English books with Pocket-TTS
 
-## prerequisites
+> ### Note
+> As I am still using a vintage Intel MacBook Pro, many cool tools that use latest PyTorch or JAX cannot be run on it directly. I resort to using VMs via Podman. But on other compatible machines, Podman is not necessary at all. Just remove the `./bin/pmx` part and use `uv` directly.
 
-As I am still using a vintage Intel MacBook Pro, many cool tools that use latest PyTorch or JAX cannot be run directly. I resort to using VMs via Podman:
+## prerequisites
 
 ```bash
 git clone <this-repo>
