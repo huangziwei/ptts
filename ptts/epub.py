@@ -205,7 +205,9 @@ def build_spine_entries(book: epub.EpubBook) -> List[TocEntry]:
 
 
 def html_to_text(html: bytes) -> str:
-    soup = BeautifulSoup(html, "lxml")
+    head = html.lstrip()[:512].lower()
+    parser = "lxml-xml" if (head.startswith(b"<?xml") or b"xmlns=" in head) else "lxml"
+    soup = BeautifulSoup(html, parser)
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
         tag.decompose()
     for tag in soup.find_all("sup"):
