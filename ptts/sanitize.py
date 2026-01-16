@@ -202,6 +202,7 @@ def sanitize_book(
     book_dir: Path,
     rules_path: Optional[Path] = None,
     overwrite: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> int:
     toc_path = book_dir / "toc.json"
     raw_dir = book_dir / "raw" / "chapters"
@@ -223,7 +224,9 @@ def sanitize_book(
             for path in existing:
                 path.unlink()
 
-    rules = load_rules(rules_path, book_dir)
+    if base_dir is None:
+        base_dir = Path.cwd()
+    rules = load_rules(rules_path, base_dir)
     drop_patterns = compile_patterns(rules.drop_chapter_title_patterns)
     cutoff_patterns = compile_patterns(rules.section_cutoff_patterns)
     remove_patterns = compile_patterns(rules.remove_patterns)

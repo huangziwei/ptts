@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import epub as epub_util
 from . import sanitize as sanitize_util
+from . import preview as preview_util
 
 
 def _ingest(args: argparse.Namespace) -> int:
@@ -83,7 +84,10 @@ def _sanitize(args: argparse.Namespace) -> int:
     rules_path = Path(args.rules) if args.rules else None
     try:
         written = sanitize_util.sanitize_book(
-            book_dir=book_dir, rules_path=rules_path, overwrite=args.overwrite
+            book_dir=book_dir,
+            rules_path=rules_path,
+            overwrite=args.overwrite,
+            base_dir=Path.cwd(),
         )
     except Exception as exc:
         sys.stderr.write(f"Sanitize failed: {exc}\n")
@@ -148,10 +152,16 @@ def build_parser() -> argparse.ArgumentParser:
     package.set_defaults(func=lambda _args: _not_implemented("package"))
 
     preview = subparsers.add_parser(
-        "preview", help="Preview chapters in a web UI (not yet implemented)"
+        "preview", help="Preview chapters in a web UI"
     )
-    preview.add_argument("--book", required=True, help="Book output directory")
-    preview.set_defaults(func=lambda _args: _not_implemented("preview"))
+    preview.add_argument("book", help="Book output directory")
+    preview.add_argument("--host", default="127.0.0.1")
+    preview.add_argument("--port", type=int, default=8001)
+    preview.set_defaults(
+        func=lambda args: preview_util.run(
+            Path(args.book), host=args.host, port=args.port
+        )
+    )
 
     clean = subparsers.add_parser(
         "clean", help="Remove generated audio artifacts (not yet implemented)"

@@ -7,8 +7,12 @@ requires-python = ">=3.10"
 dependencies = [
   "beautifulsoup4>=4.12",
   "ebooklib>=0.18",
+  "fastapi>=0.110",
+  "jinja2>=3.1",
   "lxml>=5.0",
+  "python-multipart>=0.0.9",
   "pytest>=7.4",
+  "uvicorn>=0.27",
 ]
 
 [project.scripts]
