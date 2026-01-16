@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from . import epub as epub_util
-from . import clean as clean_util
+from . import sanitize as sanitize_util
 
 
 def _ingest(args: argparse.Namespace) -> int:
@@ -82,7 +82,7 @@ def _sanitize(args: argparse.Namespace) -> int:
     book_dir = Path(args.book)
     rules_path = Path(args.rules) if args.rules else None
     try:
-        written = clean_util.sanitize_book(
+        written = sanitize_util.sanitize_book(
             book_dir=book_dir, rules_path=rules_path, overwrite=args.overwrite
         )
     except Exception as exc:
