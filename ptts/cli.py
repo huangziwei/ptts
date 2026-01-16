@@ -9,6 +9,7 @@ from pathlib import Path
 from . import epub as epub_util
 from . import sanitize as sanitize_util
 from . import preview as preview_util
+from . import tts as tts_util
 
 
 def _ingest(args: argparse.Namespace) -> int:
@@ -98,6 +99,35 @@ def _sanitize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _synth(args: argparse.Namespace) -> int:
+    book_dir = Path(args.book) if args.book else None
+    text_path = Path(args.text) if args.text else None
+    out_dir = Path(args.out) if args.out else None
+
+    if book_dir is not None:
+        return tts_util.synthesize_book(
+            book_dir=book_dir,
+            voice=args.voice,
+            out_dir=out_dir,
+            max_chars=args.max_chars,
+            pad_ms=args.pad_ms,
+            rechunk=args.rechunk,
+        )
+
+    if text_path is None or out_dir is None:
+        sys.stderr.write("--text and --out are required when not using --book.\n")
+        return 2
+
+    return tts_util.synthesize_text(
+        text_path=text_path,
+        voice=args.voice,
+        out_dir=out_dir,
+        max_chars=args.max_chars,
+        pad_ms=args.pad_ms,
+        rechunk=args.rechunk,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ptts")
     subparsers = parser.add_subparsers(dest="command")
@@ -139,10 +169,19 @@ def build_parser() -> argparse.ArgumentParser:
     chunk.add_argument("--book", required=True, help="Book output directory")
     chunk.set_defaults(func=lambda _args: _not_implemented("chunk"))
 
-    synth = subparsers.add_parser("synth", help="Synthesize audio (not yet implemented)")
-    synth.add_argument("--book", required=True, help="Book output directory")
+    synth = subparsers.add_parser("synth", help="Synthesize audio")
+    synth_group = synth.add_mutually_exclusive_group(required=True)
+    synth_group.add_argument("--text", help="Input UTF-8 .txt file")
+    synth_group.add_argument("--book", help="Book output directory")
+    synth.add_argument(
+        "--out",
+        help="Output directory (default: <book>/tts when using --book)",
+    )
     synth.add_argument("--voice", required=True, help="Voice prompt: wav path or hf:// URL")
-    synth.set_defaults(func=lambda _args: _not_implemented("synth"))
+    synth.add_argument("--max-chars", type=int, default=800)
+    synth.add_argument("--pad-ms", type=int, default=150)
+    synth.add_argument("--rechunk", action="store_true")
+    synth.set_defaults(func=_synth)
 
     package = subparsers.add_parser(
         "package", help="Package M4B (not yet implemented)"

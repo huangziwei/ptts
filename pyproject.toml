@@ -12,6 +12,7 @@ dependencies = [
   "lxml>=5.0",
   "python-multipart>=0.0.9",
   "pytest>=7.4",
+  "rich>=13.7",
   "uvicorn>=0.27",
 ]
 

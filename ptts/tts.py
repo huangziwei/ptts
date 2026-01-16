@@ -1,1 +1,700 @@
-"""Pocket-TTS synthesis helpers (stub)."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import shutil
+import sys
+import time
+import unicodedata
+import wave
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from rich.progress import (
+    BarColumn,
+    Progress,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+
+try:
+    import torch
+    from pocket_tts import TTSModel
+except Exception:  # pragma: no cover - optional runtime dependency
+    torch = None
+    TTSModel = None
+
+
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+@dataclass
+class ChapterInput:
+    index: int
+    id: str
+    title: str
+    text: str
+    path: Optional[str] = None
+
+
+def slugify(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = text.strip("-")
+    return text[:60] or "chapter"
+
+
+def chapter_id_from_path(index: int, title: str, rel_path: Optional[str]) -> str:
+    if rel_path:
+        stem = Path(rel_path).stem
+        if stem:
+            return stem
+    return f"{index:04d}-{slugify(title or 'chapter')}"
+
+
+# ----------------------------
+# Text chunking
+# ----------------------------
+
+def read_text(path: Path) -> str:
+    s = path.read_text(encoding="utf-8", errors="strict")
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    # Normalize whitespace but keep paragraph breaks.
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    return s.strip() + "\n"
+
+
+def sha256_str(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def split_paragraphs(text: str) -> List[str]:
+    # Split on blank lines (one or more).
+    paras = re.split(r"\n\s*\n+", text.strip())
+    return [p.strip().replace("\n", " ") for p in paras if p.strip()]
+
+
+def split_sentences(paragraph: str) -> List[str]:
+    paragraph = paragraph.strip()
+    if not paragraph:
+        return []
+    parts = _SENT_SPLIT_RE.split(paragraph)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def pack_into_chunks(units: List[str], max_chars: int) -> List[str]:
+    """
+    Pack a list of sentence-like units into chunks <= max_chars when possible.
+    Falls back to word splitting if a single unit is too large.
+    """
+    chunks: List[str] = []
+    buf: List[str] = []
+    buf_len = 0
+
+    def flush() -> None:
+        nonlocal buf, buf_len
+        if buf:
+            chunks.append(" ".join(buf).strip())
+            buf = []
+            buf_len = 0
+
+    for u in units:
+        u = u.strip()
+        if not u:
+            continue
+
+        if len(u) > max_chars:
+            # Flush current buffer, then hard-split this long unit by words.
+            flush()
+            words = u.split()
+            wbuf: List[str] = []
+            wlen = 0
+            for w in words:
+                add = (1 if wbuf else 0) + len(w)
+                if wbuf and (wlen + add) > max_chars:
+                    chunks.append(" ".join(wbuf))
+                    wbuf = [w]
+                    wlen = len(w)
+                else:
+                    if wbuf:
+                        wlen += 1 + len(w)
+                    else:
+                        wlen = len(w)
+                    wbuf.append(w)
+            if wbuf:
+                chunks.append(" ".join(wbuf))
+            continue
+
+        add = (1 if buf else 0) + len(u)
+        if buf and (buf_len + add) > max_chars:
+            flush()
+            buf = [u]
+            buf_len = len(u)
+        else:
+            if buf:
+                buf_len += 1 + len(u)
+            else:
+                buf_len = len(u)
+            buf.append(u)
+
+    flush()
+    return chunks
+
+
+def make_chunks(text: str, max_chars: int) -> List[str]:
+    chunks: List[str] = []
+    for para in split_paragraphs(text):
+        sents = split_sentences(para)
+        if not sents:
+            continue
+        chunks.extend(pack_into_chunks(sents, max_chars=max_chars))
+    # Ensure each chunk ends with punctuation/newline-like boundary for prosody.
+    cleaned: List[str] = []
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        if c[-1] not in ".!?":
+            c += "."
+        cleaned.append(c)
+    return cleaned
+
+
+def load_text_chapters(text_path: Path) -> List[ChapterInput]:
+    text = read_text(text_path)
+    title = text_path.stem or "text"
+    chapter_id = chapter_id_from_path(1, title, None)
+    return [
+        ChapterInput(index=1, id=chapter_id, title=title, text=text, path=str(text_path))
+    ]
+
+
+def load_book_chapters(book_dir: Path) -> List[ChapterInput]:
+    toc_path = book_dir / "clean" / "toc.json"
+    if not toc_path.exists():
+        raise FileNotFoundError(f"Missing clean/toc.json at {toc_path}")
+
+    toc = json.loads(toc_path.read_text(encoding="utf-8"))
+    entries = toc.get("chapters", [])
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("clean/toc.json contains no chapters.")
+
+    chapters: List[ChapterInput] = []
+    for fallback_idx, entry in enumerate(entries, start=1):
+        rel = entry.get("path")
+        if not rel:
+            continue
+        path = book_dir / rel
+        if not path.exists():
+            raise FileNotFoundError(f"Missing chapter file: {path}")
+
+        text = read_text(path)
+        if not text.strip():
+            continue
+
+        index = int(entry.get("index") or fallback_idx)
+        title = str(entry.get("title") or f"Chapter {index}")
+        chapter_id = chapter_id_from_path(index, title, rel)
+
+        chapters.append(
+            ChapterInput(
+                index=index,
+                id=chapter_id,
+                title=title,
+                text=text,
+                path=rel,
+            )
+        )
+
+    if not chapters:
+        raise ValueError("No chapter text found in clean/chapters.")
+
+    return chapters
+
+
+def write_combined_input(chapters: Sequence[ChapterInput], out_dir: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    text = "\n\n".join(ch.text.strip() for ch in chapters if ch.text.strip()).strip()
+    path = out_dir / "input.txt"
+    path.write_text(text + "\n", encoding="utf-8")
+    return path
+
+
+# ----------------------------
+# Manifest + outputs
+# ----------------------------
+
+def atomic_write_json(path: Path, obj: Any) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def write_chunk_files(
+    chunks: Sequence[str], chunk_dir: Path, overwrite: bool = False
+) -> List[Path]:
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    if overwrite:
+        for path in chunk_dir.glob("*.txt"):
+            path.unlink()
+
+    paths: List[Path] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        path = chunk_dir / f"{idx:06d}.txt"
+        if overwrite or not path.exists():
+            path.write_text(chunk.rstrip() + "\n", encoding="utf-8")
+        paths.append(path)
+
+    if overwrite:
+        for path in chunk_dir.glob("*.txt"):
+            stem = path.stem
+            if stem.isdigit() and int(stem) > len(chunks):
+                path.unlink()
+
+    return paths
+
+
+# ----------------------------
+# WAV IO utilities
+# ----------------------------
+
+def _require_tts() -> None:
+    if torch is None or TTSModel is None:
+        raise RuntimeError(
+            "Pocket-TTS dependencies are missing. Install torch and pocket-tts "
+            "or run with uv: `uv run --with pocket-tts`."
+        )
+
+
+def tensor_to_int16(audio: "torch.Tensor") -> "torch.Tensor":
+    """
+    Pocket-TTS README says returned audio is PCM data in a 1D torch tensor.
+    Make this robust to float or int tensors.
+    """
+    _require_tts()
+    a = audio.detach().cpu().flatten().contiguous()
+
+    if a.dtype in (torch.float16, torch.float32, torch.float64):
+        # Heuristic: if values look like [-1, 1], scale to int16.
+        max_abs = float(a.abs().max().item()) if a.numel() else 0.0
+        if max_abs <= 1.5:
+            a = torch.clamp(a, -1.0, 1.0)
+            a = torch.round(a * 32767.0).to(torch.int16)
+        else:
+            a = torch.round(a).to(torch.int16)
+    elif a.dtype != torch.int16:
+        a = a.to(torch.int16)
+
+    return a
+
+
+def write_wav_mono_16k_or_24k(
+    path: Path, samples_i16: "torch.Tensor", sample_rate: int
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+
+    arr = samples_i16.numpy()  # requires numpy via torch; typical torch installs include it
+    data = arr.tobytes()
+
+    with wave.open(str(tmp), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit PCM
+        wf.setframerate(sample_rate)
+        wf.writeframes(data)
+
+    tmp.replace(path)
+
+
+def wav_duration_ms(path: Path) -> int:
+    with wave.open(str(path), "rb") as wf:
+        frames = wf.getnframes()
+        rate = wf.getframerate()
+    if rate <= 0:
+        return 0
+    return int(round(frames * 1000.0 / rate))
+
+
+def is_valid_wav(path: Path) -> bool:
+    try:
+        with wave.open(str(path), "rb") as wf:
+            return wf.getnchannels() == 1 and wf.getsampwidth() == 2 and wf.getnframes() > 0
+    except Exception:
+        return False
+
+
+def build_concat_file(segment_paths: List[Path], concat_path: Path, base_dir: Path) -> None:
+    lines = []
+    for p in segment_paths:
+        rel = p.relative_to(base_dir).as_posix()
+        # ffmpeg concat demuxer format
+        lines.append(f"file '{rel}'")
+    concat_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def build_chapters_ffmeta(
+    chapters: Sequence[Tuple[str, int]], ffmeta_path: Path
+) -> None:
+    """
+    Generates a simple FFMETADATA1 file with one chapter per chapter.
+    ffmpeg can import chapters using -map_chapters.
+    """
+    out = [";FFMETADATA1"]
+    t = 0
+    for title, d in chapters:
+        start = t
+        end = t + max(int(d), 1)
+        out.append("")
+        out.append("[CHAPTER]")
+        out.append("TIMEBASE=1/1000")
+        out.append(f"START={start}")
+        out.append(f"END={end}")
+        out.append(f"title={title}")
+        t = end
+    ffmeta_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+# ----------------------------
+# Synthesis
+# ----------------------------
+
+def prune_chapter_dirs(root: Path, keep: set[str]) -> None:
+    if not root.exists():
+        return
+    for child in root.iterdir():
+        if child.is_dir() and child.name not in keep:
+            shutil.rmtree(child)
+
+
+def prepare_manifest(
+    chapters: Sequence[ChapterInput],
+    out_dir: Path,
+    voice: str,
+    max_chars: int,
+    pad_ms: int,
+    rechunk: bool,
+) -> Tuple[Dict[str, Any], List[List[str]], int]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = out_dir / "manifest.json"
+    chunk_root = out_dir / "chunks"
+
+    chapter_ids = {c.id for c in chapters}
+    if rechunk:
+        prune_chapter_dirs(chunk_root, chapter_ids)
+
+    if manifest_path.exists() and not rechunk:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_chapters = manifest.get("chapters", [])
+        if not isinstance(manifest_chapters, list) or not manifest_chapters:
+            raise ValueError("manifest.json contains no chapters.")
+        if len(manifest_chapters) != len(chapters):
+            raise ValueError(
+                "manifest.json chapters differ from current input. "
+                "Run with --rechunk to regenerate manifest."
+            )
+
+        chapter_chunks: List[List[str]] = []
+        for ch_input, ch_manifest in zip(chapters, manifest_chapters):
+            if ch_manifest.get("id") != ch_input.id:
+                raise ValueError(
+                    "manifest.json chapter order or ids differ. "
+                    "Run with --rechunk to regenerate manifest."
+                )
+            ch_manifest["index"] = ch_input.index
+            ch_manifest["title"] = ch_input.title
+            ch_manifest["path"] = ch_input.path
+            text_hash = sha256_str(ch_input.text)
+            if ch_manifest.get("text_sha256") != text_hash:
+                raise ValueError(
+                    "manifest.json exists but chapter text hash differs. "
+                    "Run with --rechunk to regenerate manifest."
+                )
+            chunks = ch_manifest.get("chunks", [])
+            if not chunks:
+                raise ValueError("manifest.json contains no chunks.")
+            chapter_chunks.append(chunks)
+        pad_ms = int(manifest.get("pad_ms", pad_ms))
+    else:
+        chapter_chunks = []
+        manifest_chapters = []
+        for ch in chapters:
+            chunks = make_chunks(ch.text, max_chars=max_chars)
+            if not chunks:
+                raise ValueError(f"No chunks generated for chapter: {ch.id}")
+            chapter_chunks.append(chunks)
+            manifest_chapters.append(
+                {
+                    "index": ch.index,
+                    "id": ch.id,
+                    "title": ch.title,
+                    "path": ch.path,
+                    "text_sha256": sha256_str(ch.text),
+                    "chunks": chunks,
+                    "durations_ms": [None] * len(chunks),
+                }
+            )
+
+        manifest = {
+            "created_unix": int(time.time()),
+            "voice": voice,
+            "max_chars": int(max_chars),
+            "pad_ms": int(pad_ms),
+            "chapters": manifest_chapters,
+        }
+        atomic_write_json(manifest_path, manifest)
+
+    manifest["voice"] = voice
+    manifest["max_chars"] = int(max_chars)
+    manifest["pad_ms"] = int(manifest.get("pad_ms", pad_ms))
+
+    for ch_entry, chunks in zip(manifest["chapters"], chapter_chunks):
+        if "durations_ms" not in ch_entry or len(ch_entry["durations_ms"]) != len(chunks):
+            ch_entry["durations_ms"] = [None] * len(chunks)
+
+    for ch_entry, chunks in zip(manifest["chapters"], chapter_chunks):
+        chunk_dir = chunk_root / ch_entry["id"]
+        write_chunk_files(chunks, chunk_dir, overwrite=rechunk)
+
+    atomic_write_json(manifest_path, manifest)
+
+    return manifest, chapter_chunks, int(manifest["pad_ms"])
+
+
+def synthesize(
+    chapters: Sequence[ChapterInput],
+    voice: str,
+    out_dir: Path,
+    max_chars: int = 800,
+    pad_ms: int = 150,
+    rechunk: bool = False,
+) -> int:
+    _require_tts()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    seg_dir = out_dir / "segments"
+    manifest_path = out_dir / "manifest.json"
+    concat_path = out_dir / "concat.txt"
+    chapters_path = out_dir / "chapters.ffmeta"
+
+    try:
+        manifest, chapter_chunks, pad_ms = prepare_manifest(
+            chapters=chapters,
+            out_dir=out_dir,
+            voice=voice,
+            max_chars=max_chars,
+            pad_ms=pad_ms,
+            rechunk=rechunk,
+        )
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+
+    if rechunk and seg_dir.exists():
+        shutil.rmtree(seg_dir)
+
+    tts_model = TTSModel.load_model()
+    sample_rate = int(tts_model.sample_rate)
+    if manifest.get("sample_rate") != sample_rate:
+        manifest["sample_rate"] = sample_rate
+        atomic_write_json(manifest_path, manifest)
+
+    voice_state = tts_model.get_state_for_audio_prompt(voice)
+
+    pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
+    pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
+
+    segment_paths: List[Path] = []
+    total_chunks = sum(len(chunks) for chunks in chapter_chunks)
+
+    progress = Progress(
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+
+    with progress:
+        overall_task = progress.add_task("Total", total=total_chunks)
+        chapter_task = progress.add_task("Chapter", total=0)
+
+        for ch_entry, chunks in zip(manifest["chapters"], chapter_chunks):
+            chapter_id = ch_entry.get("id") or "chapter"
+            chapter_title = ch_entry.get("title") or chapter_id
+            chapter_total = len(chunks)
+
+            progress.update(
+                chapter_task,
+                total=chapter_total,
+                completed=0,
+                description=f"{chapter_id}: {chapter_title}",
+            )
+
+            chapter_seg_dir = seg_dir / chapter_id
+
+            for chunk_idx, chunk_text in enumerate(chunks, start=1):
+                seg_path = chapter_seg_dir / f"{chunk_idx:06d}.wav"
+                segment_paths.append(seg_path)
+
+                progress.update(
+                    chapter_task,
+                    description=f"{chapter_id}: {chapter_title} ({chunk_idx}/{chapter_total})",
+                )
+
+                if seg_path.exists() and is_valid_wav(seg_path):
+                    dms = wav_duration_ms(seg_path)
+                    if ch_entry["durations_ms"][chunk_idx - 1] != dms:
+                        ch_entry["durations_ms"][chunk_idx - 1] = dms
+                        atomic_write_json(manifest_path, manifest)
+                    progress.advance(chapter_task, 1)
+                    progress.advance(overall_task, 1)
+                    continue
+
+                audio = tts_model.generate_audio(voice_state, chunk_text)
+                a16 = tensor_to_int16(audio)
+
+                if pad_tensor is not None and pad_tensor.numel() > 0:
+                    a16 = torch.cat([a16, pad_tensor], dim=0)
+
+                write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
+                dms = int(round(a16.numel() * 1000.0 / sample_rate))
+
+                # Persist progress for restartability.
+                ch_entry["durations_ms"][chunk_idx - 1] = dms
+                atomic_write_json(manifest_path, manifest)
+
+                progress.advance(chapter_task, 1)
+                progress.advance(overall_task, 1)
+
+    build_concat_file(segment_paths, concat_path, base_dir=out_dir)
+
+    chapter_meta: List[Tuple[str, int]] = []
+    for ch_entry in manifest["chapters"]:
+        title = ch_entry.get("title") or ch_entry.get("id") or "Chapter"
+        durations = ch_entry.get("durations_ms", [])
+        total_ms = sum(int(d or 0) for d in durations)
+        chapter_meta.append((title, total_ms))
+
+    build_chapters_ffmeta(chapter_meta, chapters_path)
+
+    return 0
+
+
+def synthesize_text(
+    text_path: Path,
+    voice: str,
+    out_dir: Path,
+    max_chars: int = 800,
+    pad_ms: int = 150,
+    rechunk: bool = False,
+) -> int:
+    chapters = load_text_chapters(text_path)
+    return synthesize(
+        chapters=chapters,
+        voice=voice,
+        out_dir=out_dir,
+        max_chars=max_chars,
+        pad_ms=pad_ms,
+        rechunk=rechunk,
+    )
+
+
+def synthesize_book(
+    book_dir: Path,
+    voice: str,
+    out_dir: Optional[Path] = None,
+    max_chars: int = 800,
+    pad_ms: int = 150,
+    rechunk: bool = False,
+) -> int:
+    if out_dir is None:
+        out_dir = book_dir / "tts"
+    try:
+        chapters = load_book_chapters(book_dir)
+        write_combined_input(chapters, out_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    return synthesize(
+        chapters=chapters,
+        voice=voice,
+        out_dir=out_dir,
+        max_chars=max_chars,
+        pad_ms=pad_ms,
+        rechunk=rechunk,
+    )
+
+
+# ----------------------------
+# CLI
+# ----------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser()
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("--text", type=Path, help="Input UTF-8 .txt file")
+    group.add_argument(
+        "--book", type=Path, help="Book directory containing clean/toc.json"
+    )
+    ap.add_argument(
+        "--voice", required=True, help="Voice prompt: local wav path or hf://... URL"
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        help="Output directory (default: <book>/tts when using --book)",
+    )
+    ap.add_argument(
+        "--max-chars",
+        type=int,
+        default=800,
+        help="Max characters per chunk (default: 800)",
+    )
+    ap.add_argument(
+        "--pad-ms",
+        type=int,
+        default=150,
+        help="Silence to append to each chunk in ms (default: 150)",
+    )
+    ap.add_argument(
+        "--rechunk",
+        action="store_true",
+        help="Ignore existing manifest and rechunk the input text",
+    )
+    return ap
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.book:
+        return synthesize_book(
+            book_dir=args.book,
+            voice=args.voice,
+            out_dir=args.out,
+            max_chars=args.max_chars,
+            pad_ms=args.pad_ms,
+            rechunk=args.rechunk,
+        )
+    if not args.out:
+        parser.error("--out is required when using --text")
+    return synthesize_text(
+        text_path=args.text,
+        voice=args.voice,
+        out_dir=args.out,
+        max_chars=args.max_chars,
+        pad_ms=args.pad_ms,
+        rechunk=args.rechunk,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
