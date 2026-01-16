@@ -7,8 +7,9 @@ import time
 from pathlib import Path
 
 from . import epub as epub_util
-from . import sanitize as sanitize_util
+from . import merge as merge_util
 from . import preview as preview_util
+from . import sanitize as sanitize_util
 from . import tts as tts_util
 
 
@@ -99,6 +100,21 @@ def _sanitize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _merge(args: argparse.Namespace) -> int:
+    book_dir = Path(args.book)
+    output_path = Path(args.output)
+    try:
+        return merge_util.merge_book(
+            book_dir=book_dir,
+            output_path=output_path,
+            bitrate=args.bitrate,
+            overwrite=args.overwrite,
+        )
+    except Exception as exc:
+        sys.stderr.write(f"Merge failed: {exc}\n")
+        return 2
+
+
 def _synth(args: argparse.Namespace) -> int:
     book_dir = Path(args.book) if args.book else None
     text_path = Path(args.text) if args.text else None
@@ -183,12 +199,14 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--rechunk", action="store_true")
     synth.set_defaults(func=_synth)
 
-    package = subparsers.add_parser(
-        "package", help="Package M4B (not yet implemented)"
+    merge = subparsers.add_parser("merge", help="Merge audio into M4B")
+    merge.add_argument("--book", required=True, help="Book output directory")
+    merge.add_argument("--output", required=True, help="Path to output .m4b")
+    merge.add_argument("--bitrate", default="64k", help="Audio bitrate (default: 64k)")
+    merge.add_argument(
+        "--overwrite", action="store_true", help="Overwrite output if it exists"
     )
-    package.add_argument("--book", required=True, help="Book output directory")
-    package.add_argument("--output", required=True, help="Path to output .m4b")
-    package.set_defaults(func=lambda _args: _not_implemented("package"))
+    merge.set_defaults(func=_merge)
 
     preview = subparsers.add_parser(
         "preview", help="Preview chapters in a web UI"

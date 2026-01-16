@@ -1,6 +1,6 @@
 # Narrate English books with Pocket-TTS
 
-## Preparation
+## prerequisites
 
 As I am still using a vintage Intel MacBook Pro, many cool tools that use latest PyTorch or JAX cannot be run directly. I resort to using VMs via Podman:
 
