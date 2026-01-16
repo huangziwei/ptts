@@ -83,6 +83,18 @@ def _find_cover_item(book: epub.EpubBook) -> object | None:
             if item:
                 return item
 
+    opf_meta = book.get_metadata("OPF", "meta")
+    for _value, attrs in opf_meta:
+        if not attrs:
+            continue
+        if str(attrs.get("name") or "").lower() != "cover":
+            continue
+        cover_id = attrs.get("content")
+        if cover_id:
+            item = book.get_item_with_id(cover_id)
+            if item:
+                return item
+
     for item in book.get_items():
         props = getattr(item, "properties", []) or []
         if isinstance(props, str):
