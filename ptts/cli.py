@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from . import epub as epub_util
+from . import clean as clean_util
 
 
 def _ingest(args: argparse.Namespace) -> int:
@@ -77,6 +78,22 @@ def _not_implemented(command: str) -> int:
     return 2
 
 
+def _sanitize(args: argparse.Namespace) -> int:
+    book_dir = Path(args.book)
+    rules_path = Path(args.rules) if args.rules else None
+    try:
+        written = clean_util.sanitize_book(
+            book_dir=book_dir, rules_path=rules_path, overwrite=args.overwrite
+        )
+    except Exception as exc:
+        sys.stderr.write(f"Sanitize failed: {exc}\n")
+        return 2
+
+    print(f"Wrote {written} cleaned chapters to {book_dir / 'clean' / 'chapters'}")
+    print(f"Report saved to {book_dir / 'clean' / 'report.json'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ptts")
     subparsers = parser.add_subparsers(dest="command")
@@ -102,10 +119,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=lambda _args: _not_implemented("run"))
 
     sanitize = subparsers.add_parser(
-        "sanitize", help="Clean chapter text (not yet implemented)"
+        "sanitize", help="Clean chapter text"
     )
     sanitize.add_argument("--book", required=True, help="Book output directory")
-    sanitize.set_defaults(func=lambda _args: _not_implemented("sanitize"))
+    sanitize.add_argument(
+        "--rules",
+        help="Path to JSON rules file (defaults to .codex/ptts-rules.json if present)",
+    )
+    sanitize.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing cleaned output"
+    )
+    sanitize.set_defaults(func=_sanitize)
 
     chunk = subparsers.add_parser("chunk", help="Chunk chapters (not yet implemented)")
     chunk.add_argument("--book", required=True, help="Book output directory")
