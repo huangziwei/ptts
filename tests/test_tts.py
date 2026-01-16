@@ -3,14 +3,17 @@ from pathlib import Path
 from ptts import tts
 
 
-def test_make_chunks_adds_punctuation() -> None:
+def test_make_chunks_preserves_text() -> None:
     chunks = tts.make_chunks("Hello world", max_chars=50)
-    assert chunks == ["Hello world."]
+    assert chunks == ["Hello world"]
 
 
-def test_make_chunks_normalizes_abbreviations() -> None:
-    chunks = tts.make_chunks("Mr. Poe went home.", max_chars=50)
-    assert chunks == ["Mr Poe went home."]
+def test_prepare_tts_text_adds_punctuation() -> None:
+    assert tts.prepare_tts_text("Hello world") == "Hello world."
+
+
+def test_prepare_tts_text_normalizes_abbreviations() -> None:
+    assert tts.prepare_tts_text("Mr. Poe went home.") == "Mr Poe went home."
 
 
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
@@ -42,6 +45,7 @@ def test_prepare_manifest_writes_chunks(tmp_path: Path) -> None:
     )
 
     assert pad_ms == 150
-    assert chunks == [["Hello world."]]
+    assert chunks == [["Hello world"]]
     assert (out_dir / "chunks" / "0001-test" / "000001.txt").exists()
-    assert manifest["chapters"][0]["chunks"] == ["Hello world."]
+    assert manifest["chapters"][0]["chunks"] == ["Hello world"]
+    assert manifest["chapters"][0]["chunk_spans"] == [[0, 11]]

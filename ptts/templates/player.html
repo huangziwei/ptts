@@ -324,6 +324,11 @@
         font-family: var(--read);
         font-size: 18px;
         line-height: 1.7;
+        white-space: pre-line;
+      }
+
+      .chapter-text p {
+        margin: 0 0 16px;
       }
 
       .chunk {
@@ -634,6 +639,7 @@
         books: [],
         book: null,
         chapters: [],
+        chapterMap: {},
         queue: [],
         chapterOffsets: {},
         currentChapterId: null,
@@ -646,6 +652,8 @@
         loadingBook: false,
         initialBookId: null,
         initialChapterId: null,
+        pendingManifestRefresh: false,
+        needsRechunk: false,
       };
 
       const bookList = document.getElementById("bookList");
@@ -835,6 +843,12 @@
           const data = await fetchJson(`/api/books/${bookId}`);
           state.book = data.book;
           state.chapters = data.chapters || [];
+          state.chapterMap = {};
+          state.chapters.forEach((chapter) => {
+            if (chapter && chapter.id) {
+              state.chapterMap[chapter.id] = chapter;
+            }
+          });
           state.audioBase = data.audio_base || "";
           state.currentQueueIndex = 0;
           state.activeQueueIndex = null;
@@ -843,6 +857,10 @@
             clearTimeout(state.waitTimer);
           }
           buildQueue();
+          const hasSpanData = state.chapters.some(
+            (chapter) => (chapter.chunk_spans || []).length > 0
+          );
+          state.needsRechunk = state.chapters.length > 0 && !hasSpanData;
           renderBooks();
           renderBookHeader();
           renderChapters();
@@ -853,6 +871,9 @@
             state.currentQueueIndex =
               typeof offset === "number" ? offset : state.currentQueueIndex;
             setStatus(`Ready. ${state.queue.length} chunks.`);
+            if (state.needsRechunk) {
+              setStatus("Manifest missing chunk spans. Run `ptts synth --rechunk`.");
+            }
           } else {
             chapterTitle.textContent = "No audio yet";
             chapterText.innerHTML =
@@ -894,6 +915,65 @@
         return cleaned.slice(0, length);
       }
 
+      function getChapterById(chapterId) {
+        return state.chapterMap[chapterId] || null;
+      }
+
+      function getChunkSpan(item) {
+        const chapter = getChapterById(item.chapterId);
+        if (!chapter) {
+          return null;
+        }
+        const spans = chapter.chunk_spans || [];
+        return spans[item.chunkIndex] || null;
+      }
+
+      function getChunkText(item) {
+        const chapter = getChapterById(item.chapterId);
+        if (!chapter) {
+          return "";
+        }
+        const span = getChunkSpan(item);
+        if (!span || !chapter.clean_text) {
+          return "";
+        }
+        return chapter.clean_text.slice(span[0], span[1]);
+      }
+
+      function splitParagraphSpans(text) {
+        const spans = [];
+        const re = /\n\s*\n+/g;
+        let start = 0;
+        let match;
+        while ((match = re.exec(text)) !== null) {
+          const end = match.index;
+          let paraStart = start;
+          let paraEnd = end;
+          while (paraStart < paraEnd && /\s/.test(text[paraStart])) {
+            paraStart += 1;
+          }
+          while (paraEnd > paraStart && /\s/.test(text[paraEnd - 1])) {
+            paraEnd -= 1;
+          }
+          if (paraStart < paraEnd) {
+            spans.push([paraStart, paraEnd]);
+          }
+          start = match.index + match[0].length;
+        }
+        let tailStart = start;
+        let tailEnd = text.length;
+        while (tailStart < tailEnd && /\s/.test(text[tailStart])) {
+          tailStart += 1;
+        }
+        while (tailEnd > tailStart && /\s/.test(text[tailEnd - 1])) {
+          tailEnd -= 1;
+        }
+        if (tailStart < tailEnd) {
+          spans.push([tailStart, tailEnd]);
+        }
+        return spans;
+      }
+
       function describeIndex(index) {
         const item = state.queue[index];
         if (!item) {
@@ -901,7 +981,7 @@
         }
         const chapterNum = item.chapterIndex + 1;
         const chunkNum = item.chunkIndex + 1;
-        const snip = snippet(item.chunkText || "", 10);
+        const snip = snippet(getChunkText(item), 10);
         return snip ? `${chapterNum}/${chunkNum} ${snip}` : `${chapterNum}/${chunkNum}`;
       }
 
@@ -1010,10 +1090,14 @@
             `/api/synth/status?book_id=${encodeURIComponent(state.book.id)}`
           );
           updateSynthUI(data);
-          if (!state.loadingBook && (!state.chapters.length || !state.queue.length)) {
-            if (data.progress && data.progress.total > 0) {
-              await selectBook(state.book.id);
-            }
+          if (
+            !state.loadingBook &&
+            data.progress &&
+            data.progress.total > 0 &&
+            (state.pendingManifestRefresh || !state.chapters.length)
+          ) {
+            await selectBook(state.book.id);
+            state.pendingManifestRefresh = false;
           }
         } catch (err) {
           progressText.textContent = "Unable to load TTS status.";
@@ -1021,27 +1105,34 @@
       }
 
       function updateSynthUI(data) {
+        const stage = data.stage || "idle";
         const progress = data.progress;
-        if (!progress) {
+        if (stage === "chunking") {
+          progressFill.style.width = "0%";
+          progressText.textContent = "Chunking text...";
+          progressDetail.textContent = "Preparing manifest and spans.";
+        } else if (!progress) {
           progressFill.style.width = "0%";
           progressText.textContent = "Idle.";
           progressDetail.textContent = "";
-          bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "";
-          return;
-        }
-        progressFill.style.width = `${progress.percent}%`;
-        progressText.textContent = `${progress.done} / ${progress.total} chunks (${progress.percent}%).`;
-        if (progress.current) {
-          progressDetail.textContent = `${progress.current.chapter_title} · chunk ${progress.current.chunk_index} of ${progress.current.chunk_total}`;
         } else {
-          progressDetail.textContent = progress.total ? "Completed." : "Idle.";
+          progressFill.style.width = `${progress.percent}%`;
+          progressText.textContent = `${progress.done} / ${progress.total} chunks (${progress.percent}%).`;
+          if (progress.current) {
+            progressDetail.textContent = `${progress.current.chapter_title} · chunk ${progress.current.chunk_index} of ${progress.current.chunk_total}`;
+          } else {
+            progressDetail.textContent = progress.total ? "Completed." : "Idle.";
+          }
         }
-        if (data.running) {
+
+        if (stage === "chunking") {
+          bookStatus.textContent = "Chunking text...";
+        } else if (stage === "synthesizing") {
           bookStatus.textContent = "Synthesizing audio...";
-        } else if (progress.total && progress.done >= progress.total) {
+        } else if (stage === "done") {
           bookStatus.textContent = "Audio ready.";
         } else {
-          bookStatus.textContent = "Waiting for audio.";
+          bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "Waiting for audio.";
         }
         startTts.disabled = data.running;
         stopTts.disabled = !data.running;
@@ -1062,6 +1153,7 @@
           chunk_mode: chunkModeSelect.value,
           rechunk: rechunkInput.checked,
         };
+        state.pendingManifestRefresh = payload.rechunk || !state.chapters.length;
         try {
           await fetchJson("/api/synth/start", {
             method: "POST",
@@ -1098,16 +1190,15 @@
         let offset = 0;
         state.chapters.forEach((chapter, chapterIndex) => {
           state.chapterOffsets[chapter.id] = offset;
-          const chunks = chapter.chunks || [];
-          chunks.forEach((chunkText, chunkIndex) => {
+          const spans = chapter.chunk_spans || [];
+          spans.forEach((_span, chunkIndex) => {
             state.queue.push({
               chapterId: chapter.id,
               chapterIndex,
               chunkIndex,
-              chunkText,
             });
           });
-          offset += chunks.length;
+          offset += spans.length;
         });
       }
 
@@ -1138,22 +1229,56 @@
       }
 
       function renderChapter(chapterId) {
-        const chapter = state.chapters.find((c) => c.id === chapterId);
+        const chapter = getChapterById(chapterId);
         if (!chapter) {
           return;
         }
         state.currentChapterId = chapter.id;
         chapterTitle.textContent = chapter.title;
         chapterText.innerHTML = "";
+        const cleanText = chapter.clean_text || "";
+        const spans = chapter.chunk_spans || [];
         const startIndex = state.chapterOffsets[chapter.id] || 0;
-        chapter.chunks.forEach((chunkText, idx) => {
-          const span = document.createElement("span");
-          span.className = "chunk";
-          span.dataset.queueIndex = startIndex + idx;
-          span.textContent = chunkText;
-          chapterText.appendChild(span);
-          chapterText.appendChild(document.createTextNode(" "));
-        });
+        const paragraphs = splitParagraphSpans(cleanText);
+        let spanIndex = 0;
+
+        if (!paragraphs.length) {
+          chapterText.innerHTML = "<p class=\"empty-state\">No text available.</p>";
+        } else {
+          paragraphs.forEach(([paraStart, paraEnd]) => {
+            const p = document.createElement("p");
+            let cursor = paraStart;
+
+            while (spanIndex < spans.length && spans[spanIndex][1] <= paraStart) {
+              spanIndex += 1;
+            }
+
+            while (spanIndex < spans.length && spans[spanIndex][0] < paraEnd) {
+              const spanEntry = spans[spanIndex];
+              const spanStart = spanEntry[0];
+              const spanEnd = spanEntry[1];
+              if (spanStart > cursor) {
+                p.appendChild(
+                  document.createTextNode(cleanText.slice(cursor, spanStart))
+                );
+              }
+              const span = document.createElement("span");
+              span.className = "chunk";
+              span.dataset.queueIndex = startIndex + spanIndex;
+              span.textContent = cleanText.slice(spanStart, spanEnd);
+              p.appendChild(span);
+              cursor = spanEnd;
+              spanIndex += 1;
+            }
+
+            if (cursor < paraEnd) {
+              p.appendChild(
+                document.createTextNode(cleanText.slice(cursor, paraEnd))
+              );
+            }
+            chapterText.appendChild(p);
+          });
+        }
         renderChapters();
         applyLastPlayedHighlight();
         if (state.activeQueueIndex !== null) {

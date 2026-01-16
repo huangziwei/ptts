@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from .text import read_clean_text
 
 def _load_json(path: Path) -> dict:
     if not path.exists():
@@ -71,15 +72,22 @@ def _book_details(book_dir: Path) -> dict:
     chapters: List[dict] = []
     if manifest and isinstance(manifest.get("chapters"), list):
         for entry in manifest["chapters"]:
-            chunks = entry.get("chunks", [])
-            if not isinstance(chunks, list):
-                chunks = []
+            chunk_spans = entry.get("chunk_spans", [])
+            if not isinstance(chunk_spans, list):
+                chunk_spans = []
+            clean_text = ""
+            rel_path = entry.get("path")
+            if rel_path:
+                clean_path = book_dir / rel_path
+                if clean_path.exists():
+                    clean_text = read_clean_text(clean_path)
             chapters.append(
                 {
                     "id": entry.get("id") or "",
                     "title": entry.get("title") or entry.get("id") or "Chapter",
-                    "chunks": chunks,
-                    "chunk_count": len(chunks),
+                    "chunk_spans": chunk_spans,
+                    "chunk_count": len(chunk_spans),
+                    "clean_text": clean_text,
                 }
             )
 
@@ -248,7 +256,15 @@ def create_app(root_dir: Path) -> FastAPI:
             "exit_code": exit_code,
             "progress": progress,
             "log_path": log_path,
+            "stage": "idle",
         }
+        if running:
+            if not progress or not progress.get("total"):
+                payload["stage"] = "chunking"
+            else:
+                payload["stage"] = "synthesizing"
+        elif progress and progress.get("total") and progress.get("done") >= progress.get("total"):
+            payload["stage"] = "done"
         return _no_store(payload)
 
     @app.post("/api/synth/start")

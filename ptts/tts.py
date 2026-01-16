@@ -22,6 +22,8 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from .text import read_clean_text
+
 try:
     import torch
     from pocket_tts import TTSModel
@@ -32,6 +34,7 @@ except Exception:  # pragma: no cover - optional runtime dependency
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms)\.", re.IGNORECASE)
+_ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms)\.$", re.IGNORECASE)
 
 
 @dataclass
@@ -64,125 +67,138 @@ def chapter_id_from_path(index: int, title: str, rel_path: Optional[str]) -> str
 # Text chunking
 # ----------------------------
 
-def read_text(path: Path) -> str:
-    s = path.read_text(encoding="utf-8", errors="strict")
-    s = s.replace("\r\n", "\n").replace("\r", "\n")
-    # Normalize whitespace but keep paragraph breaks.
-    s = re.sub(r"[ \t]+\n", "\n", s)
-    s = re.sub(r"[ \t]{2,}", " ", s)
-    return s.strip() + "\n"
-
-
 def sha256_str(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-def split_paragraphs(text: str) -> List[str]:
-    # Split on blank lines (one or more).
-    paras = re.split(r"\n\s*\n+", text.strip())
-    return [p.strip().replace("\n", " ") for p in paras if p.strip()]
+def _trim_span(text: str, start: int, end: int) -> Optional[Tuple[int, int]]:
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    if start >= end:
+        return None
+    return start, end
+
+
+def split_paragraph_spans(text: str) -> List[Tuple[int, int]]:
+    spans: List[Tuple[int, int]] = []
+    start = 0
+    for match in re.finditer(r"\n\s*\n+", text):
+        end = match.start()
+        span = _trim_span(text, start, end)
+        if span:
+            spans.append(span)
+        start = match.end()
+    span = _trim_span(text, start, len(text))
+    if span:
+        spans.append(span)
+    return spans
+
+
+def split_sentence_spans(paragraph: str, offset: int) -> List[Tuple[int, int]]:
+    spans: List[Tuple[int, int]] = []
+    start = 0
+    for match in _SENT_SPLIT_RE.finditer(paragraph):
+        end = match.start()
+        if _ABBREV_SENT_RE.search(paragraph[:end]):
+            continue
+        span = _trim_span(paragraph, start, end)
+        if span:
+            spans.append((offset + span[0], offset + span[1]))
+        start = match.end()
+    span = _trim_span(paragraph, start, len(paragraph))
+    if span:
+        spans.append((offset + span[0], offset + span[1]))
+    return spans
+
+
+def split_span_by_words(
+    text: str, start: int, end: int, max_chars: int
+) -> List[Tuple[int, int]]:
+    segment = text[start:end]
+    words = list(re.finditer(r"\S+", segment))
+    if not words:
+        return []
+    spans: List[Tuple[int, int]] = []
+    chunk_start = start + words[0].start()
+    chunk_end = start + words[0].end()
+    for word in words[1:]:
+        word_start = start + word.start()
+        word_end = start + word.end()
+        if word_end - chunk_start > max_chars and chunk_end > chunk_start:
+            spans.append((chunk_start, chunk_end))
+            chunk_start = word_start
+            chunk_end = word_end
+        else:
+            chunk_end = word_end
+    spans.append((chunk_start, chunk_end))
+    return spans
+
+
+def make_chunk_spans(
+    text: str, max_chars: int, chunk_mode: str = "sentence"
+) -> List[Tuple[int, int]]:
+    if chunk_mode not in ("sentence", "packed"):
+        raise ValueError(f"Unsupported chunk_mode: {chunk_mode}")
+
+    spans: List[Tuple[int, int]] = []
+    for para_start, para_end in split_paragraph_spans(text):
+        paragraph = text[para_start:para_end]
+        sentence_spans = split_sentence_spans(paragraph, para_start)
+        if chunk_mode == "sentence":
+            for sent_start, sent_end in sentence_spans:
+                if sent_end - sent_start > max_chars:
+                    spans.extend(
+                        split_span_by_words(text, sent_start, sent_end, max_chars)
+                    )
+                else:
+                    spans.append((sent_start, sent_end))
+        else:
+            buf_start: Optional[int] = None
+            buf_end: Optional[int] = None
+            for sent_start, sent_end in sentence_spans:
+                if sent_end - sent_start > max_chars:
+                    if buf_start is not None and buf_end is not None:
+                        spans.append((buf_start, buf_end))
+                        buf_start = None
+                        buf_end = None
+                    spans.extend(
+                        split_span_by_words(text, sent_start, sent_end, max_chars)
+                    )
+                    continue
+                if buf_start is None:
+                    buf_start, buf_end = sent_start, sent_end
+                    continue
+                if sent_end - buf_start > max_chars:
+                    spans.append((buf_start, buf_end))
+                    buf_start, buf_end = sent_start, sent_end
+                else:
+                    buf_end = sent_end
+            if buf_start is not None and buf_end is not None:
+                spans.append((buf_start, buf_end))
+    return spans
+
+
+def make_chunks(text: str, max_chars: int, chunk_mode: str = "sentence") -> List[str]:
+    spans = make_chunk_spans(text, max_chars=max_chars, chunk_mode=chunk_mode)
+    return [text[start:end] for start, end in spans]
 
 
 def normalize_abbreviations(text: str) -> str:
     return _ABBREV_DOT_RE.sub(r"\1", text)
 
 
-def split_sentences(paragraph: str) -> List[str]:
-    paragraph = paragraph.strip()
-    if not paragraph:
-        return []
-    parts = _SENT_SPLIT_RE.split(paragraph)
-    return [p.strip() for p in parts if p.strip()]
-
-
-def pack_into_chunks(units: List[str], max_chars: int) -> List[str]:
-    """
-    Pack a list of sentence-like units into chunks <= max_chars when possible.
-    Falls back to word splitting if a single unit is too large.
-    """
-    chunks: List[str] = []
-    buf: List[str] = []
-    buf_len = 0
-
-    def flush() -> None:
-        nonlocal buf, buf_len
-        if buf:
-            chunks.append(" ".join(buf).strip())
-            buf = []
-            buf_len = 0
-
-    for u in units:
-        u = u.strip()
-        if not u:
-            continue
-
-        if len(u) > max_chars:
-            # Flush current buffer, then hard-split this long unit by words.
-            flush()
-            words = u.split()
-            wbuf: List[str] = []
-            wlen = 0
-            for w in words:
-                add = (1 if wbuf else 0) + len(w)
-                if wbuf and (wlen + add) > max_chars:
-                    chunks.append(" ".join(wbuf))
-                    wbuf = [w]
-                    wlen = len(w)
-                else:
-                    if wbuf:
-                        wlen += 1 + len(w)
-                    else:
-                        wlen = len(w)
-                    wbuf.append(w)
-            if wbuf:
-                chunks.append(" ".join(wbuf))
-            continue
-
-        add = (1 if buf else 0) + len(u)
-        if buf and (buf_len + add) > max_chars:
-            flush()
-            buf = [u]
-            buf_len = len(u)
-        else:
-            if buf:
-                buf_len += 1 + len(u)
-            else:
-                buf_len = len(u)
-            buf.append(u)
-
-    flush()
-    return chunks
-
-
-def make_chunks(text: str, max_chars: int, chunk_mode: str = "sentence") -> List[str]:
-    if chunk_mode not in ("sentence", "packed"):
-        raise ValueError(f"Unsupported chunk_mode: {chunk_mode}")
-
+def prepare_tts_text(text: str) -> str:
     text = normalize_abbreviations(text)
-    chunks: List[str] = []
-    for para in split_paragraphs(text):
-        sents = split_sentences(para)
-        if not sents:
-            continue
-        if chunk_mode == "sentence":
-            for sent in sents:
-                chunks.extend(pack_into_chunks([sent], max_chars=max_chars))
-        else:
-            chunks.extend(pack_into_chunks(sents, max_chars=max_chars))
-    # Ensure each chunk ends with punctuation/newline-like boundary for prosody.
-    cleaned: List[str] = []
-    for c in chunks:
-        c = c.strip()
-        if not c:
-            continue
-        if c[-1] not in ".!?":
-            c += "."
-        cleaned.append(c)
-    return cleaned
+    text = re.sub(r"\s+", " ", text).strip()
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
 
 
 def load_text_chapters(text_path: Path) -> List[ChapterInput]:
-    text = read_text(text_path)
+    text = read_clean_text(text_path)
     title = text_path.stem or "text"
     chapter_id = chapter_id_from_path(1, title, None)
     return [
@@ -209,7 +225,7 @@ def load_book_chapters(book_dir: Path) -> List[ChapterInput]:
         if not path.exists():
             raise FileNotFoundError(f"Missing chapter file: {path}")
 
-        text = read_text(path)
+        text = read_clean_text(path)
         if not text.strip():
             continue
 
@@ -440,13 +456,23 @@ def prepare_manifest(
             chunks = ch_manifest.get("chunks", [])
             if not chunks:
                 raise ValueError("manifest.json contains no chunks.")
+            chunk_spans = ch_manifest.get("chunk_spans", [])
+            if not isinstance(chunk_spans, list) or len(chunk_spans) != len(chunks):
+                raise ValueError(
+                    "manifest.json missing chunk spans. "
+                    "Run with --rechunk to regenerate manifest."
+                )
             chapter_chunks.append(chunks)
         pad_ms = int(manifest.get("pad_ms", pad_ms))
     else:
         chapter_chunks = []
         manifest_chapters = []
         for ch in chapters:
-            chunks = make_chunks(ch.text, max_chars=max_chars, chunk_mode=chunk_mode)
+            spans = make_chunk_spans(
+                ch.text, max_chars=max_chars, chunk_mode=chunk_mode
+            )
+            chunks = [ch.text[start:end] for start, end in spans]
+            span_list = [[start, end] for start, end in spans]
             if not chunks:
                 raise ValueError(f"No chunks generated for chapter: {ch.id}")
             chapter_chunks.append(chunks)
@@ -458,6 +484,7 @@ def prepare_manifest(
                     "path": ch.path,
                     "text_sha256": sha256_str(ch.text),
                     "chunks": chunks,
+                    "chunk_spans": span_list,
                     "durations_ms": [None] * len(chunks),
                 }
             )
@@ -582,7 +609,8 @@ def synthesize(
                     progress.advance(overall_task, 1)
                     continue
 
-                audio = tts_model.generate_audio(voice_state, chunk_text)
+                tts_text = prepare_tts_text(chunk_text)
+                audio = tts_model.generate_audio(voice_state, tts_text)
                 a16 = tensor_to_int16(audio)
 
                 if pad_tensor is not None and pad_tensor.numel() > 0:
