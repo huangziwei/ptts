@@ -1,6 +1,10 @@
+.DS_Store
+.codex
 .cache
 .uv-cache
-*cache
-voices/
+*cache*
+voice*/
 out/
-.DS_Store
+books/
+__pycache__/
+*.py[cod]

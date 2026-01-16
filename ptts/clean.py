@@ -1,0 +1,1 @@
+"""Text cleaning pipeline (stub)."""

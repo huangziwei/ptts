@@ -1,0 +1,14 @@
+[project]
+name = "ptts"
+version = "0.1.0"
+description = "EPUB to M4B pipeline using Pocket-TTS"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "beautifulsoup4>=4.12",
+  "ebooklib>=0.18",
+  "lxml>=5.0",
+]
+
+[project.scripts]
+ptts = "ptts.cli:main"

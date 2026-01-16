@@ -11,6 +11,7 @@ mkdir -p .uv-cache .cache/huggingface
 
 brew install podman
 podman --version # tested with 5.7.1
+podman machine init --cpus 6 --memory 8192 --disk-size 60 --now pocket-tts
 
 # To use voice cloning, you need to accept the terms via browser at https://huggingface.co/kyutai/pocket-tts
 # Then you need to save the access token with correct permissions (I ticked everything in Repositories and Inference)
@@ -42,7 +43,7 @@ podman run --rm -it \
   ghcr.io/astral-sh/uv:python3.12-bookworm-slim \
   uv run --no-project --with pocket-tts longform_pockettts.py \
     --text book.txt \
-    --voice voice.pockettts.wav \
+    --voice voice/ray.wav \
     --out out/book \
     --max-chars 800 \
     --pad-ms 150
