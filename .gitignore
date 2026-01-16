@@ -1,0 +1,6 @@
+.cache
+.uv-cache
+*cache
+voices/
+out/
+.DS_Store
