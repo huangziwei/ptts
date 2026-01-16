@@ -139,6 +139,29 @@
         box-shadow: var(--shadow);
       }
 
+      .tts-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .tts-toggle {
+        border: 1px solid #d8caba;
+        background: #fff;
+        color: var(--ink);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .tts-panel.collapsed .tts-grid,
+      .tts-panel.collapsed .tts-actions {
+        display: none;
+      }
+
       .tts-panel h3 {
         margin: 0 0 12px;
         font-size: 13px;
@@ -338,6 +361,7 @@
         display: flex;
         align-items: center;
         gap: 16px;
+        flex-wrap: wrap;
       }
 
       .player-controls {
@@ -371,6 +395,87 @@
         flex: 1;
         color: var(--muted);
         font-size: 13px;
+      }
+
+      .marks {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        font-size: 12px;
+        color: var(--muted);
+        position: relative;
+      }
+
+      .bookmark-panel {
+        position: absolute;
+        bottom: 52px;
+        left: 0;
+        width: 280px;
+        background: #fffdf9;
+        border: 1px solid #eadfd2;
+        border-radius: 16px;
+        box-shadow: 0 16px 30px rgba(30, 25, 20, 0.18);
+        padding: 12px;
+        display: none;
+        z-index: 20;
+      }
+
+      .bookmark-panel.open {
+        display: block;
+      }
+
+      .bookmark-title {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      .bookmark-list {
+        max-height: 220px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .bookmark-item {
+        background: #f7efe3;
+        border-radius: 12px;
+        padding: 8px 10px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .bookmark-item span {
+        font-size: 12px;
+        color: #50463f;
+      }
+
+      .bookmark-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .btn.small {
+        padding: 4px 10px;
+        font-size: 11px;
+      }
+
+      .bookmark-empty {
+        font-size: 12px;
+        color: var(--muted);
+        padding: 6px 4px;
+      }
+
+      .marks span {
+        max-width: 220px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .speed {
@@ -444,8 +549,11 @@
             <p class="book-subtitle" id="bookStatus"></p>
           </div>
         </div>
-        <section class="tts-panel">
-          <h3>Text To Speech</h3>
+        <section class="tts-panel" id="ttsPanel">
+          <div class="tts-header">
+            <h3>Text To Speech</h3>
+            <button class="tts-toggle" id="ttsToggle">Collapse</button>
+          </div>
           <div class="tts-grid">
             <div class="tts-field">
               <label for="voiceInput">Voice (wav path)</label>
@@ -500,6 +608,15 @@
         <button class="btn" id="nextBtn">Next</button>
       </div>
       <div class="status" id="status">Idle.</div>
+      <div class="marks">
+        <button class="btn" id="bookmarkBtn">Bookmarks</button>
+        <div class="bookmark-panel" id="bookmarkPanel">
+          <div class="bookmark-title">Bookmarks</div>
+          <div class="bookmark-list" id="bookmarkList"></div>
+          <button class="btn" id="saveBookmarkBtn">Save current</button>
+        </div>
+        <span id="lastPlayedLabel">Last: —</span>
+      </div>
       <div class="speed">
         Speed
         <input id="speedInput" type="range" min="0.8" max="1.4" step="0.05" value="1" />
@@ -524,6 +641,8 @@
         audioBase: "",
         synthTimer: null,
         loadingBook: false,
+        initialBookId: null,
+        initialChapterId: null,
       };
 
       const bookList = document.getElementById("bookList");
@@ -541,6 +660,11 @@
       const speedInput = document.getElementById("speedInput");
       const speedValue = document.getElementById("speedValue");
       const audio = document.getElementById("audio");
+      const bookmarkBtn = document.getElementById("bookmarkBtn");
+      const bookmarkList = document.getElementById("bookmarkList");
+      const bookmarkPanel = document.getElementById("bookmarkPanel");
+      const saveBookmarkBtn = document.getElementById("saveBookmarkBtn");
+      const lastPlayedLabel = document.getElementById("lastPlayedLabel");
       const voiceInput = document.getElementById("voiceInput");
       const maxCharsInput = document.getElementById("maxCharsInput");
       const padMsInput = document.getElementById("padMsInput");
@@ -551,6 +675,8 @@
       const progressFill = document.getElementById("progressFill");
       const progressText = document.getElementById("progressText");
       const progressDetail = document.getElementById("progressDetail");
+      const ttsPanel = document.getElementById("ttsPanel");
+      const ttsToggle = document.getElementById("ttsToggle");
 
       function setStatus(message) {
         status.textContent = message;
@@ -558,6 +684,74 @@
 
       function pad6(num) {
         return String(num).padStart(6, "0");
+      }
+
+      function readUrlState() {
+        const params = new URLSearchParams(window.location.search);
+        state.initialBookId = params.get("book");
+        state.initialChapterId = params.get("chapter");
+      }
+
+      function updateUrl(bookId, chapterId) {
+        const params = new URLSearchParams();
+        if (bookId) {
+          params.set("book", bookId);
+        }
+        if (chapterId) {
+          params.set("chapter", chapterId);
+        }
+        const query = params.toString();
+        const next = query ? `/?${query}` : "/";
+        history.replaceState(null, "", next);
+      }
+
+      function storageKey(kind, bookId) {
+        return `ptts.${kind}.${bookId}`;
+      }
+
+      function getBookmarks() {
+        if (!state.book) {
+          return [];
+        }
+        const raw = localStorage.getItem(storageKey("bookmarks", state.book.id));
+        if (!raw) {
+          return [];
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+          return [];
+        }
+      }
+
+      function saveBookmarks(bookmarks) {
+        if (!state.book) {
+          return;
+        }
+        localStorage.setItem(
+          storageKey("bookmarks", state.book.id),
+          JSON.stringify(bookmarks)
+        );
+      }
+
+      function getStoredIndex(kind) {
+        if (!state.book) {
+          return null;
+        }
+        const raw = localStorage.getItem(storageKey(kind, state.book.id));
+        if (!raw) {
+          return null;
+        }
+        const value = parseInt(raw, 10);
+        return Number.isNaN(value) ? null : value;
+      }
+
+      function setStoredIndex(kind, index) {
+        if (!state.book) {
+          return;
+        }
+        localStorage.setItem(storageKey(kind, state.book.id), String(index));
       }
 
       async function fetchJson(url, options = {}) {
@@ -577,6 +771,13 @@
           const data = await fetchJson("/api/books");
           state.books = data.books || [];
           renderBooks();
+          if (state.initialBookId && !state.book) {
+            const initial = state.initialBookId;
+            const chapter = state.initialChapterId;
+            state.initialBookId = null;
+            state.initialChapterId = null;
+            await selectBook(initial, chapter);
+          }
         } catch (err) {
           bookList.innerHTML = "<p class=\"empty-state\">Failed to load books.</p>";
         }
@@ -587,6 +788,11 @@
         maxCharsInput.value = localStorage.getItem("ptts.maxChars") || "800";
         padMsInput.value = localStorage.getItem("ptts.padMs") || "150";
         chunkModeSelect.value = localStorage.getItem("ptts.chunkMode") || "sentence";
+        const collapsed = localStorage.getItem("ptts.ttsCollapsed") === "1";
+        if (collapsed) {
+          ttsPanel.classList.add("collapsed");
+          ttsToggle.textContent = "Expand";
+        }
       }
 
       function saveSettings() {
@@ -621,7 +827,7 @@
         });
       }
 
-      async function selectBook(bookId) {
+      async function selectBook(bookId, chapterId) {
         state.loadingBook = true;
         try {
           const data = await fetchJson(`/api/books/${bookId}`);
@@ -639,7 +845,11 @@
           renderBookHeader();
           renderChapters();
           if (state.chapters.length) {
-            renderChapter(state.chapters[0].id);
+            const desired = chapterId || state.chapters[0].id;
+            renderChapter(desired);
+            const offset = state.chapterOffsets[desired];
+            state.currentQueueIndex =
+              typeof offset === "number" ? offset : state.currentQueueIndex;
             setStatus(`Ready. ${state.queue.length} chunks.`);
           } else {
             chapterTitle.textContent = "No audio yet";
@@ -647,6 +857,7 @@
               "<p class=\"empty-state\">Run `ptts synth` to generate audio chunks.</p>";
             setStatus("No audio available.");
           }
+          updateUrl(state.book.id, state.currentChapterId);
           startSynthPolling();
         } catch (err) {
           setStatus("Failed to load book.");
@@ -671,6 +882,87 @@
         } else {
           coverLarge.innerHTML = "";
         }
+      }
+
+      function describeIndex(index) {
+        const item = state.queue[index];
+        if (!item) {
+          return "—";
+        }
+        const chapter = state.chapters[item.chapterIndex];
+        const title = chapter ? chapter.title : item.chapterId;
+        const chunkNum = item.chunkIndex + 1;
+        const chunkTotal = chapter ? chapter.chunk_count : "";
+        return `${title} · chunk ${chunkNum}/${chunkTotal || "?"}`;
+      }
+
+      function updateMarks() {
+        if (!state.book) {
+          bookmarkList.innerHTML = "<div class=\"bookmark-empty\">No bookmarks yet.</div>";
+          lastPlayedLabel.textContent = "Last: —";
+          saveBookmarkBtn.disabled = true;
+          return;
+        }
+        const bookmarks = getBookmarks();
+        bookmarkList.innerHTML = "";
+        if (!bookmarks.length) {
+          bookmarkList.innerHTML = "<div class=\"bookmark-empty\">No bookmarks yet.</div>";
+        } else {
+          bookmarks.forEach((entry) => {
+            const item = document.createElement("div");
+            item.className = "bookmark-item";
+            item.innerHTML = `
+              <span>${entry.label || describeIndex(entry.index)}</span>
+              <div class="bookmark-actions">
+                <button class="btn small" data-action="play" data-index="${entry.index}">Play</button>
+                <button class="btn small" data-action="remove" data-index="${entry.index}">Remove</button>
+              </div>
+            `;
+            bookmarkList.appendChild(item);
+          });
+        }
+        const lastIndex = getStoredIndex("lastPlayed");
+        lastPlayedLabel.textContent = `Last: ${lastIndex === null ? "—" : describeIndex(lastIndex)}`;
+        saveBookmarkBtn.disabled = !state.queue.length;
+      }
+
+      function jumpToIndex(index, autoplay) {
+        if (index === null || index < 0 || index >= state.queue.length) {
+          return;
+        }
+        state.currentQueueIndex = index;
+        setActiveChunk(index, false);
+        if (autoplay) {
+          playIndex(index);
+        } else {
+          const item = state.queue[index];
+          if (item && state.currentChapterId !== item.chapterId) {
+            renderChapter(item.chapterId);
+          }
+        }
+        updateMarks();
+      }
+
+      function addBookmark(index) {
+        if (index === null || index < 0 || index >= state.queue.length) {
+          return;
+        }
+        const bookmarks = getBookmarks();
+        if (bookmarks.some((entry) => entry.index === index)) {
+          return;
+        }
+        bookmarks.push({
+          index,
+          label: describeIndex(index),
+          created_at: Date.now(),
+        });
+        saveBookmarks(bookmarks);
+      }
+
+      function removeBookmark(index) {
+        const bookmarks = getBookmarks();
+        const next = bookmarks.filter((entry) => entry.index !== index);
+        saveBookmarks(next);
       }
 
       function startSynthPolling() {
@@ -811,6 +1103,7 @@
             renderChapter(chapter.id);
             state.currentQueueIndex = state.chapterOffsets[chapter.id] || 0;
             setStatus(`Ready at ${chapter.title}.`);
+            updateUrl(state.book ? state.book.id : null, chapter.id);
           });
           chapterList.appendChild(item);
         });
@@ -837,6 +1130,8 @@
         if (state.activeQueueIndex !== null) {
           setActiveChunk(state.activeQueueIndex, false);
         }
+        updateUrl(state.book ? state.book.id : null, chapter.id);
+        updateMarks();
       }
 
       function setActiveChunk(index, waiting) {
@@ -896,6 +1191,8 @@
         state.currentQueueIndex = index;
         setActiveChunk(index, true);
         setStatus(`Waiting for chunk ${index + 1} of ${state.queue.length}...`);
+        setStoredIndex("lastPlayed", index);
+        updateMarks();
 
         let available = false;
         try {
@@ -945,7 +1242,9 @@
           return;
         }
         if (audio.paused) {
-          playIndex(state.currentQueueIndex);
+          const lastIndex = getStoredIndex("lastPlayed");
+          const startIndex = lastIndex === null ? 0 : lastIndex;
+          playIndex(startIndex);
         } else {
           audio.pause();
           playBtn.textContent = "Play";
@@ -966,6 +1265,48 @@
       nextBtn.addEventListener("click", nextChunk);
       startTts.addEventListener("click", startSynth);
       stopTts.addEventListener("click", stopSynth);
+      bookmarkBtn.addEventListener("click", () => {
+        bookmarkPanel.classList.toggle("open");
+      });
+      bookmarkList.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!target || !target.dataset || !target.dataset.action) {
+          return;
+        }
+        const action = target.dataset.action;
+        const index = parseInt(target.dataset.index, 10);
+        if (Number.isNaN(index)) {
+          return;
+        }
+        if (action === "play") {
+          jumpToIndex(index, true);
+          bookmarkPanel.classList.remove("open");
+          return;
+        }
+        if (action === "remove") {
+          removeBookmark(index);
+          updateMarks();
+          setStatus("Bookmark removed.");
+        }
+      });
+      saveBookmarkBtn.addEventListener("click", () => {
+        if (!state.queue.length) {
+          return;
+        }
+        addBookmark(state.currentQueueIndex);
+        updateMarks();
+        setStatus("Bookmark saved.");
+      });
+      ttsToggle.addEventListener("click", () => {
+        ttsPanel.classList.toggle("collapsed");
+        ttsToggle.textContent = ttsPanel.classList.contains("collapsed")
+          ? "Expand"
+          : "Collapse";
+        localStorage.setItem(
+          "ptts.ttsCollapsed",
+          ttsPanel.classList.contains("collapsed") ? "1" : "0"
+        );
+      });
       audio.addEventListener("ended", () => {
         playIndex(state.currentQueueIndex + 1);
       });
@@ -987,6 +1328,7 @@
       });
 
       loadSettings();
+      readUrlState();
       stopTts.disabled = true;
       loadBooks();
     </script>
