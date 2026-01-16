@@ -20,6 +20,13 @@ DEFAULT_RULES: Dict[str, List[str]] = {
         r"^table of contents$",
         r"^contents$",
         r"^copyright$",
+        r"^title$",
+        r"^title page$",
+        r"^discover more$",
+        r"^discover your next great read$",
+        r"^about (the )?authors?$",
+        r"^name index$",
+        r"^subject index$",
         r"^references$",
         r"^bibliography$",
         r"^index$",
@@ -104,6 +111,36 @@ def load_rules(
     )
 
 
+def format_title_chapter(metadata: dict) -> str:
+    raw_title = str(metadata.get("title") or "").strip()
+    title = raw_title
+    subtitle = ""
+    if ":" in raw_title:
+        title, subtitle = [part.strip() for part in raw_title.split(":", 1)]
+    year = str(metadata.get("year") or "").strip()
+    authors = metadata.get("authors") or []
+
+    headline = title or ""
+    if subtitle:
+        headline = f"{title}: {subtitle}" if title else subtitle
+    if year:
+        headline = f"{headline} {year}" if headline else year
+
+    author_line = ", ".join(a.strip() for a in authors if str(a).strip())
+    if author_line:
+        author_line = f"by {author_line}"
+
+    lines: List[str] = []
+    if headline:
+        lines.append(headline)
+    if author_line:
+        if lines:
+            lines.append("")
+        lines.append(author_line)
+
+    return "\n".join(lines).strip()
+
+
 def compile_patterns(patterns: Iterable[str]) -> List[re.Pattern]:
     compiled: List[re.Pattern] = []
     for pattern in patterns:
@@ -174,12 +211,15 @@ def sanitize_book(
     if not raw_dir.exists():
         raise FileNotFoundError(f"Missing raw chapters at {raw_dir}")
 
-    if clean_dir.exists() and not overwrite:
+    if clean_dir.exists():
         existing = [p for p in clean_dir.iterdir() if p.is_file()]
-        if existing:
+        if existing and not overwrite:
             raise FileExistsError(
                 "Clean chapters already exist. Use --overwrite to regenerate."
             )
+        if overwrite:
+            for path in existing:
+                path.unlink()
 
     rules = load_rules(rules_path, book_dir)
     drop_patterns = compile_patterns(rules.drop_chapter_title_patterns)
@@ -187,6 +227,7 @@ def sanitize_book(
     remove_patterns = compile_patterns(rules.remove_patterns)
 
     toc = json.loads(toc_path.read_text(encoding="utf-8"))
+    metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
     chapters = toc.get("chapters", [])
     if not isinstance(chapters, list):
         raise ValueError("Invalid toc.json: chapters must be a list.")
@@ -195,6 +236,21 @@ def sanitize_book(
     report_entries: List[ChapterResult] = []
     pattern_stats: Dict[str, int] = {}
     dropped = 0
+    clean_entries: List[dict] = []
+
+    title_text = format_title_chapter(metadata)
+    if title_text:
+        title_path = clean_dir / "0000-title.txt"
+        title_path.write_text(title_text + "\n", encoding="utf-8")
+        clean_entries.append(
+            {
+                "index": 1,
+                "title": metadata.get("title") or "Title",
+                "path": title_path.relative_to(book_dir).as_posix(),
+                "source_index": 0,
+                "kind": "title",
+            }
+        )
 
     for entry in chapters:
         title = str(entry.get("title") or "").strip()
@@ -266,6 +322,15 @@ def sanitize_book(
                 clean_chars=len(cleaned),
             )
         )
+        clean_entries.append(
+            {
+                "index": len(clean_entries) + 1,
+                "title": title,
+                "path": clean_path.relative_to(book_dir).as_posix(),
+                "source_index": entry.get("index", None),
+                "kind": "chapter",
+            }
+        )
 
     report = {
         "created_unix": int(time.time()),
@@ -281,6 +346,11 @@ def sanitize_book(
             "total_chapters": len(report_entries),
             "dropped_chapters": dropped,
             "removed_by_pattern": pattern_stats,
+            "added_title_chapter": bool(title_text),
+        },
+        "title_chapter": {
+            "text": title_text,
+            "path": clean_entries[0]["path"] if title_text else "",
         },
         "chapters": [
             {
@@ -303,4 +373,17 @@ def sanitize_book(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    return len(report_entries) - dropped
+
+    clean_toc = {
+        "created_unix": int(time.time()),
+        "source_epub": toc.get("source_epub", ""),
+        "metadata": metadata,
+        "chapters": clean_entries,
+    }
+    clean_toc_path = book_dir / "clean" / "toc.json"
+    clean_toc_path.write_text(
+        json.dumps(clean_toc, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    return len(clean_entries)

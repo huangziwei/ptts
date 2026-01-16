@@ -68,6 +68,13 @@ def extract_metadata(book: epub.EpubBook) -> dict:
     title = _first_dc_meta(book, "title")
     authors = _all_dc_meta(book, "creator")
     language = _first_dc_meta(book, "language")
+    dates = _all_dc_meta(book, "date")
+    year = ""
+    for value in dates:
+        match = re.search(r"(19|20)\d{2}", value)
+        if match:
+            year = match.group(0)
+            break
 
     cover_info = None
     cover_meta = book.get_metadata("OPF", "cover")
@@ -87,6 +94,8 @@ def extract_metadata(book: epub.EpubBook) -> dict:
         "title": title,
         "authors": authors,
         "language": language,
+        "dates": dates,
+        "year": year,
         "cover": cover_info,
     }
 
