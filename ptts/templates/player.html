@@ -332,6 +332,10 @@
         transition: background 0.2s ease, color 0.2s ease;
       }
 
+      .chunk.last-played {
+        background: #fff4d6;
+      }
+
       .chunk.active {
         background: var(--highlight);
       }
@@ -615,7 +619,6 @@
           <div class="bookmark-list" id="bookmarkList"></div>
           <button class="btn" id="saveBookmarkBtn">Save current</button>
         </div>
-        <span id="lastPlayedLabel">Last: —</span>
       </div>
       <div class="speed">
         Speed
@@ -664,7 +667,6 @@
       const bookmarkList = document.getElementById("bookmarkList");
       const bookmarkPanel = document.getElementById("bookmarkPanel");
       const saveBookmarkBtn = document.getElementById("saveBookmarkBtn");
-      const lastPlayedLabel = document.getElementById("lastPlayedLabel");
       const voiceInput = document.getElementById("voiceInput");
       const maxCharsInput = document.getElementById("maxCharsInput");
       const padMsInput = document.getElementById("padMsInput");
@@ -884,22 +886,49 @@
         }
       }
 
+      function snippet(text, length) {
+        if (!text) {
+          return "";
+        }
+        const cleaned = text.replace(/\s+/g, " ").trim();
+        return cleaned.slice(0, length);
+      }
+
       function describeIndex(index) {
         const item = state.queue[index];
         if (!item) {
           return "—";
         }
-        const chapter = state.chapters[item.chapterIndex];
-        const title = chapter ? chapter.title : item.chapterId;
+        const chapterNum = item.chapterIndex + 1;
         const chunkNum = item.chunkIndex + 1;
-        const chunkTotal = chapter ? chapter.chunk_count : "";
-        return `${title} · chunk ${chunkNum}/${chunkTotal || "?"}`;
+        const snip = snippet(item.chunkText || "", 10);
+        return snip ? `${chapterNum}/${chunkNum} ${snip}` : `${chapterNum}/${chunkNum}`;
+      }
+
+      function applyLastPlayedHighlight() {
+        const prev = chapterText.querySelector(".chunk.last-played");
+        if (prev) {
+          prev.classList.remove("last-played");
+        }
+        const lastIndex = getStoredIndex("lastPlayed");
+        if (lastIndex === null) {
+          return;
+        }
+        const item = state.queue[lastIndex];
+        if (!item || item.chapterId !== state.currentChapterId) {
+          return;
+        }
+        const span = chapterText.querySelector(
+          `.chunk[data-queue-index="${lastIndex}"]`
+        );
+        if (span) {
+          span.classList.add("last-played");
+        }
       }
 
       function updateMarks() {
         if (!state.book) {
           bookmarkList.innerHTML = "<div class=\"bookmark-empty\">No bookmarks yet.</div>";
-          lastPlayedLabel.textContent = "Last: —";
           saveBookmarkBtn.disabled = true;
           return;
         }
@@ -911,8 +940,9 @@
           bookmarks.forEach((entry) => {
             const item = document.createElement("div");
             item.className = "bookmark-item";
+            const label = describeIndex(entry.index);
             item.innerHTML = `
-              <span>${entry.label || describeIndex(entry.index)}</span>
+              <span>${label}</span>
               <div class="bookmark-actions">
                 <button class="btn small" data-action="play" data-index="${entry.index}">Play</button>
                 <button class="btn small" data-action="remove" data-index="${entry.index}">Remove</button>
@@ -921,8 +951,6 @@
             bookmarkList.appendChild(item);
           });
         }
-        const lastIndex = getStoredIndex("lastPlayed");
-        lastPlayedLabel.textContent = `Last: ${lastIndex === null ? "—" : describeIndex(lastIndex)}`;
         saveBookmarkBtn.disabled = !state.queue.length;
       }
 
@@ -1127,6 +1155,7 @@
           chapterText.appendChild(document.createTextNode(" "));
         });
         renderChapters();
+        applyLastPlayedHighlight();
         if (state.activeQueueIndex !== null) {
           setActiveChunk(state.activeQueueIndex, false);
         }
@@ -1160,6 +1189,7 @@
           span.scrollIntoView({ block: "center", behavior: "smooth" });
         }
         state.activeQueueIndex = index;
+        applyLastPlayedHighlight();
       }
 
       async function chunkExists(item) {
@@ -1189,9 +1219,9 @@
         }
         const item = state.queue[index];
         state.currentQueueIndex = index;
+        setStoredIndex("lastPlayed", index);
         setActiveChunk(index, true);
         setStatus(`Waiting for chunk ${index + 1} of ${state.queue.length}...`);
-        setStoredIndex("lastPlayed", index);
         updateMarks();
 
         let available = false;
