@@ -586,7 +586,6 @@
           </div>
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
-            <button class="btn" id="stopTts">Stop</button>
             <label><input id="rechunkInput" type="checkbox" /> Rechunk</label>
           </div>
           <div class="progress-track">
@@ -616,7 +615,7 @@
         <button class="btn primary" id="playBtn">Play</button>
         <button class="btn" id="nextBtn">Next</button>
       </div>
-      <div class="status" id="status">Idle.</div>
+      <div class="status" id="status">Last: —</div>
       <div class="marks">
         <button class="btn" id="bookmarkBtn">Bookmarks</button>
         <div class="bookmark-panel" id="bookmarkPanel">
@@ -654,6 +653,8 @@
         initialChapterId: null,
         pendingManifestRefresh: false,
         needsRechunk: false,
+        synthRunning: false,
+        statusMode: "idle",
       };
 
       const bookList = document.getElementById("bookList");
@@ -681,15 +682,15 @@
       const chunkModeSelect = document.getElementById("chunkModeSelect");
       const rechunkInput = document.getElementById("rechunkInput");
       const startTts = document.getElementById("startTts");
-      const stopTts = document.getElementById("stopTts");
       const progressFill = document.getElementById("progressFill");
       const progressText = document.getElementById("progressText");
       const progressDetail = document.getElementById("progressDetail");
       const ttsPanel = document.getElementById("ttsPanel");
       const ttsToggle = document.getElementById("ttsToggle");
 
-      function setStatus(message) {
+      function setStatus(message, mode = "message") {
         status.textContent = message;
+        state.statusMode = mode;
       }
 
       function pad6(num) {
@@ -870,7 +871,7 @@
             const offset = state.chapterOffsets[desired];
             state.currentQueueIndex =
               typeof offset === "number" ? offset : state.currentQueueIndex;
-            setStatus(`Ready. ${state.queue.length} chunks.`);
+            setIdleStatus();
             if (state.needsRechunk) {
               setStatus("Manifest missing chunk spans. Run `ptts synth --rechunk`.");
             }
@@ -985,6 +986,18 @@
         return snip ? `${chapterNum}/${chunkNum} ${snip}` : `${chapterNum}/${chunkNum}`;
       }
 
+      function idleStatusText() {
+        const lastIndex = getStoredIndex("lastPlayed");
+        if (lastIndex === null) {
+          return "Last: —";
+        }
+        return `Last: ${describeIndex(lastIndex)}`;
+      }
+
+      function setIdleStatus() {
+        setStatus(idleStatusText(), "idle");
+      }
+
       function applyLastPlayedHighlight() {
         const prev = chapterText.querySelector(".chunk.last-played");
         if (prev) {
@@ -1032,6 +1045,9 @@
           });
         }
         saveBookmarkBtn.disabled = !state.queue.length;
+        if (state.statusMode === "idle") {
+          setIdleStatus();
+        }
       }
 
       function jumpToIndex(index, autoplay) {
@@ -1105,6 +1121,8 @@
       }
 
       function updateSynthUI(data) {
+        state.synthRunning = !!data.running;
+        startTts.textContent = state.synthRunning ? "Stop TTS" : "Start TTS";
         const stage = data.stage || "idle";
         const progress = data.progress;
         if (stage === "chunking") {
@@ -1134,8 +1152,7 @@
         } else {
           bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "Waiting for audio.";
         }
-        startTts.disabled = data.running;
-        stopTts.disabled = !data.running;
+        startTts.disabled = false;
       }
 
       async function startSynth() {
@@ -1184,6 +1201,14 @@
         }
       }
 
+      function toggleSynth() {
+        if (state.synthRunning) {
+          stopSynth();
+        } else {
+          startSynth();
+        }
+      }
+
       function buildQueue() {
         state.queue = [];
         state.chapterOffsets = {};
@@ -1221,7 +1246,7 @@
           item.addEventListener("click", () => {
             renderChapter(chapter.id);
             state.currentQueueIndex = state.chapterOffsets[chapter.id] || 0;
-            setStatus(`Ready at ${chapter.title}.`);
+            setIdleStatus();
             updateUrl(state.book ? state.book.id : null, chapter.id);
           });
           chapterList.appendChild(item);
@@ -1406,7 +1431,7 @@
         } else {
           audio.pause();
           playBtn.textContent = "Play";
-          setStatus("Paused.");
+          setIdleStatus();
         }
       }
 
@@ -1421,8 +1446,7 @@
       playBtn.addEventListener("click", togglePlay);
       prevBtn.addEventListener("click", prevChunk);
       nextBtn.addEventListener("click", nextChunk);
-      startTts.addEventListener("click", startSynth);
-      stopTts.addEventListener("click", stopSynth);
+      startTts.addEventListener("click", toggleSynth);
       bookmarkBtn.addEventListener("click", () => {
         bookmarkPanel.classList.toggle("open");
       });
@@ -1487,7 +1511,6 @@
 
       loadSettings();
       readUrlState();
-      stopTts.disabled = true;
       loadBooks();
     </script>
   </body>
