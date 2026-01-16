@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from .text import read_clean_text
+from .voice import BUILTIN_VOICES, DEFAULT_VOICE, resolve_voice_prompt
 
 def _load_json(path: Path) -> dict:
     if not path.exists():
@@ -192,7 +193,7 @@ class SynthJob:
 
 class SynthRequest(BaseModel):
     book_id: str
-    voice: str
+    voice: Optional[str] = None
     max_chars: int = 800
     pad_ms: int = 150
     chunk_mode: str = "sentence"
@@ -239,6 +240,26 @@ def create_app(root_dir: Path) -> FastAPI:
     def get_book(book_id: str) -> JSONResponse:
         book_dir = _resolve_book_dir(root_dir, book_id)
         return _no_store(_book_details(book_dir))
+
+    @app.get("/api/voices")
+    def list_voices() -> JSONResponse:
+        voices_dir = repo_root / "voices"
+        local: List[dict] = []
+        if voices_dir.exists():
+            for wav in sorted(voices_dir.glob("*.wav")):
+                try:
+                    rel = wav.relative_to(repo_root)
+                    value = rel.as_posix()
+                except ValueError:
+                    value = str(wav)
+                local.append({"label": wav.stem, "value": value})
+        builtin = [
+            {"label": name, "value": name}
+            for name in sorted(BUILTIN_VOICES.keys())
+        ]
+        return _no_store(
+            {"local": local, "builtin": builtin, "default": DEFAULT_VOICE}
+        )
 
     @app.get("/api/chunk-status")
     def chunk_status(
@@ -333,11 +354,10 @@ def create_app(root_dir: Path) -> FastAPI:
         if existing and existing.process.poll() is None:
             raise HTTPException(status_code=409, detail="TTS is already running.")
 
-        voice_path = Path(payload.voice)
-        if not voice_path.is_absolute():
-            voice_path = (repo_root / voice_path).resolve()
-        if not voice_path.exists():
-            raise HTTPException(status_code=400, detail="Voice file not found.")
+        try:
+            voice_prompt = resolve_voice_prompt(payload.voice, base_dir=repo_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         tts_dir = book_dir / "tts"
         tts_dir.mkdir(parents=True, exist_ok=True)
@@ -354,7 +374,7 @@ def create_app(root_dir: Path) -> FastAPI:
             "--book",
             str(book_dir),
             "--voice",
-            str(voice_path),
+            voice_prompt,
             "--max-chars",
             str(payload.max_chars),
             "--pad-ms",
@@ -380,7 +400,7 @@ def create_app(root_dir: Path) -> FastAPI:
             process=process,
             started_at=time.time(),
             log_path=log_path,
-            voice=str(voice_path),
+            voice=voice_prompt,
             max_chars=payload.max_chars,
             pad_ms=payload.pad_ms,
             chunk_mode=payload.chunk_mode,

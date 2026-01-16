@@ -565,8 +565,8 @@
           </div>
           <div class="tts-grid">
             <div class="tts-field">
-              <label for="voiceInput">Voice (wav path)</label>
-              <input id="voiceInput" type="text" placeholder="voices/ray.wav" />
+              <label for="voiceSelect">Voice</label>
+              <select id="voiceSelect"></select>
             </div>
             <div class="tts-field">
               <label for="maxCharsInput">Max chars</label>
@@ -660,6 +660,7 @@
           lastPlayed: null,
           bookmarks: [],
         },
+        voicePreference: null,
       };
 
       const bookList = document.getElementById("bookList");
@@ -681,7 +682,7 @@
       const bookmarkList = document.getElementById("bookmarkList");
       const bookmarkPanel = document.getElementById("bookmarkPanel");
       const saveBookmarkBtn = document.getElementById("saveBookmarkBtn");
-      const voiceInput = document.getElementById("voiceInput");
+      const voiceSelect = document.getElementById("voiceSelect");
       const maxCharsInput = document.getElementById("maxCharsInput");
       const padMsInput = document.getElementById("padMsInput");
       const chunkModeSelect = document.getElementById("chunkModeSelect");
@@ -755,6 +756,55 @@
           throw new Error(`Request failed: ${res.status}`);
         }
         return res.json();
+      }
+
+      function appendVoiceGroup(select, label, items) {
+        if (!items.length) {
+          return;
+        }
+        const group = document.createElement("optgroup");
+        group.label = label;
+        items.forEach((item) => {
+          const option = document.createElement("option");
+          option.value = item.value;
+          option.textContent = item.label;
+          group.appendChild(option);
+        });
+        select.appendChild(group);
+      }
+
+      async function loadVoices() {
+        try {
+          const data = await fetchJson("/api/voices");
+          const local = Array.isArray(data.local) ? data.local : [];
+          const builtin = Array.isArray(data.builtin) ? data.builtin : [];
+          const defaultVoice = data.default || "";
+
+          voiceSelect.innerHTML = "";
+          appendVoiceGroup(voiceSelect, "Local voices", local);
+          appendVoiceGroup(voiceSelect, "Built-in voices", builtin);
+
+          const preferred = state.voicePreference;
+          const options = Array.from(voiceSelect.options).map((o) => o.value);
+          if (preferred && options.includes(preferred)) {
+            voiceSelect.value = preferred;
+          } else if (local.length) {
+            voiceSelect.value = local[0].value;
+          } else if (defaultVoice && options.includes(defaultVoice)) {
+            voiceSelect.value = defaultVoice;
+          } else if (builtin.length) {
+            voiceSelect.value = builtin[0].value;
+          }
+          if (voiceSelect.value) {
+            localStorage.setItem("ptts.voice", voiceSelect.value);
+          }
+        } catch (err) {
+          voiceSelect.innerHTML = "";
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "Unable to load voices";
+          voiceSelect.appendChild(option);
+        }
       }
 
       function schedulePlaybackSave() {
@@ -833,9 +883,7 @@
       }
 
       function loadSettings() {
-        if (!voiceInput.value) {
-          voiceInput.value = "voices/ray.wav";
-        }
+        state.voicePreference = localStorage.getItem("ptts.voice");
         if (!maxCharsInput.value) {
           maxCharsInput.value = "800";
         }
@@ -853,7 +901,9 @@
       }
 
       function saveSettings() {
-        voiceInput.value = voiceInput.value.trim();
+        if (voiceSelect && voiceSelect.value) {
+          localStorage.setItem("ptts.voice", voiceSelect.value);
+        }
       }
 
       function renderBooks() {
@@ -1209,7 +1259,7 @@
         const padMs = parseInt(padMsInput.value, 10);
         const payload = {
           book_id: state.book.id,
-          voice: voiceInput.value.trim(),
+          voice: voiceSelect.value,
           max_chars: Number.isNaN(maxChars) ? 800 : maxChars,
           pad_ms: Number.isNaN(padMs) ? 150 : padMs,
           chunk_mode: chunkModeSelect.value,
@@ -1553,8 +1603,10 @@
           }
         }
       });
+      voiceSelect.addEventListener("change", saveSettings);
 
       loadSettings();
+      loadVoices();
       readUrlState();
       loadBooks();
     </script>

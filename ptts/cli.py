@@ -208,7 +208,10 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="Run the full pipeline (not yet implemented)")
     run.add_argument("--input", required=True, help="Path to input .epub")
     run.add_argument("--output", required=True, help="Path to output .m4b")
-    run.add_argument("--voice", required=True, help="Voice prompt: wav path or hf:// URL")
+    run.add_argument(
+        "--voice",
+        help="Voice prompt: built-in name, wav path, or hf:// URL",
+    )
     run.set_defaults(func=lambda _args: _not_implemented("run"))
 
     sanitize = subparsers.add_parser(
@@ -236,7 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         help="Output directory (default: <book>/tts when using --book)",
     )
-    synth.add_argument("--voice", required=True, help="Voice prompt: wav path or hf:// URL")
+    synth.add_argument(
+        "--voice",
+        help="Voice prompt: built-in name, wav path, or hf:// URL",
+    )
     synth.add_argument("--max-chars", type=int, default=800)
     synth.add_argument("--pad-ms", type=int, default=150)
     synth.add_argument(

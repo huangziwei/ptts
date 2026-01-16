@@ -23,6 +23,7 @@ from rich.progress import (
 )
 
 from .text import read_clean_text
+from .voice import resolve_voice_prompt
 
 try:
     import torch
@@ -625,14 +626,23 @@ def prepare_manifest(
 
 def synthesize(
     chapters: Sequence[ChapterInput],
-    voice: str,
+    voice: Optional[str],
     out_dir: Path,
     max_chars: int = 800,
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> int:
     _require_tts()
+
+    if base_dir is None:
+        base_dir = Path.cwd()
+    try:
+        voice_prompt = resolve_voice_prompt(voice, base_dir=base_dir)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
 
     out_dir.mkdir(parents=True, exist_ok=True)
     seg_dir = out_dir / "segments"
@@ -663,7 +673,7 @@ def synthesize(
         manifest["sample_rate"] = sample_rate
         atomic_write_json(manifest_path, manifest)
 
-    voice_state = tts_model.get_state_for_audio_prompt(voice)
+    voice_state = tts_model.get_state_for_audio_prompt(voice_prompt)
 
     pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
     pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
@@ -748,12 +758,13 @@ def synthesize(
 
 def synthesize_text(
     text_path: Path,
-    voice: str,
+    voice: Optional[str],
     out_dir: Path,
     max_chars: int = 800,
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> int:
     chapters = load_text_chapters(text_path)
     return synthesize(
@@ -764,17 +775,19 @@ def synthesize_text(
         pad_ms=pad_ms,
         chunk_mode=chunk_mode,
         rechunk=rechunk,
+        base_dir=base_dir,
     )
 
 
 def synthesize_book(
     book_dir: Path,
-    voice: str,
+    voice: Optional[str],
     out_dir: Optional[Path] = None,
     max_chars: int = 800,
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> int:
     if out_dir is None:
         out_dir = book_dir / "tts"
@@ -792,6 +805,7 @@ def synthesize_book(
         pad_ms=pad_ms,
         chunk_mode=chunk_mode,
         rechunk=rechunk,
+        base_dir=base_dir,
     )
 
 
@@ -807,7 +821,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--book", type=Path, help="Book directory containing clean/toc.json"
     )
     ap.add_argument(
-        "--voice", required=True, help="Voice prompt: local wav path or hf://... URL"
+        "--voice",
+        help="Voice prompt: built-in name, wav path, or hf:// URL",
     )
     ap.add_argument(
         "--out",

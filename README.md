@@ -59,9 +59,15 @@ Open `http://localhost:8001` to review and adjust rules.
 ```bash
 ./bin/pmx uv run --with pocket-tts ptts synth \
   --book out/some-book \
-  --voice voices/ray.wav \
   --max-chars 800 \
   --pad-ms 150
+```
+
+By default, `ptts synth` uses the built-in voice `alba`. To choose a built-in voice
+explicitly (or use a cloned wav), pass `--voice`:
+```bash
+./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --voice alba
+./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --voice voices/ray.wav
 ```
 
 ### 5) Play in the web player
