@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import IO, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 
 def _load_json(path: Path) -> dict:
@@ -18,6 +23,13 @@ def _load_json(path: Path) -> dict:
 
 def _no_store(data: dict) -> JSONResponse:
     return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
+def _find_repo_root(start: Path) -> Path:
+    for candidate in [start] + list(start.parents):
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return start
 
 
 def _resolve_book_dir(root_dir: Path, book_id: str) -> Path:
@@ -85,11 +97,79 @@ def _book_details(book_dir: Path) -> dict:
     }
 
 
+def _compute_progress(manifest: dict) -> dict:
+    chapters = manifest.get("chapters", [])
+    total = 0
+    done = 0
+    current = None
+    global_index = 0
+
+    for entry in chapters if isinstance(chapters, list) else []:
+        chunks = entry.get("chunks", [])
+        durations = entry.get("durations_ms", [])
+        if not isinstance(chunks, list):
+            chunks = []
+        total += len(chunks)
+        for idx in range(len(chunks)):
+            global_index += 1
+            if idx < len(durations) and durations[idx] is not None:
+                done += 1
+                continue
+            if current is None:
+                current = {
+                    "chapter_id": entry.get("id") or "",
+                    "chapter_title": entry.get("title") or "",
+                    "chunk_index": idx + 1,
+                    "chunk_total": len(chunks),
+                    "global_index": global_index,
+                }
+
+    percent = (done / total * 100.0) if total else 0.0
+    return {
+        "total": total,
+        "done": done,
+        "percent": round(percent, 2),
+        "current": current,
+    }
+
+
+@dataclass
+class SynthJob:
+    book_id: str
+    book_dir: Path
+    process: subprocess.Popen
+    started_at: float
+    log_path: Path
+    voice: str
+    max_chars: int
+    pad_ms: int
+    chunk_mode: str
+    rechunk: bool
+    log_handle: Optional[IO[str]] = None
+    exit_code: Optional[int] = None
+    ended_at: Optional[float] = None
+
+
+class SynthRequest(BaseModel):
+    book_id: str
+    voice: str
+    max_chars: int = 800
+    pad_ms: int = 150
+    chunk_mode: str = "sentence"
+    rechunk: bool = False
+
+
+class StopRequest(BaseModel):
+    book_id: str
+
+
 def create_app(root_dir: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app = FastAPI()
     root_dir = root_dir.resolve()
     root_dir.mkdir(parents=True, exist_ok=True)
+    repo_root = _find_repo_root(root_dir)
+    jobs: dict[str, SynthJob] = {}
 
     app.mount("/audio", StaticFiles(directory=str(root_dir)), name="audio")
 
@@ -133,6 +213,133 @@ def create_app(root_dir: Path) -> FastAPI:
         )
         exists = wav_path.exists() and wav_path.is_file() and wav_path.stat().st_size > 0
         return _no_store({"exists": exists})
+
+    @app.get("/api/synth/status")
+    def synth_status(book_id: str) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        manifest_path = book_dir / "tts" / "manifest.json"
+        manifest = _load_json(manifest_path)
+        progress = _compute_progress(manifest) if manifest else None
+
+        job = jobs.get(book_id)
+        running = False
+        exit_code = None
+        if job:
+            exit_code = job.process.poll()
+            if exit_code is None:
+                running = True
+            else:
+                job.exit_code = exit_code
+                job.ended_at = job.ended_at or time.time()
+                if job.log_handle:
+                    job.log_handle.close()
+                    job.log_handle = None
+
+        log_path = ""
+        if job:
+            try:
+                log_path = str(job.log_path.relative_to(book_dir))
+            except ValueError:
+                log_path = str(job.log_path)
+
+        payload = {
+            "book_id": book_id,
+            "running": running,
+            "exit_code": exit_code,
+            "progress": progress,
+            "log_path": log_path,
+        }
+        return _no_store(payload)
+
+    @app.post("/api/synth/start")
+    def synth_start(payload: SynthRequest) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        if payload.chunk_mode not in ("sentence", "packed"):
+            raise HTTPException(status_code=400, detail="Invalid chunk_mode.")
+
+        existing = jobs.get(payload.book_id)
+        if existing and existing.process.poll() is None:
+            raise HTTPException(status_code=409, detail="TTS is already running.")
+
+        voice_path = Path(payload.voice)
+        if not voice_path.is_absolute():
+            voice_path = (repo_root / voice_path).resolve()
+        if not voice_path.exists():
+            raise HTTPException(status_code=400, detail="Voice file not found.")
+
+        tts_dir = book_dir / "tts"
+        tts_dir.mkdir(parents=True, exist_ok=True)
+        log_path = tts_dir / "synth.log"
+        log_handle = log_path.open("w", encoding="utf-8")
+
+        cmd = [
+            "uv",
+            "run",
+            "--with",
+            "pocket-tts",
+            "ptts",
+            "synth",
+            "--book",
+            str(book_dir),
+            "--voice",
+            str(voice_path),
+            "--max-chars",
+            str(payload.max_chars),
+            "--pad-ms",
+            str(payload.pad_ms),
+            "--chunk-mode",
+            payload.chunk_mode,
+        ]
+        if payload.rechunk:
+            cmd.append("--rechunk")
+
+        env = os.environ.copy()
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(repo_root),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+
+        jobs[payload.book_id] = SynthJob(
+            book_id=payload.book_id,
+            book_dir=book_dir,
+            process=process,
+            started_at=time.time(),
+            log_path=log_path,
+            voice=str(voice_path),
+            max_chars=payload.max_chars,
+            pad_ms=payload.pad_ms,
+            chunk_mode=payload.chunk_mode,
+            rechunk=payload.rechunk,
+            log_handle=log_handle,
+        )
+
+        return _no_store({"status": "started", "book_id": payload.book_id})
+
+    @app.post("/api/synth/stop")
+    def synth_stop(payload: StopRequest) -> JSONResponse:
+        job = jobs.get(payload.book_id)
+        if not job or job.process.poll() is not None:
+            return _no_store({"status": "not_running", "book_id": payload.book_id})
+
+        job.process.terminate()
+        try:
+            job.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            job.process.kill()
+            job.process.wait(timeout=2)
+
+        job.exit_code = job.process.returncode
+        job.ended_at = time.time()
+        if job.log_handle:
+            job.log_handle.close()
+            job.log_handle = None
+
+        return _no_store(
+            {"status": "stopped", "book_id": payload.book_id, "exit_code": job.exit_code}
+        )
 
     return app
 

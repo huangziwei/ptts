@@ -130,6 +130,89 @@
         margin-bottom: 24px;
       }
 
+      .tts-panel {
+        background: var(--panel);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+        border: 1px solid #eadfd2;
+        margin-bottom: 24px;
+        box-shadow: var(--shadow);
+      }
+
+      .tts-panel h3 {
+        margin: 0 0 12px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--muted);
+      }
+
+      .tts-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .tts-field label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .tts-field input,
+      .tts-field select {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid #d8caba;
+        font-family: var(--ui);
+      }
+
+      .tts-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .tts-actions label {
+        font-size: 13px;
+        color: var(--muted);
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .progress-track {
+        width: 100%;
+        height: 10px;
+        background: #efe5d8;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        transition: width 0.3s ease;
+      }
+
+      .progress-text {
+        margin-top: 8px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .progress-detail {
+        margin-top: 4px;
+        font-size: 12px;
+        color: #8a7a6e;
+      }
+
       .cover-large {
         width: 120px;
         height: 160px;
@@ -361,6 +444,40 @@
             <p class="book-subtitle" id="bookStatus"></p>
           </div>
         </div>
+        <section class="tts-panel">
+          <h3>Text To Speech</h3>
+          <div class="tts-grid">
+            <div class="tts-field">
+              <label for="voiceInput">Voice (wav path)</label>
+              <input id="voiceInput" type="text" placeholder="voices/ray.wav" />
+            </div>
+            <div class="tts-field">
+              <label for="maxCharsInput">Max chars</label>
+              <input id="maxCharsInput" type="number" min="100" step="50" value="800" />
+            </div>
+            <div class="tts-field">
+              <label for="padMsInput">Pad ms</label>
+              <input id="padMsInput" type="number" min="0" step="10" value="150" />
+            </div>
+            <div class="tts-field">
+              <label for="chunkModeSelect">Chunk mode</label>
+              <select id="chunkModeSelect">
+                <option value="sentence">Sentence</option>
+                <option value="packed">Packed</option>
+              </select>
+            </div>
+          </div>
+          <div class="tts-actions">
+            <button class="btn primary" id="startTts">Start TTS</button>
+            <button class="btn" id="stopTts">Stop</button>
+            <label><input id="rechunkInput" type="checkbox" /> Rechunk</label>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="progress-text" id="progressText">Idle.</div>
+          <div class="progress-detail" id="progressDetail"></div>
+        </section>
         <div class="reader-body">
           <aside class="toc">
             <h3>Chapters</h3>
@@ -405,6 +522,8 @@
         waitingFor: null,
         waitTimer: null,
         audioBase: "",
+        synthTimer: null,
+        loadingBook: false,
       };
 
       const bookList = document.getElementById("bookList");
@@ -422,6 +541,16 @@
       const speedInput = document.getElementById("speedInput");
       const speedValue = document.getElementById("speedValue");
       const audio = document.getElementById("audio");
+      const voiceInput = document.getElementById("voiceInput");
+      const maxCharsInput = document.getElementById("maxCharsInput");
+      const padMsInput = document.getElementById("padMsInput");
+      const chunkModeSelect = document.getElementById("chunkModeSelect");
+      const rechunkInput = document.getElementById("rechunkInput");
+      const startTts = document.getElementById("startTts");
+      const stopTts = document.getElementById("stopTts");
+      const progressFill = document.getElementById("progressFill");
+      const progressText = document.getElementById("progressText");
+      const progressDetail = document.getElementById("progressDetail");
 
       function setStatus(message) {
         status.textContent = message;
@@ -431,8 +560,12 @@
         return String(num).padStart(6, "0");
       }
 
-      async function fetchJson(url) {
-        const res = await fetch(url, { cache: "no-store" });
+      async function fetchJson(url, options = {}) {
+        const opts = { cache: "no-store", ...options };
+        if (options.headers) {
+          opts.headers = { ...options.headers };
+        }
+        const res = await fetch(url, opts);
         if (!res.ok) {
           throw new Error(`Request failed: ${res.status}`);
         }
@@ -447,6 +580,20 @@
         } catch (err) {
           bookList.innerHTML = "<p class=\"empty-state\">Failed to load books.</p>";
         }
+      }
+
+      function loadSettings() {
+        voiceInput.value = localStorage.getItem("ptts.voice") || "voices/ray.wav";
+        maxCharsInput.value = localStorage.getItem("ptts.maxChars") || "800";
+        padMsInput.value = localStorage.getItem("ptts.padMs") || "150";
+        chunkModeSelect.value = localStorage.getItem("ptts.chunkMode") || "sentence";
+      }
+
+      function saveSettings() {
+        localStorage.setItem("ptts.voice", voiceInput.value.trim());
+        localStorage.setItem("ptts.maxChars", maxCharsInput.value.trim());
+        localStorage.setItem("ptts.padMs", padMsInput.value.trim());
+        localStorage.setItem("ptts.chunkMode", chunkModeSelect.value);
       }
 
       function renderBooks() {
@@ -475,6 +622,7 @@
       }
 
       async function selectBook(bookId) {
+        state.loadingBook = true;
         try {
           const data = await fetchJson(`/api/books/${bookId}`);
           state.book = data.book;
@@ -499,8 +647,11 @@
               "<p class=\"empty-state\">Run `ptts synth` to generate audio chunks.</p>";
             setStatus("No audio available.");
           }
+          startSynthPolling();
         } catch (err) {
           setStatus("Failed to load book.");
+        } finally {
+          state.loadingBook = false;
         }
       }
 
@@ -519,6 +670,105 @@
           coverLarge.innerHTML = `<img src="${state.book.cover_url}" alt="Cover" />`;
         } else {
           coverLarge.innerHTML = "";
+        }
+      }
+
+      function startSynthPolling() {
+        if (state.synthTimer) {
+          clearInterval(state.synthTimer);
+        }
+        state.synthTimer = setInterval(loadSynthStatus, 2000);
+        loadSynthStatus();
+      }
+
+      async function loadSynthStatus() {
+        if (!state.book) {
+          return;
+        }
+        try {
+          const data = await fetchJson(
+            `/api/synth/status?book_id=${encodeURIComponent(state.book.id)}`
+          );
+          updateSynthUI(data);
+          if (!state.loadingBook && (!state.chapters.length || !state.queue.length)) {
+            if (data.progress && data.progress.total > 0) {
+              await selectBook(state.book.id);
+            }
+          }
+        } catch (err) {
+          progressText.textContent = "Unable to load TTS status.";
+        }
+      }
+
+      function updateSynthUI(data) {
+        const progress = data.progress;
+        if (!progress) {
+          progressFill.style.width = "0%";
+          progressText.textContent = "Idle.";
+          progressDetail.textContent = "";
+          bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "";
+          return;
+        }
+        progressFill.style.width = `${progress.percent}%`;
+        progressText.textContent = `${progress.done} / ${progress.total} chunks (${progress.percent}%).`;
+        if (progress.current) {
+          progressDetail.textContent = `${progress.current.chapter_title} · chunk ${progress.current.chunk_index} of ${progress.current.chunk_total}`;
+        } else {
+          progressDetail.textContent = progress.total ? "Completed." : "Idle.";
+        }
+        if (data.running) {
+          bookStatus.textContent = "Synthesizing audio...";
+        } else if (progress.total && progress.done >= progress.total) {
+          bookStatus.textContent = "Audio ready.";
+        } else {
+          bookStatus.textContent = "Waiting for audio.";
+        }
+        startTts.disabled = data.running;
+        stopTts.disabled = !data.running;
+      }
+
+      async function startSynth() {
+        if (!state.book) {
+          return;
+        }
+        saveSettings();
+        const maxChars = parseInt(maxCharsInput.value, 10);
+        const padMs = parseInt(padMsInput.value, 10);
+        const payload = {
+          book_id: state.book.id,
+          voice: voiceInput.value.trim(),
+          max_chars: Number.isNaN(maxChars) ? 800 : maxChars,
+          pad_ms: Number.isNaN(padMs) ? 150 : padMs,
+          chunk_mode: chunkModeSelect.value,
+          rechunk: rechunkInput.checked,
+        };
+        try {
+          await fetchJson("/api/synth/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          setStatus("TTS started.");
+          await loadSynthStatus();
+        } catch (err) {
+          setStatus("Failed to start TTS.");
+        }
+      }
+
+      async function stopSynth() {
+        if (!state.book) {
+          return;
+        }
+        try {
+          await fetchJson("/api/synth/stop", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id: state.book.id }),
+          });
+          setStatus("TTS stopped.");
+          await loadSynthStatus();
+        } catch (err) {
+          setStatus("Failed to stop TTS.");
         }
       }
 
@@ -714,6 +964,8 @@
       playBtn.addEventListener("click", togglePlay);
       prevBtn.addEventListener("click", prevChunk);
       nextBtn.addEventListener("click", nextChunk);
+      startTts.addEventListener("click", startSynth);
+      stopTts.addEventListener("click", stopSynth);
       audio.addEventListener("ended", () => {
         playIndex(state.currentQueueIndex + 1);
       });
@@ -734,6 +986,8 @@
         }
       });
 
+      loadSettings();
+      stopTts.disabled = true;
       loadBooks();
     </script>
   </body>
