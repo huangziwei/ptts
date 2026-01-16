@@ -9,6 +9,7 @@ from typing import Optional
 
 from . import epub as epub_util
 from . import merge as merge_util
+from . import player as player_util
 from . import preview as preview_util
 from . import sanitize as sanitize_util
 from . import tts as tts_util
@@ -257,6 +258,20 @@ def build_parser() -> argparse.ArgumentParser:
     preview.set_defaults(
         func=lambda args: preview_util.run(
             Path(args.book), host=args.host, port=args.port
+        )
+    )
+
+    play = subparsers.add_parser("play", help="Play generated audio in a web UI")
+    play.add_argument(
+        "--root",
+        default="out",
+        help="Root folder containing book outputs (default: out)",
+    )
+    play.add_argument("--host", default="127.0.0.1")
+    play.add_argument("--port", type=int, default=8002)
+    play.set_defaults(
+        func=lambda args: player_util.run(
+            Path(args.root), host=args.host, port=args.port
         )
     )
 

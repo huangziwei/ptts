@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PTTS Player</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Source+Serif+4:wght@400;600&family=Work+Sans:wght@400;600&display=swap");
+
+      :root {
+        --bg: #f6f1ea;
+        --panel: #fffaf2;
+        --panel-2: #f1e8dc;
+        --ink: #2c2620;
+        --muted: #7b7066;
+        --accent: #1d7f6e;
+        --accent-2: #e07a5f;
+        --highlight: #fff0c2;
+        --shadow: 0 12px 30px rgba(32, 28, 24, 0.15);
+        --radius: 16px;
+        --ui: "Work Sans", "Segoe UI", sans-serif;
+        --read: "Source Serif 4", Georgia, serif;
+        --title: "Fraunces", "Times New Roman", serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: var(--ui);
+        color: var(--ink);
+        background: linear-gradient(130deg, #f6f1ea 0%, #f2e8da 40%, #e9f2ef 100%);
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        min-height: 100vh;
+      }
+
+      .library {
+        padding: 24px 20px;
+        background: rgba(255, 250, 242, 0.9);
+        border-right: 1px solid #eadfd2;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+        animation: fade-up 0.6s ease;
+      }
+
+      .brand {
+        font-family: var(--title);
+        font-size: 22px;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+      }
+
+      .root-path {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 16px;
+      }
+
+      .book-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .book-card {
+        display: grid;
+        grid-template-columns: 52px 1fr;
+        gap: 12px;
+        padding: 10px;
+        border-radius: 14px;
+        border: 1px solid #eadfd2;
+        background: #fffdf9;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border 0.2s ease;
+      }
+
+      .book-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow);
+      }
+
+      .book-card.active {
+        border-color: var(--accent);
+        box-shadow: 0 10px 24px rgba(29, 127, 110, 0.18);
+      }
+
+      .book-cover {
+        width: 52px;
+        height: 70px;
+        border-radius: 10px;
+        background: linear-gradient(150deg, #f2cc8f, #e07a5f);
+        overflow: hidden;
+      }
+
+      .book-cover img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .book-meta h4 {
+        margin: 0 0 4px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .book-meta p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .reader {
+        padding: 28px 32px 120px;
+        animation: fade-up 0.6s ease;
+      }
+
+      .reader-header {
+        display: flex;
+        gap: 20px;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+
+      .cover-large {
+        width: 120px;
+        height: 160px;
+        border-radius: 16px;
+        background: linear-gradient(160deg, #f2cc8f, #e07a5f);
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+
+      .cover-large img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .book-title {
+        font-family: var(--title);
+        font-size: 30px;
+        margin: 0 0 8px;
+      }
+
+      .book-subtitle {
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .reader-body {
+        display: grid;
+        grid-template-columns: 230px 1fr;
+        gap: 24px;
+        align-items: start;
+      }
+
+      .toc {
+        background: var(--panel);
+        border-radius: var(--radius);
+        padding: 14px;
+        border: 1px solid #eadfd2;
+        max-height: calc(100vh - 320px);
+        overflow-y: auto;
+      }
+
+      .toc h3 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--muted);
+        margin: 0 0 10px;
+      }
+
+      .toc-item {
+        padding: 8px 10px;
+        border-radius: 10px;
+        margin-bottom: 6px;
+        cursor: pointer;
+        transition: background 0.2s ease;
+      }
+
+      .toc-item.active {
+        background: #f2e2c7;
+        color: #3a2e22;
+      }
+
+      .toc-item small {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .text-pane {
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 22px;
+        padding: 28px 28px 40px;
+        box-shadow: var(--shadow);
+        min-height: 300px;
+      }
+
+      .chapter-title {
+        font-family: var(--title);
+        font-size: 22px;
+        margin: 0 0 14px;
+      }
+
+      .chapter-text {
+        font-family: var(--read);
+        font-size: 18px;
+        line-height: 1.7;
+      }
+
+      .chunk {
+        padding: 2px 1px;
+        border-radius: 6px;
+        transition: background 0.2s ease, color 0.2s ease;
+      }
+
+      .chunk.active {
+        background: var(--highlight);
+      }
+
+      .chunk.waiting {
+        background: #fde2cf;
+      }
+
+      .chunk.played {
+        color: #897d72;
+      }
+
+      .empty-state {
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .player-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: #fffdf9;
+        border-top: 1px solid #eadfd2;
+        box-shadow: 0 -8px 20px rgba(30, 25, 20, 0.12);
+        padding: 12px 20px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .player-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .btn {
+        border: 1px solid #d8caba;
+        background: #fff;
+        color: var(--ink);
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s ease, background 0.2s ease;
+      }
+
+      .btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .btn:active {
+        transform: scale(0.98);
+      }
+
+      .status {
+        flex: 1;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .speed {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+      }
+
+      .speed input[type="range"] {
+        accent-color: var(--accent-2);
+      }
+
+      @keyframes fade-up {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 980px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+        .library {
+          position: relative;
+          height: auto;
+          border-right: none;
+          border-bottom: 1px solid #eadfd2;
+        }
+        .reader-body {
+          grid-template-columns: 1fr;
+        }
+        .toc {
+          max-height: none;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .reader-header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .player-bar {
+          flex-wrap: wrap;
+          gap: 10px;
+        }
+        .status {
+          flex: 1 1 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="library">
+        <div class="brand">PTTS Player</div>
+        <div class="root-path">Root: {{ root_dir }}</div>
+        <div id="bookList" class="book-list"></div>
+      </aside>
+      <main class="reader">
+        <div class="reader-header">
+          <div class="cover-large" id="coverLarge"></div>
+          <div>
+            <h1 class="book-title" id="bookTitle">Select a book</h1>
+            <p class="book-subtitle" id="bookMeta">No book loaded.</p>
+            <p class="book-subtitle" id="bookStatus"></p>
+          </div>
+        </div>
+        <div class="reader-body">
+          <aside class="toc">
+            <h3>Chapters</h3>
+            <div id="chapterList"></div>
+          </aside>
+          <section class="text-pane">
+            <h2 class="chapter-title" id="chapterTitle">Waiting for a book...</h2>
+            <div class="chapter-text" id="chapterText">
+              <p class="empty-state">Pick a book on the left to start.</p>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="player-bar">
+      <div class="player-controls">
+        <button class="btn" id="prevBtn">Prev</button>
+        <button class="btn primary" id="playBtn">Play</button>
+        <button class="btn" id="nextBtn">Next</button>
+      </div>
+      <div class="status" id="status">Idle.</div>
+      <div class="speed">
+        Speed
+        <input id="speedInput" type="range" min="0.8" max="1.4" step="0.05" value="1" />
+        <span id="speedValue">1.0x</span>
+      </div>
+    </div>
+
+    <audio id="audio"></audio>
+
+    <script>
+      const state = {
+        books: [],
+        book: null,
+        chapters: [],
+        queue: [],
+        chapterOffsets: {},
+        currentChapterId: null,
+        currentQueueIndex: 0,
+        activeQueueIndex: null,
+        waitingFor: null,
+        waitTimer: null,
+        audioBase: "",
+      };
+
+      const bookList = document.getElementById("bookList");
+      const chapterList = document.getElementById("chapterList");
+      const chapterTitle = document.getElementById("chapterTitle");
+      const chapterText = document.getElementById("chapterText");
+      const bookTitle = document.getElementById("bookTitle");
+      const bookMeta = document.getElementById("bookMeta");
+      const bookStatus = document.getElementById("bookStatus");
+      const coverLarge = document.getElementById("coverLarge");
+      const status = document.getElementById("status");
+      const playBtn = document.getElementById("playBtn");
+      const prevBtn = document.getElementById("prevBtn");
+      const nextBtn = document.getElementById("nextBtn");
+      const speedInput = document.getElementById("speedInput");
+      const speedValue = document.getElementById("speedValue");
+      const audio = document.getElementById("audio");
+
+      function setStatus(message) {
+        status.textContent = message;
+      }
+
+      function pad6(num) {
+        return String(num).padStart(6, "0");
+      }
+
+      async function fetchJson(url) {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`Request failed: ${res.status}`);
+        }
+        return res.json();
+      }
+
+      async function loadBooks() {
+        try {
+          const data = await fetchJson("/api/books");
+          state.books = data.books || [];
+          renderBooks();
+        } catch (err) {
+          bookList.innerHTML = "<p class=\"empty-state\">Failed to load books.</p>";
+        }
+      }
+
+      function renderBooks() {
+        bookList.innerHTML = "";
+        if (!state.books.length) {
+          bookList.innerHTML = "<p class=\"empty-state\">No books found.</p>";
+          return;
+        }
+        state.books.forEach((book) => {
+          const card = document.createElement("div");
+          card.className = "book-card";
+          if (state.book && state.book.id === book.id) {
+            card.classList.add("active");
+          }
+          card.innerHTML = `
+            <div class="book-cover">${book.cover_url ? `<img src="${book.cover_url}" alt="Cover" />` : ""}</div>
+            <div class="book-meta">
+              <h4>${book.title}</h4>
+              <p>${(book.authors || []).join(", ")}</p>
+              <p>${book.has_audio ? "Audio ready" : "No audio yet"}</p>
+            </div>
+          `;
+          card.addEventListener("click", () => selectBook(book.id));
+          bookList.appendChild(card);
+        });
+      }
+
+      async function selectBook(bookId) {
+        try {
+          const data = await fetchJson(`/api/books/${bookId}`);
+          state.book = data.book;
+          state.chapters = data.chapters || [];
+          state.audioBase = data.audio_base || "";
+          state.currentQueueIndex = 0;
+          state.activeQueueIndex = null;
+          state.waitingFor = null;
+          if (state.waitTimer) {
+            clearTimeout(state.waitTimer);
+          }
+          buildQueue();
+          renderBooks();
+          renderBookHeader();
+          renderChapters();
+          if (state.chapters.length) {
+            renderChapter(state.chapters[0].id);
+            setStatus(`Ready. ${state.queue.length} chunks.`);
+          } else {
+            chapterTitle.textContent = "No audio yet";
+            chapterText.innerHTML =
+              "<p class=\"empty-state\">Run `ptts synth` to generate audio chunks.</p>";
+            setStatus("No audio available.");
+          }
+        } catch (err) {
+          setStatus("Failed to load book.");
+        }
+      }
+
+      function renderBookHeader() {
+        if (!state.book) {
+          return;
+        }
+        bookTitle.textContent = state.book.title || state.book.id;
+        const author = (state.book.authors || []).join(", ");
+        const year = state.book.year ? ` (${state.book.year})` : "";
+        bookMeta.textContent = `${author}${year}`;
+        bookStatus.textContent = state.book.has_audio
+          ? "Audio manifest loaded."
+          : "Waiting for audio.";
+        if (state.book.cover_url) {
+          coverLarge.innerHTML = `<img src="${state.book.cover_url}" alt="Cover" />`;
+        } else {
+          coverLarge.innerHTML = "";
+        }
+      }
+
+      function buildQueue() {
+        state.queue = [];
+        state.chapterOffsets = {};
+        let offset = 0;
+        state.chapters.forEach((chapter, chapterIndex) => {
+          state.chapterOffsets[chapter.id] = offset;
+          const chunks = chapter.chunks || [];
+          chunks.forEach((chunkText, chunkIndex) => {
+            state.queue.push({
+              chapterId: chapter.id,
+              chapterIndex,
+              chunkIndex,
+              chunkText,
+            });
+          });
+          offset += chunks.length;
+        });
+      }
+
+      function renderChapters() {
+        chapterList.innerHTML = "";
+        if (!state.chapters.length) {
+          chapterList.innerHTML = "<p class=\"empty-state\">No chapters yet.</p>";
+          return;
+        }
+        state.chapters.forEach((chapter) => {
+          const item = document.createElement("div");
+          item.className = "toc-item";
+          if (chapter.id === state.currentChapterId) {
+            item.classList.add("active");
+          }
+          item.innerHTML = `
+            <div>${chapter.title}</div>
+            <small>${chapter.chunk_count} chunks</small>
+          `;
+          item.addEventListener("click", () => {
+            renderChapter(chapter.id);
+            state.currentQueueIndex = state.chapterOffsets[chapter.id] || 0;
+            setStatus(`Ready at ${chapter.title}.`);
+          });
+          chapterList.appendChild(item);
+        });
+      }
+
+      function renderChapter(chapterId) {
+        const chapter = state.chapters.find((c) => c.id === chapterId);
+        if (!chapter) {
+          return;
+        }
+        state.currentChapterId = chapter.id;
+        chapterTitle.textContent = chapter.title;
+        chapterText.innerHTML = "";
+        const startIndex = state.chapterOffsets[chapter.id] || 0;
+        chapter.chunks.forEach((chunkText, idx) => {
+          const span = document.createElement("span");
+          span.className = "chunk";
+          span.dataset.queueIndex = startIndex + idx;
+          span.textContent = chunkText;
+          chapterText.appendChild(span);
+          chapterText.appendChild(document.createTextNode(" "));
+        });
+        renderChapters();
+        if (state.activeQueueIndex !== null) {
+          setActiveChunk(state.activeQueueIndex, false);
+        }
+      }
+
+      function setActiveChunk(index, waiting) {
+        if (state.activeQueueIndex !== null) {
+          const prev = chapterText.querySelector(
+            `.chunk[data-queue-index="${state.activeQueueIndex}"]`
+          );
+          if (prev) {
+            prev.classList.remove("active", "waiting");
+            prev.classList.add("played");
+          }
+        }
+        const item = state.queue[index];
+        if (!item) {
+          return;
+        }
+        if (state.currentChapterId !== item.chapterId) {
+          renderChapter(item.chapterId);
+        }
+        const span = chapterText.querySelector(
+          `.chunk[data-queue-index="${index}"]`
+        );
+        if (span) {
+          span.classList.add(waiting ? "waiting" : "active");
+          span.classList.remove(waiting ? "active" : "waiting");
+          span.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+        state.activeQueueIndex = index;
+      }
+
+      async function chunkExists(item) {
+        const chunkNum = item.chunkIndex + 1;
+        const url = `/api/chunk-status?book_id=${encodeURIComponent(
+          state.book.id
+        )}&chapter_id=${encodeURIComponent(
+          item.chapterId
+        )}&chunk=${chunkNum}`;
+        const data = await fetchJson(url);
+        return data.exists;
+      }
+
+      function chunkUrl(item) {
+        const chunkNum = item.chunkIndex + 1;
+        return `${state.audioBase}/${item.chapterId}/${pad6(chunkNum)}.wav`;
+      }
+
+      async function playIndex(index) {
+        if (!state.queue.length) {
+          return;
+        }
+        if (index < 0 || index >= state.queue.length) {
+          setStatus("End of book.");
+          audio.pause();
+          return;
+        }
+        const item = state.queue[index];
+        state.currentQueueIndex = index;
+        setActiveChunk(index, true);
+        setStatus(`Waiting for chunk ${index + 1} of ${state.queue.length}...`);
+
+        let available = false;
+        try {
+          available = await chunkExists(item);
+        } catch (err) {
+          available = false;
+        }
+
+        if (!available) {
+          waitForChunk(index);
+          return;
+        }
+
+        if (state.waitTimer) {
+          clearTimeout(state.waitTimer);
+        }
+        state.waitingFor = null;
+        setActiveChunk(index, false);
+        audio.src = chunkUrl(item);
+        audio.playbackRate = parseFloat(speedInput.value);
+        try {
+          await audio.play();
+          setStatus(
+            `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${state.queue.length}`
+          );
+          playBtn.textContent = "Pause";
+        } catch (err) {
+          setStatus("Press Play to start audio.");
+        }
+      }
+
+      function waitForChunk(index) {
+        state.waitingFor = index;
+        if (state.waitTimer) {
+          clearTimeout(state.waitTimer);
+        }
+        state.waitTimer = setTimeout(async () => {
+          if (state.waitingFor !== index) {
+            return;
+          }
+          await playIndex(index);
+        }, 2000);
+      }
+
+      function togglePlay() {
+        if (!state.queue.length) {
+          return;
+        }
+        if (audio.paused) {
+          playIndex(state.currentQueueIndex);
+        } else {
+          audio.pause();
+          playBtn.textContent = "Play";
+          setStatus("Paused.");
+        }
+      }
+
+      function nextChunk() {
+        playIndex(state.currentQueueIndex + 1);
+      }
+
+      function prevChunk() {
+        playIndex(Math.max(0, state.currentQueueIndex - 1));
+      }
+
+      playBtn.addEventListener("click", togglePlay);
+      prevBtn.addEventListener("click", prevChunk);
+      nextBtn.addEventListener("click", nextChunk);
+      audio.addEventListener("ended", () => {
+        playIndex(state.currentQueueIndex + 1);
+      });
+
+      speedInput.addEventListener("input", () => {
+        const val = parseFloat(speedInput.value);
+        speedValue.textContent = `${val.toFixed(2)}x`;
+        audio.playbackRate = val;
+      });
+
+      chapterText.addEventListener("click", (event) => {
+        const target = event.target;
+        if (target && target.classList.contains("chunk")) {
+          const index = parseInt(target.dataset.queueIndex, 10);
+          if (!Number.isNaN(index)) {
+            playIndex(index);
+          }
+        }
+      });
+
+      loadBooks();
+    </script>
+  </body>
+</html>
