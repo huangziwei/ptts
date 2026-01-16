@@ -655,6 +655,11 @@
         needsRechunk: false,
         synthRunning: false,
         statusMode: "idle",
+        playbackSaveTimer: null,
+        playback: {
+          lastPlayed: null,
+          bookmarks: [],
+        },
       };
 
       const bookList = document.getElementById("bookList");
@@ -716,53 +721,28 @@
         history.replaceState(null, "", next);
       }
 
-      function storageKey(kind, bookId) {
-        return `ptts.${kind}.${bookId}`;
-      }
-
       function getBookmarks() {
-        if (!state.book) {
-          return [];
-        }
-        const raw = localStorage.getItem(storageKey("bookmarks", state.book.id));
-        if (!raw) {
-          return [];
-        }
-        try {
-          const parsed = JSON.parse(raw);
-          return Array.isArray(parsed) ? parsed : [];
-        } catch (err) {
-          return [];
+        return state.playback.bookmarks || [];
+      }
+
+      function saveBookmarks(bookmarks, persist = true) {
+        state.playback.bookmarks = Array.isArray(bookmarks) ? bookmarks : [];
+        if (persist) {
+          schedulePlaybackSave();
         }
       }
 
-      function saveBookmarks(bookmarks) {
-        if (!state.book) {
-          return;
-        }
-        localStorage.setItem(
-          storageKey("bookmarks", state.book.id),
-          JSON.stringify(bookmarks)
-        );
+      function getLastPlayed() {
+        const value = state.playback.lastPlayed;
+        return typeof value === "number" ? value : null;
       }
 
-      function getStoredIndex(kind) {
-        if (!state.book) {
-          return null;
+      function setLastPlayed(index, persist = true) {
+        state.playback.lastPlayed =
+          typeof index === "number" ? index : null;
+        if (persist) {
+          schedulePlaybackSave();
         }
-        const raw = localStorage.getItem(storageKey(kind, state.book.id));
-        if (!raw) {
-          return null;
-        }
-        const value = parseInt(raw, 10);
-        return Number.isNaN(value) ? null : value;
-      }
-
-      function setStoredIndex(kind, index) {
-        if (!state.book) {
-          return;
-        }
-        localStorage.setItem(storageKey(kind, state.book.id), String(index));
       }
 
       async function fetchJson(url, options = {}) {
@@ -775,6 +755,64 @@
           throw new Error(`Request failed: ${res.status}`);
         }
         return res.json();
+      }
+
+      function schedulePlaybackSave() {
+        if (!state.book) {
+          return;
+        }
+        if (state.playbackSaveTimer) {
+          clearTimeout(state.playbackSaveTimer);
+        }
+        state.playbackSaveTimer = setTimeout(() => {
+          persistPlayback();
+        }, 500);
+      }
+
+      async function persistPlayback(payload) {
+        if (!state.book) {
+          return;
+        }
+        const body = payload || {
+          last_played: getLastPlayed(),
+          bookmarks: getBookmarks(),
+        };
+        try {
+          await fetchJson(
+            `/api/playback?book_id=${encodeURIComponent(state.book.id)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            }
+          );
+        } catch (err) {
+          console.warn("Failed to persist playback state.", err);
+        }
+      }
+
+      async function loadPlayback() {
+        if (!state.book) {
+          return;
+        }
+        try {
+          const data = await fetchJson(
+            `/api/playback?book_id=${encodeURIComponent(state.book.id)}`
+          );
+          const last =
+            typeof data.last_played === "number" ? data.last_played : null;
+          const marks = Array.isArray(data.bookmarks) ? data.bookmarks : [];
+          setLastPlayed(last, false);
+          saveBookmarks(marks, false);
+          if (!data.exists) {
+            await persistPlayback({
+              last_played: last,
+              bookmarks: marks,
+            });
+          }
+        } catch (err) {
+          console.warn("Failed to load playback state.", err);
+        }
       }
 
       async function loadBooks() {
@@ -795,22 +833,22 @@
       }
 
       function loadSettings() {
-        voiceInput.value = localStorage.getItem("ptts.voice") || "voices/ray.wav";
-        maxCharsInput.value = localStorage.getItem("ptts.maxChars") || "800";
-        padMsInput.value = localStorage.getItem("ptts.padMs") || "150";
-        chunkModeSelect.value = localStorage.getItem("ptts.chunkMode") || "sentence";
-        const collapsed = localStorage.getItem("ptts.ttsCollapsed") === "1";
-        if (collapsed) {
-          ttsPanel.classList.add("collapsed");
-          ttsToggle.textContent = "Expand";
+        if (!voiceInput.value) {
+          voiceInput.value = "voices/ray.wav";
+        }
+        if (!maxCharsInput.value) {
+          maxCharsInput.value = "800";
+        }
+        if (!padMsInput.value) {
+          padMsInput.value = "150";
+        }
+        if (!chunkModeSelect.value) {
+          chunkModeSelect.value = "sentence";
         }
       }
 
       function saveSettings() {
-        localStorage.setItem("ptts.voice", voiceInput.value.trim());
-        localStorage.setItem("ptts.maxChars", maxCharsInput.value.trim());
-        localStorage.setItem("ptts.padMs", padMsInput.value.trim());
-        localStorage.setItem("ptts.chunkMode", chunkModeSelect.value);
+        voiceInput.value = voiceInput.value.trim();
       }
 
       function renderBooks() {
@@ -844,6 +882,7 @@
           const data = await fetchJson(`/api/books/${bookId}`);
           state.book = data.book;
           state.chapters = data.chapters || [];
+          state.playback = { lastPlayed: null, bookmarks: [] };
           state.chapterMap = {};
           state.chapters.forEach((chapter) => {
             if (chapter && chapter.id) {
@@ -857,6 +896,7 @@
           if (state.waitTimer) {
             clearTimeout(state.waitTimer);
           }
+          await loadPlayback();
           buildQueue();
           const hasSpanData = state.chapters.some(
             (chapter) => (chapter.chunk_spans || []).length > 0
@@ -987,7 +1027,7 @@
       }
 
       function idleStatusText() {
-        const lastIndex = getStoredIndex("lastPlayed");
+        const lastIndex = getLastPlayed();
         if (lastIndex === null) {
           return "Last: —";
         }
@@ -1003,7 +1043,7 @@
         if (prev) {
           prev.classList.remove("last-played");
         }
-        const lastIndex = getStoredIndex("lastPlayed");
+        const lastIndex = getLastPlayed();
         if (lastIndex === null) {
           return;
         }
@@ -1372,7 +1412,7 @@
         }
         const item = state.queue[index];
         state.currentQueueIndex = index;
-        setStoredIndex("lastPlayed", index);
+        setLastPlayed(index);
         setActiveChunk(index, true);
         setStatus(`Waiting for chunk ${index + 1} of ${state.queue.length}...`);
         updateMarks();
@@ -1425,7 +1465,7 @@
           return;
         }
         if (audio.paused) {
-          const lastIndex = getStoredIndex("lastPlayed");
+          const lastIndex = getLastPlayed();
           const startIndex = lastIndex === null ? 0 : lastIndex;
           playIndex(startIndex);
         } else {
@@ -1484,10 +1524,6 @@
         ttsToggle.textContent = ttsPanel.classList.contains("collapsed")
           ? "Expand"
           : "Collapse";
-        localStorage.setItem(
-          "ptts.ttsCollapsed",
-          ttsPanel.classList.contains("collapsed") ? "1" : "0"
-        );
       });
       audio.addEventListener("ended", () => {
         playIndex(state.currentQueueIndex + 1);

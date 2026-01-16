@@ -25,6 +25,11 @@ def _load_json(path: Path) -> dict:
 def _no_store(data: dict) -> JSONResponse:
     return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
 
 def _find_repo_root(start: Path) -> Path:
     for candidate in [start] + list(start.parents):
@@ -104,6 +109,33 @@ def _book_details(book_dir: Path) -> dict:
         "audio_base": f"/audio/{book_dir.name}/tts/segments",
     }
 
+def _playback_path(book_dir: Path) -> Path:
+    return book_dir / "playback.json"
+
+
+def _sanitize_playback(data: dict) -> dict:
+    last = data.get("last_played")
+    if not isinstance(last, int) or last < 0:
+        last = None
+    bookmarks: List[dict] = []
+    raw_marks = data.get("bookmarks")
+    if isinstance(raw_marks, list):
+        for entry in raw_marks:
+            if not isinstance(entry, dict):
+                continue
+            idx = entry.get("index")
+            if not isinstance(idx, int) or idx < 0:
+                continue
+            cleaned = {"index": idx}
+            label = entry.get("label")
+            created_at = entry.get("created_at")
+            if isinstance(label, str):
+                cleaned["label"] = label
+            if isinstance(created_at, int):
+                cleaned["created_at"] = created_at
+            bookmarks.append(cleaned)
+    return {"last_played": last, "bookmarks": bookmarks}
+
 
 def _compute_progress(manifest: dict) -> dict:
     chapters = manifest.get("chapters", [])
@@ -171,6 +203,11 @@ class StopRequest(BaseModel):
     book_id: str
 
 
+class PlaybackPayload(BaseModel):
+    last_played: Optional[int] = None
+    bookmarks: List[dict] = []
+
+
 def create_app(root_dir: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app = FastAPI()
@@ -221,6 +258,25 @@ def create_app(root_dir: Path) -> FastAPI:
         )
         exists = wav_path.exists() and wav_path.is_file() and wav_path.stat().st_size > 0
         return _no_store({"exists": exists})
+
+    @app.get("/api/playback")
+    def playback_get(book_id: str) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        path = _playback_path(book_dir)
+        exists = path.exists()
+        data = _load_json(path) if exists else {}
+        payload = _sanitize_playback(data)
+        payload["exists"] = exists
+        return _no_store(payload)
+
+    @app.post("/api/playback")
+    def playback_set(book_id: str, payload: PlaybackPayload) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        cleaned = _sanitize_playback(payload.dict())
+        cleaned["updated_unix"] = int(time.time())
+        _atomic_write_json(_playback_path(book_dir), cleaned)
+        cleaned["exists"] = True
+        return _no_store(cleaned)
 
     @app.get("/api/synth/status")
     def synth_status(book_id: str) -> JSONResponse:
