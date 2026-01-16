@@ -157,15 +157,43 @@ def compile_patterns(patterns: Iterable[str]) -> List[re.Pattern]:
     return compiled
 
 
+def _should_preserve_lines(lines: List[str]) -> bool:
+    if len(lines) <= 1:
+        return False
+    for line in lines:
+        if line.lstrip().startswith(("—", "-", "–", "•", "*")):
+            return True
+    non_empty = [line.strip() for line in lines if line.strip()]
+    if len(non_empty) >= 3:
+        avg_len = sum(len(line) for line in non_empty) / len(non_empty)
+        if avg_len < 60:
+            return True
+    return False
+
+
 def normalize_text(text: str, unwrap_lines: bool = True) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r'(^|[\s“("])\[(?P<l>[A-Za-z])\](?=[a-z])', r"\1\g<l>", text)
+    text = re.sub(r"-\n(?=\w)", "-", text)
+
     if unwrap_lines:
-        text = re.sub(r"-\n(?=\w)", "-", text)
-        text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
-    text = re.sub(r"[ \t]{2,}", " ", text)
+        blocks = re.split(r"\n\s*\n", text)
+        normalized_blocks: List[str] = []
+        for block in blocks:
+            lines = block.split("\n")
+            if _should_preserve_lines(lines):
+                merged = "\n".join(line.strip() for line in lines if line.strip())
+            else:
+                merged = " ".join(line.strip() for line in lines if line.strip())
+            merged = re.sub(r"[ \t]{2,}", " ", merged).strip()
+            if merged:
+                normalized_blocks.append(merged)
+        text = "\n\n".join(normalized_blocks)
+    else:
+        text = re.sub(r"[ \t]{2,}", " ", text)
+
     return text.strip()
 
 

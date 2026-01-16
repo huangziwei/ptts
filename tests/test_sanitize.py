@@ -20,6 +20,19 @@ def test_normalize_text_unwraps_bracketed_dropcap() -> None:
     )
 
 
+def test_normalize_text_preserves_attribution_lines() -> None:
+    text = (
+        "Quote line one.\n"
+        "—Author Name\n"
+        "Another quote line.\n"
+        "—Second Author\n"
+    )
+    assert (
+        sanitize.normalize_text(text)
+        == "Quote line one.\n—Author Name\nAnother quote line.\n—Second Author"
+    )
+
+
 def test_apply_remove_patterns_citation() -> None:
     text = "Some text (Smith, 2010, p. 5) continues."
     patterns = sanitize.compile_patterns(sanitize.DEFAULT_RULES["remove_patterns"])
