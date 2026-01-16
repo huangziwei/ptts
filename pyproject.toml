@@ -8,6 +8,7 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "ebooklib>=0.18",
   "lxml>=5.0",
+  "pytest>=7.4",
 ]
 
 [project.scripts]

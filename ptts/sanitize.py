@@ -22,6 +22,7 @@ DEFAULT_RULES: Dict[str, List[str]] = {
         r"^copyright$",
         r"^title$",
         r"^title page$",
+        r"^endorsements?$",
         r"^discover more$",
         r"^discover your next great read$",
         r"^about (the )?authors?$",
@@ -123,12 +124,12 @@ def format_title_chapter(metadata: dict) -> str:
     headline = title or ""
     if subtitle:
         headline = f"{title}: {subtitle}" if title else subtitle
-    if year:
-        headline = f"{headline} {year}" if headline else year
-
     author_line = ", ".join(a.strip() for a in authors if str(a).strip())
     if author_line:
         author_line = f"by {author_line}"
+
+    if year:
+        headline = f"{headline}, {year}" if headline else year
 
     lines: List[str] = []
     if headline:
@@ -160,6 +161,7 @@ def normalize_text(text: str, unwrap_lines: bool = True) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r'(^|[\s“("])\[(?P<l>[A-Za-z])\](?=[a-z])', r"\1\g<l>", text)
     if unwrap_lines:
         text = re.sub(r"-\n(?=\w)", "-", text)
         text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)

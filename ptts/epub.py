@@ -146,6 +146,35 @@ def html_to_text(html: bytes) -> str:
     soup = BeautifulSoup(html, "lxml")
     for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
         tag.decompose()
+    for tag in soup.find_all("sup"):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"epub:type": "noteref"}):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"epub:type": "footnote"}):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"role": "doc-noteref"}):
+        tag.decompose()
+    for tag in soup.find_all(attrs={"role": "doc-footnote"}):
+        tag.decompose()
+    for tag in soup.find_all(["p", "section", "div", "aside", "ol", "ul", "li"]):
+        attrs = getattr(tag, "attrs", None)
+        if attrs is None:
+            continue
+        classes = attrs.get("class", [])
+        if isinstance(classes, str):
+            classes = [classes]
+        class_text = " ".join(classes).lower()
+        id_text = str(attrs.get("id") or "").lower()
+        if (
+            "footnote" in class_text
+            or "endnote" in class_text
+            or "copyright" in class_text
+            or "credit" in class_text
+        ):
+            tag.decompose()
+            continue
+        if id_text.startswith(("fn", "footnote", "endnote")):
+            tag.decompose()
     root = soup.body if soup.body else soup
 
     block_tags = {
