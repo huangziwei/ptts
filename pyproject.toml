@@ -18,3 +18,10 @@ dependencies = [
 
 [project.scripts]
 ptts = "ptts.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["ptts"]

@@ -5,6 +5,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from . import epub as epub_util
 from . import merge as merge_util
@@ -34,6 +35,18 @@ def _ingest(args: argparse.Namespace) -> int:
 
     book = epub_util.read_epub(input_path)
     metadata = epub_util.extract_metadata(book)
+    cover = epub_util.extract_cover_image(book)
+    if cover:
+        cover_path = _write_cover_image(cover, out_dir)
+        if cover_path:
+            cover_info = metadata.get("cover") or {}
+            cover_info.setdefault("id", cover.get("id", ""))
+            cover_info.setdefault("href", cover.get("href", ""))
+            cover_info["path"] = cover_path.relative_to(out_dir).as_posix()
+            cover_info["media_type"] = cover.get("media_type") or cover_info.get(
+                "media_type", ""
+            )
+            metadata["cover"] = cover_info
     chapters = epub_util.extract_chapters(book, prefer_toc=True)
 
     if not chapters:
@@ -74,6 +87,33 @@ def _ingest(args: argparse.Namespace) -> int:
     print(f"Wrote {len(toc_items)} chapters to {raw_dir}")
     print(f"TOC metadata saved to {toc_path}")
     return 0
+
+
+def _cover_extension(media_type: str, href: str) -> str:
+    media_type = (media_type or "").lower()
+    if media_type == "image/jpeg":
+        return ".jpg"
+    if media_type == "image/png":
+        return ".png"
+    if media_type == "image/webp":
+        return ".webp"
+    if media_type == "image/gif":
+        return ".gif"
+    if href:
+        suffix = Path(href).suffix.lower()
+        if suffix:
+            return suffix
+    return ".jpg"
+
+
+def _write_cover_image(cover: dict, out_dir: Path) -> Optional[Path]:
+    data = cover.get("data")
+    if not data:
+        return None
+    ext = _cover_extension(cover.get("media_type", ""), cover.get("href", ""))
+    path = out_dir / f"cover{ext}"
+    path.write_bytes(data)
+    return path
 
 
 def _not_implemented(command: str) -> int:

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable, List
 
 from bs4 import BeautifulSoup
-from ebooklib import ITEM_DOCUMENT, epub
+from ebooklib import ITEM_DOCUMENT, ITEM_IMAGE, epub
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,58 @@ def _item_title(item: object) -> str:
     return ""
 
 
+def _item_id(item: object) -> str:
+    get_id = getattr(item, "get_id", None)
+    if callable(get_id):
+        value = get_id()
+        if value:
+            return value
+    return getattr(item, "id", "") or ""
+
+
+def _find_cover_item(book: epub.EpubBook) -> object | None:
+    cover_meta = book.get_metadata("OPF", "cover")
+    if cover_meta:
+        _value, attrs = cover_meta[0]
+        cover_id = attrs.get("content") if attrs else None
+        if cover_id:
+            item = book.get_item_with_id(cover_id)
+            if item:
+                return item
+
+    for item in book.get_items():
+        props = getattr(item, "properties", []) or []
+        if isinstance(props, str):
+            props = [props]
+        if any("cover-image" in prop for prop in props):
+            return item
+
+    for item in book.get_items_of_type(ITEM_IMAGE):
+        name = _item_name(item).lower()
+        item_id = _item_id(item).lower()
+        if "cover" in name or "cover" in item_id:
+            return item
+
+    best_item = None
+    best_size = 0
+    for item in book.get_items_of_type(ITEM_IMAGE):
+        try:
+            data = item.get_content()
+        except Exception:
+            continue
+        if not data:
+            continue
+        size = len(data)
+        if size > best_size:
+            best_size = size
+            best_item = item
+
+    if best_item:
+        return best_item
+
+    return None
+
+
 def extract_metadata(book: epub.EpubBook) -> dict:
     title = _first_dc_meta(book, "title")
     authors = _all_dc_meta(book, "creator")
@@ -77,18 +129,13 @@ def extract_metadata(book: epub.EpubBook) -> dict:
             break
 
     cover_info = None
-    cover_meta = book.get_metadata("OPF", "cover")
-    if cover_meta:
-        _value, attrs = cover_meta[0]
-        cover_id = attrs.get("content") if attrs else None
-        if cover_id:
-            item = book.get_item_with_id(cover_id)
-            if item:
-                cover_info = {
-                    "id": cover_id,
-                    "href": _item_name(item),
-                    "media_type": item.media_type,
-                }
+    cover_item = _find_cover_item(book)
+    if cover_item:
+        cover_info = {
+            "id": _item_id(cover_item),
+            "href": _item_name(cover_item),
+            "media_type": getattr(cover_item, "media_type", "") or "",
+        }
 
     return {
         "title": title,
@@ -97,6 +144,21 @@ def extract_metadata(book: epub.EpubBook) -> dict:
         "dates": dates,
         "year": year,
         "cover": cover_info,
+    }
+
+
+def extract_cover_image(book: epub.EpubBook) -> dict | None:
+    cover_item = _find_cover_item(book)
+    if not cover_item:
+        return None
+    data = cover_item.get_content()
+    if not data:
+        return None
+    return {
+        "data": data,
+        "id": _item_id(cover_item),
+        "href": _item_name(cover_item),
+        "media_type": getattr(cover_item, "media_type", "") or "",
     }
 
 

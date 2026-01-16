@@ -2,12 +2,20 @@
 set -euo pipefail
 
 image="ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
-podman_args=(${PMX_OPTS:-})
+if [ -n "${PMX_OPTS:-}" ]; then
+  # shellcheck disable=SC2086
+  exec podman run --rm -it \
+    -v "$PWD":/work -w /work \
+    -e HF_HOME=/work/.cache/huggingface \
+    -e UV_CACHE_DIR=/work/.uv-cache \
+    $PMX_OPTS \
+    "$image" \
+    "$@"
+fi
 
 exec podman run --rm -it \
   -v "$PWD":/work -w /work \
   -e HF_HOME=/work/.cache/huggingface \
   -e UV_CACHE_DIR=/work/.uv-cache \
-  "${podman_args[@]}" \
   "$image" \
   "$@"

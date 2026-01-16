@@ -14,6 +14,9 @@ brew install podman
 podman --version # tested with 5.7.1
 podman machine init --cpus 6 --memory 8192 --disk-size 60 --now pocket-tts
 
+# Install project dependencies into .venv (required for `ptts` CLI)
+./bin/pmx uv sync
+
 # To use voice cloning, you need to accept the terms via browser at https://huggingface.co/kyutai/pocket-tts
 # Then you need to save the access token with correct permissions (I ticked everything in Repositories and Inference)
 # This step can be skipped if no need for voice cloning
