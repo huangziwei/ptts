@@ -63,3 +63,15 @@ Open `http://localhost:8001` to review and adjust rules.
   --max-chars 800 \
   --pad-ms 150
 ```
+
+### 5) Play in the web player
+```bash
+PMX_OPTS="-p 8002:8002" ./bin/pmx uv run ptts play \
+  --root out \
+  --host 0.0.0.0 \
+  --port 8002
+```
+
+Open `http://localhost:8002` to browse books, start/stop TTS, and play audio.
+Playback state is saved per book at `out/<book>/playback.json`.
+If the player reports missing chunk spans, re-run TTS with `--rechunk`.
