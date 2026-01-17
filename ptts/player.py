@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -278,10 +279,23 @@ def _build_merge_command(
     if not install_ffmpeg:
         return merge_cmd
 
-    installer = shutil.which("apt-get") or shutil.which("apt")
-    if installer is None:
-        raise RuntimeError("ffmpeg not found on PATH and apt-get is unavailable.")
-    install_cmd = f"{installer} update && {installer} install -y ffmpeg"
+    install_cmd = ""
+    if sys.platform == "darwin":
+        installer = shutil.which("brew")
+        if installer is None:
+            raise RuntimeError(
+                "ffmpeg not found on PATH. Install Homebrew (https://brew.sh/) "
+                "or install ffmpeg manually, then retry."
+            )
+        install_cmd = f"{installer} install ffmpeg"
+    else:
+        installer = shutil.which("apt-get") or shutil.which("apt")
+        if installer is None:
+            raise RuntimeError(
+                "ffmpeg not found on PATH and apt-get is unavailable. "
+                "Install ffmpeg manually, then retry."
+            )
+        install_cmd = f"{installer} update && {installer} install -y ffmpeg"
     merge_cmd_str = " ".join(shlex.quote(part) for part in merge_cmd)
     combined = (
         "export DEBIAN_FRONTEND=noninteractive; "
