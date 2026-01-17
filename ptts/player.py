@@ -7,17 +7,19 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from . import epub as epub_util
 from . import sanitize
 from .text import read_clean_text
 from .voice import BUILTIN_VOICES, DEFAULT_VOICE, resolve_voice_prompt
@@ -141,6 +143,12 @@ def _resolve_raw_path(book_dir: Path, raw_toc: dict, clean_entry: dict) -> Optio
             if rel:
                 return book_dir / rel
     return None
+
+
+def _slug_from_epub(title: str, fallback: str) -> str:
+    base = title.strip() if title else fallback
+    slug = epub_util.slugify(base)
+    return slug or "book"
 
 
 def _resolve_book_dir(root_dir: Path, book_id: str) -> Path:
@@ -499,6 +507,94 @@ def create_app(root_dir: Path) -> FastAPI:
         _atomic_write_json(_playback_path(book_dir), cleaned)
         cleaned["exists"] = True
         return _no_store(cleaned)
+
+    @app.post("/api/ingest")
+    def ingest_epub(file: UploadFile = File(...)) -> JSONResponse:
+        filename = file.filename or ""
+        if not filename.lower().endswith(".epub"):
+            raise HTTPException(status_code=400, detail="Only .epub files are supported.")
+
+        tmp_path = None
+        title = Path(filename).stem
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as handle:
+                shutil.copyfileobj(file.file, handle)
+                tmp_path = Path(handle.name)
+
+            try:
+                book = epub_util.read_epub(tmp_path)
+                metadata = epub_util.extract_metadata(book)
+                if metadata.get("title"):
+                    title = str(metadata.get("title") or "").strip() or title
+            except Exception:
+                metadata = {}
+
+            slug = _slug_from_epub(title, Path(filename).stem)
+            out_dir = root_dir / slug
+            if out_dir.exists():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Book already exists: {slug}",
+                )
+            out_dir.mkdir(parents=True, exist_ok=True)
+            log_path = out_dir / "ingest.log"
+            stage = "ingest"
+            with log_path.open("w", encoding="utf-8") as log_handle:
+                cmd = [
+                    "uv",
+                    "run",
+                    "ptts",
+                    "ingest",
+                    "--input",
+                    str(tmp_path),
+                    "--out",
+                    str(out_dir),
+                ]
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(repo_root),
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                )
+                if proc.returncode == 0:
+                    stage = "sanitize"
+                    log_handle.write("\n--- sanitize ---\n")
+                    cmd = [
+                        "uv",
+                        "run",
+                        "ptts",
+                        "sanitize",
+                        "--book",
+                        str(out_dir),
+                        "--overwrite",
+                    ]
+                    proc = subprocess.run(
+                        cmd,
+                        cwd=str(repo_root),
+                        stdout=log_handle,
+                        stderr=subprocess.STDOUT,
+                    )
+            if proc.returncode != 0:
+                detail = (
+                    f"Sanitize failed. Check {log_path}."
+                    if stage == "sanitize"
+                    else f"Ingest failed. Check {log_path}."
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=detail,
+                )
+            return _no_store(
+                {
+                    "status": "ok",
+                    "book_id": slug,
+                    "title": title,
+                    "sanitized": True,
+                }
+            )
+        finally:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink()
 
     @app.get("/api/sanitize/preview")
     def sanitize_preview(

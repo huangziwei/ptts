@@ -64,6 +64,55 @@
         margin-bottom: 16px;
       }
 
+      .upload-panel {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .upload-zone {
+        border: 1px dashed #d8caba;
+        border-radius: 14px;
+        padding: 12px;
+        text-align: center;
+        background: #fffdf9;
+        cursor: pointer;
+        transition: border 0.2s ease, background 0.2s ease;
+      }
+
+      .upload-zone strong {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .upload-zone span {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      .upload-zone.dragover {
+        border-color: var(--accent);
+        background: #f0faf7;
+      }
+
+      .upload-zone.disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .upload-status {
+        font-size: 11px;
+        color: var(--muted);
+        min-height: 14px;
+      }
+
+      .upload-status[data-tone="error"] {
+        color: #b04838;
+      }
+
       .book-list {
         display: flex;
         flex-direction: column;
@@ -794,6 +843,9 @@
           grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
           gap: 12px;
         }
+        .upload-zone {
+          padding: 10px;
+        }
         .book-card {
           grid-template-columns: 1fr;
           justify-items: stretch;
@@ -866,6 +918,14 @@
       <aside class="library" id="bookshelf">
         <div class="brand">pTTS player</div>
         <div class="root-path">Root: {{ root_dir }}</div>
+        <div class="upload-panel">
+          <div class="upload-zone" id="uploadZone" role="button" tabindex="0">
+            <strong>Drop EPUB here</strong>
+            <span>or click to browse</span>
+          </div>
+          <input type="file" id="uploadInput" accept=".epub" hidden />
+          <div class="upload-status" id="uploadStatus"></div>
+        </div>
         <div id="bookList" class="book-list"></div>
       </aside>
       <main class="reader" id="bookSection">
@@ -1041,9 +1101,13 @@
         previewSelectedKind: "",
         rulesLoading: false,
         rulesSaveTimer: null,
+        ingestRunning: false,
       };
 
       const bookList = document.getElementById("bookList");
+      const uploadZone = document.getElementById("uploadZone");
+      const uploadInput = document.getElementById("uploadInput");
+      const uploadStatus = document.getElementById("uploadStatus");
       const chapterList = document.getElementById("chapterList");
       const chapterTitle = document.getElementById("chapterTitle");
       const chapterText = document.getElementById("chapterText");
@@ -1094,6 +1158,17 @@
       function setStatus(message, mode = "message") {
         status.textContent = message;
         state.statusMode = mode;
+      }
+
+      function setUploadStatus(message, tone = "idle") {
+        uploadStatus.textContent = message || "";
+        uploadStatus.dataset.tone = tone;
+      }
+
+      function setIngestRunning(running) {
+        state.ingestRunning = running;
+        uploadZone.classList.toggle("disabled", running);
+        uploadInput.disabled = running;
       }
 
       function pad6(num) {
@@ -1186,6 +1261,41 @@
           throw new Error(detail);
         }
         return res.json();
+      }
+
+      async function ingestFile(file) {
+        if (!file) {
+          return;
+        }
+        const name = file.name || "";
+        if (!name.toLowerCase().endsWith(".epub")) {
+          setUploadStatus("Only .epub files are supported.", "error");
+          return;
+        }
+        if (state.ingestRunning) {
+          return;
+        }
+        setIngestRunning(true);
+        setUploadStatus(`Ingesting and sanitizing ${name}...`);
+        const body = new FormData();
+        body.append("file", file);
+        try {
+          const data = await fetchJson("/api/ingest", {
+            method: "POST",
+            body,
+          });
+          const title = data.title || data.book_id || "Book";
+          setUploadStatus(`Ingested and sanitized ${title}.`);
+          await loadBooks();
+          if (data.book_id) {
+            await selectBook(data.book_id);
+          }
+        } catch (err) {
+          setUploadStatus(err.message || "Ingest failed.", "error");
+        } finally {
+          setIngestRunning(false);
+          uploadInput.value = "";
+        }
       }
 
       function setSelectedVoice(value) {
@@ -2447,6 +2557,43 @@
       playBtn.addEventListener("click", togglePlay);
       prevBtn.addEventListener("click", prevChunk);
       nextBtn.addEventListener("click", nextChunk);
+      uploadZone.addEventListener("click", () => {
+        if (state.ingestRunning) {
+          return;
+        }
+        uploadInput.click();
+      });
+      uploadZone.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (!state.ingestRunning) {
+            uploadInput.click();
+          }
+        }
+      });
+      uploadZone.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        if (state.ingestRunning) {
+          return;
+        }
+        uploadZone.classList.add("dragover");
+      });
+      uploadZone.addEventListener("dragleave", () => {
+        uploadZone.classList.remove("dragover");
+      });
+      uploadZone.addEventListener("drop", (event) => {
+        event.preventDefault();
+        uploadZone.classList.remove("dragover");
+        if (state.ingestRunning) {
+          return;
+        }
+        const file = event.dataTransfer?.files?.[0];
+        ingestFile(file);
+      });
+      uploadInput.addEventListener("change", () => {
+        const file = uploadInput.files ? uploadInput.files[0] : null;
+        ingestFile(file);
+      });
       startTts.addEventListener("click", toggleSynth);
       mergeBtn.addEventListener("click", startMerge);
       clearTtsBtn.addEventListener("click", clearTtsCache);

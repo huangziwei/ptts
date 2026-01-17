@@ -2,10 +2,10 @@
 
 ![screenshot](.github/screenshot/player.png)
 
-> ### Note
+> ## Note
 > As I am still using a vintage Intel MacBook Pro, many cool tools that use latest PyTorch or JAX cannot be run on it directly. I resort to using VMs via Podman. But on other compatible machines, Podman is not necessary at all. Just remove the `./bin/pmx` part and use `uv` directly.
 
-## prerequisites
+## Prerequisites
 
 ```bash
 git clone <this-repo>
@@ -69,8 +69,8 @@ explicitly (or use a cloned wav), pass `--voice`:
   --output out/some-book/some-book.m4b
 ```
 
-`ptts merge` requires `ffmpeg` on PATH. If you are using Podman, install it in the
-same run (or use a custom image):
+`ptts merge` requires `ffmpeg` on PATH. If you are using Podman, install it in the same run (or use a custom image):
+
 ```bash
 ./bin/pmx bash -lc 'apt-get update && apt-get install -y ffmpeg && uv run ptts merge --book out/some-book --output out/some-book/some-book.m4b'
 ```
