@@ -1,4 +1,6 @@
-# Narrate English books with Pocket-TTS
+# pTTS: Narrate English books with Pocket-TTS
+
+![screenshot](.github/screenshot/player.png)
 
 > ### Note
 > As I am still using a vintage Intel MacBook Pro, many cool tools that use latest PyTorch or JAX cannot be run on it directly. I resort to using VMs via Podman. But on other compatible machines, Podman is not necessary at all. Just remove the `./bin/pmx` part and use `uv` directly.
@@ -82,4 +84,16 @@ Open `http://localhost:8002` to browse books, start/stop TTS, and play audio.
 Playback state is saved per book at `out/<book>/playback.json`.
 If the player reports missing chunk spans, re-run TTS with `--rechunk`.
 
-![screenshot](.github/screenshot/player.png)
+### 6) Merge to M4B
+```bash
+./bin/pmx uv run ptts merge \
+  --book out/some-book \
+  --output out/some-book/some-book.m4b
+```
+
+`ptts merge` requires `ffmpeg` on PATH. If you are using Podman, install it in the
+same run (or use a custom image):
+```bash
+./bin/pmx bash -lc 'apt-get update && apt-get install -y ffmpeg && uv run ptts merge --book out/some-book --output out/some-book/some-book.m4b'
+```
+
