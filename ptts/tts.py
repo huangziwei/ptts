@@ -374,6 +374,13 @@ def atomic_write_json(path: Path, obj: Any) -> None:
     tmp.replace(path)
 
 
+def write_status(out_dir: Path, stage: str, detail: Optional[str] = None) -> None:
+    payload = {"stage": stage, "updated_unix": int(time.time())}
+    if detail:
+        payload["detail"] = detail
+    atomic_write_json(out_dir / "status.json", payload)
+
+
 def write_chunk_files(
     chunks: Sequence[str], chunk_dir: Path, overwrite: bool = False
 ) -> List[Path]:
@@ -677,6 +684,8 @@ def synthesize(
     if wipe_segments and seg_dir.exists():
         shutil.rmtree(seg_dir)
 
+    write_status(out_dir, "cloning", "Preparing voice")
+
     tts_model = TTSModel.load_model()
     sample_rate = int(tts_model.sample_rate)
     if manifest.get("sample_rate") != sample_rate:
@@ -684,6 +693,7 @@ def synthesize(
         atomic_write_json(manifest_path, manifest)
 
     voice_state = tts_model.get_state_for_audio_prompt(voice_prompt)
+    write_status(out_dir, "synthesizing")
 
     pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
     pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
@@ -777,6 +787,7 @@ def synthesize(
 
     build_chapters_ffmeta(chapter_meta, chapters_path)
 
+    write_status(out_dir, "done")
     return 0
 
 

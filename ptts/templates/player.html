@@ -2029,6 +2029,12 @@
             ? "Chunking sample..."
             : "Chunking text...";
           progressDetail.textContent = "Preparing manifest and spans.";
+        } else if (stage === "cloning") {
+          progressFill.style.width = "0%";
+          progressText.textContent = sampling
+            ? "Cloning voice for sample..."
+            : "Cloning voice...";
+          progressDetail.textContent = "Preparing voice prompt.";
         } else if (stage === "sampled") {
           progressFill.style.width = "100%";
           progressText.textContent = "Sample ready.";
@@ -2055,6 +2061,8 @@
         if (sampling) {
           if (stage === "chunking") {
             bookStatus.textContent = "Preparing sample...";
+          } else if (stage === "cloning") {
+            bookStatus.textContent = "Cloning sample voice...";
           } else if (stage === "sampling") {
             bookStatus.textContent = "Generating sample...";
           } else if (stage === "sampled") {

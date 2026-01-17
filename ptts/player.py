@@ -488,6 +488,17 @@ def _spawn_ffmpeg_install(
     )
 
 
+def _load_tts_status(book_dir: Path) -> dict:
+    path = book_dir / "tts" / "status.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 @dataclass
 class SynthJob:
     book_id: str
@@ -924,6 +935,7 @@ def create_app(root_dir: Path) -> FastAPI:
         manifest_path = book_dir / "tts" / "manifest.json"
         manifest = _load_json(manifest_path)
         progress = _compute_progress(manifest) if manifest else None
+        tts_status = _load_tts_status(book_dir)
         manifest_created = 0
         if manifest:
             try:
@@ -998,9 +1010,13 @@ def create_app(root_dir: Path) -> FastAPI:
             "ffmpeg_error": ffmpeg_error,
             "ffmpeg_log_path": ffmpeg_log,
             "mode": mode,
+            "tts_status": tts_status,
         }
         if running:
-            if not progress or not progress.get("total"):
+            status_stage = str(tts_status.get("stage") or "")
+            if status_stage == "cloning":
+                payload["stage"] = "cloning"
+            elif not progress or not progress.get("total"):
                 payload["stage"] = "chunking"
             else:
                 payload["stage"] = "sampling" if mode == "sample" else "synthesizing"
