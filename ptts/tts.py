@@ -23,7 +23,7 @@ from rich.progress import (
 )
 
 from .text import read_clean_text
-from .voice import resolve_voice_prompt
+from .voice import DEFAULT_VOICE, resolve_voice_prompt
 
 try:
     import torch
@@ -638,6 +638,12 @@ def synthesize(
 
     if base_dir is None:
         base_dir = Path.cwd()
+    if voice is None:
+        voice = DEFAULT_VOICE
+    else:
+        voice = voice.strip()
+        if not voice or voice.lower() == "default":
+            voice = DEFAULT_VOICE
     try:
         voice_prompt = resolve_voice_prompt(voice, base_dir=base_dir)
     except ValueError as exc:

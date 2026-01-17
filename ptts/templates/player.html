@@ -1210,6 +1210,7 @@
         cleanEditing: false,
         cleanEditOriginal: "",
         cleanEditChapter: null,
+        bookVoice: null,
       };
 
       const bookList = document.getElementById("bookList");
@@ -1486,7 +1487,7 @@
             return;
           }
 
-          let selected = state.voicePreference;
+          let selected = state.bookVoice || state.voicePreference;
           if (!selected || !available.includes(selected)) {
             if (local.length) {
               selected = local[0].value;
@@ -1555,6 +1556,7 @@
         state.mergeStage = "idle";
         state.synthRunning = false;
         state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
+        state.bookVoice = null;
         resetAudioPlayers();
         bookTitle.textContent = "Select a book";
         bookMeta.textContent = "No book loaded.";
@@ -1671,7 +1673,8 @@
           state.book = data.book;
           state.chapters = data.chapters || [];
           state.padMs = data.book ? data.book.pad_ms || 0 : 0;
-        state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
+          state.bookVoice = data.book ? data.book.last_voice || null : null;
+          state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
           state.mergeRunning = false;
           state.mergeReady = false;
           state.mergeExitCode = null;
@@ -1699,6 +1702,7 @@
           state.needsRechunk = state.chapters.length > 0 && !hasSpanData;
           renderBooks();
           renderBookHeader();
+          await loadVoices();
           updateDeleteButtonState();
           renderChapters();
           if (state.chapters.length) {

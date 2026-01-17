@@ -188,7 +188,27 @@ def _book_summary(book_dir: Path) -> dict:
     }
 
 
-def _book_details(book_dir: Path) -> dict:
+def _normalize_voice_value(value: object, repo_root: Path) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return str(value)
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    if cleaned.lower() == "default":
+        return DEFAULT_VOICE
+    candidate = Path(cleaned)
+    if candidate.is_absolute():
+        try:
+            rel = candidate.relative_to(repo_root)
+        except ValueError:
+            return cleaned
+        return rel.as_posix()
+    return cleaned
+
+
+def _book_details(book_dir: Path, repo_root: Path) -> dict:
     toc = _load_json(book_dir / "clean" / "toc.json")
     metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
     cover = metadata.get("cover") or {}
@@ -198,11 +218,13 @@ def _book_details(book_dir: Path) -> dict:
     manifest = _load_json(book_dir / "tts" / "manifest.json")
     chapters: List[dict] = []
     pad_ms = 0
+    last_voice = ""
     if manifest and isinstance(manifest.get("chapters"), list):
         try:
             pad_ms = int(manifest.get("pad_ms") or 0)
         except (TypeError, ValueError):
             pad_ms = 0
+        last_voice = _normalize_voice_value(manifest.get("voice"), repo_root)
         for entry in manifest["chapters"]:
             chunk_spans = entry.get("chunk_spans", [])
             if not isinstance(chunk_spans, list):
@@ -232,6 +254,7 @@ def _book_details(book_dir: Path) -> dict:
             "cover_url": cover_url,
             "has_audio": bool(chapters),
             "pad_ms": pad_ms,
+            "last_voice": last_voice,
         },
         "chapters": chapters,
         "audio_base": f"/audio/{book_dir.name}/tts/segments",
@@ -536,7 +559,7 @@ def create_app(root_dir: Path) -> FastAPI:
     @app.get("/api/books/{book_id}")
     def get_book(book_id: str) -> JSONResponse:
         book_dir = _resolve_book_dir(root_dir, book_id)
-        return _no_store(_book_details(book_dir))
+        return _no_store(_book_details(book_dir, repo_root))
 
     @app.post("/api/books/delete")
     def delete_book(payload: DeleteBookRequest) -> JSONResponse:
