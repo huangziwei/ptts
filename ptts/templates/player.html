@@ -1186,6 +1186,7 @@
         playbackSaveTimer: null,
         playback: {
           lastPlayed: null,
+          furthestPlayed: null,
           bookmarks: [],
         },
         voicePreference: null,
@@ -1348,9 +1349,20 @@
         return typeof value === "number" ? value : null;
       }
 
+      function getFurthestPlayed() {
+        const value = state.playback.furthestPlayed;
+        return typeof value === "number" ? value : null;
+      }
+
       function setLastPlayed(index, persist = true) {
         state.playback.lastPlayed =
           typeof index === "number" ? index : null;
+        if (typeof index === "number") {
+          const currentFurthest = getFurthestPlayed();
+          if (currentFurthest === null || index > currentFurthest) {
+            state.playback.furthestPlayed = index;
+          }
+        }
         if (persist) {
           schedulePlaybackSave();
         }
@@ -1506,6 +1518,7 @@
         }
         const body = payload || {
           last_played: getLastPlayed(),
+          furthest_played: getFurthestPlayed(),
           bookmarks: getBookmarks(),
         };
         try {
@@ -1539,7 +1552,7 @@
         state.mergeOutputExists = false;
         state.mergeStage = "idle";
         state.synthRunning = false;
-        state.playback = { lastPlayed: null, bookmarks: [] };
+        state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
         resetAudioPlayers();
         bookTitle.textContent = "Select a book";
         bookMeta.textContent = "No book loaded.";
@@ -1571,12 +1584,17 @@
           );
           const last =
             typeof data.last_played === "number" ? data.last_played : null;
+          const furthest =
+            typeof data.furthest_played === "number" ? data.furthest_played : null;
           const marks = Array.isArray(data.bookmarks) ? data.bookmarks : [];
+          const effectiveFurthest = furthest === null ? last : furthest;
+          state.playback.furthestPlayed = effectiveFurthest;
           setLastPlayed(last, false);
           saveBookmarks(marks, false);
           if (!data.exists) {
             await persistPlayback({
               last_played: last,
+              furthest_played: effectiveFurthest,
               bookmarks: marks,
             });
           }
@@ -1650,7 +1668,7 @@
           state.book = data.book;
           state.chapters = data.chapters || [];
           state.padMs = data.book ? data.book.pad_ms || 0 : 0;
-          state.playback = { lastPlayed: null, bookmarks: [] };
+        state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
           state.mergeRunning = false;
           state.mergeReady = false;
           state.mergeExitCode = null;
@@ -1807,10 +1825,12 @@
 
       function idleStatusText() {
         const lastIndex = getLastPlayed();
-        if (lastIndex === null) {
-          return "Last: —";
-        }
-        return `Last: ${describeIndex(lastIndex)}`;
+        const furthestIndex = getFurthestPlayed();
+        const lastLabel =
+          lastIndex === null ? "—" : describeIndex(lastIndex);
+        const furthestLabel =
+          furthestIndex === null ? "—" : describeIndex(furthestIndex);
+        return `Last: ${lastLabel} · Furthest: ${furthestLabel}`;
       }
 
       function setIdleStatus() {
@@ -1846,8 +1866,23 @@
         }
         const bookmarks = getBookmarks();
         bookmarkList.innerHTML = "";
+        const furthestIndex = getFurthestPlayed();
+        if (furthestIndex !== null) {
+          const item = document.createElement("div");
+          item.className = "bookmark-item";
+          const label = describeIndex(furthestIndex);
+          item.innerHTML = `
+            <span>Furthest: ${label}</span>
+            <div class="bookmark-actions">
+              <button class="btn small" data-action="play-furthest" data-index="${furthestIndex}">Play</button>
+            </div>
+          `;
+          bookmarkList.appendChild(item);
+        }
         if (!bookmarks.length) {
-          bookmarkList.innerHTML = "<div class=\"bookmark-empty\">No bookmarks yet.</div>";
+          if (furthestIndex === null) {
+            bookmarkList.innerHTML = "<div class=\"bookmark-empty\">No bookmarks yet.</div>";
+          }
         } else {
           bookmarks.forEach((entry) => {
             const item = document.createElement("div");
@@ -2956,7 +2991,7 @@
         if (Number.isNaN(index)) {
           return;
         }
-        if (action === "play") {
+        if (action === "play" || action === "play-furthest") {
           jumpToIndex(index, true);
           bookmarkPanel.classList.remove("open");
           return;

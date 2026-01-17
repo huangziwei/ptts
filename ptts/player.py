@@ -294,6 +294,9 @@ def _sanitize_playback(data: dict) -> dict:
     last = data.get("last_played")
     if not isinstance(last, int) or last < 0:
         last = None
+    furthest = data.get("furthest_played")
+    if not isinstance(furthest, int) or furthest < 0:
+        furthest = None
     bookmarks: List[dict] = []
     raw_marks = data.get("bookmarks")
     if isinstance(raw_marks, list):
@@ -311,7 +314,11 @@ def _sanitize_playback(data: dict) -> dict:
             if isinstance(created_at, int):
                 cleaned["created_at"] = created_at
             bookmarks.append(cleaned)
-    return {"last_played": last, "bookmarks": bookmarks}
+    return {
+        "last_played": last,
+        "furthest_played": furthest,
+        "bookmarks": bookmarks,
+    }
 
 
 def _compute_progress(manifest: dict) -> dict:
@@ -428,6 +435,7 @@ class CleanEditPayload(BaseModel):
 
 class PlaybackPayload(BaseModel):
     last_played: Optional[int] = None
+    furthest_played: Optional[int] = None
     bookmarks: List[dict] = []
 
 
