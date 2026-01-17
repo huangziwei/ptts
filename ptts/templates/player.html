@@ -1458,7 +1458,7 @@
           button.type = "button";
           button.className = "voice-button";
           button.dataset.voice = item.value;
-          button.textContent = item.label;
+          button.textContent = formatVoiceLabel(item.label);
           button.addEventListener("click", () => {
             setSelectedVoice(item.value);
           });
@@ -1467,6 +1467,20 @@
         group.appendChild(title);
         group.appendChild(buttons);
         container.appendChild(group);
+      }
+
+      function formatVoiceLabel(label) {
+        if (!label) {
+          return "";
+        }
+        const cleaned = String(label).replace(/[_-]+/g, " ").trim();
+        if (!cleaned) {
+          return "";
+        }
+        return cleaned
+          .split(/\s+/)
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(" ");
       }
 
       async function loadVoices() {

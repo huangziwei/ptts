@@ -34,6 +34,8 @@ def _build_ffmpeg_cmd(
         cmd += [
             "-map",
             "2:v:0",
+            "-vf",
+            "pad='max(iw,ih)':'max(iw,ih)':(ow-iw)/2:(oh-ih)/2:color=white",
             "-c:v",
             "mjpeg",
             "-disposition:v:0",
