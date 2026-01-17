@@ -31,11 +31,19 @@ def _build_ffmpeg_cmd(
         cmd += ["-i", str(cover_path)]
     cmd += ["-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1"]
     if cover_path is not None:
+        filter_graph = (
+            "[2:v]split=2[cover][bg0];"
+            "[bg0]scale=if(gt(iw,ih),iw,ih):if(gt(iw,ih),iw,ih),"
+            "boxblur=20:1[bg];"
+            "[cover]scale=if(gt(iw,ih),iw,ih):if(gt(iw,ih),iw,ih):"
+            "force_original_aspect_ratio=decrease[fg];"
+            "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
+        )
         cmd += [
+            "-filter_complex",
+            filter_graph,
             "-map",
-            "2:v:0",
-            "-vf",
-            "pad='max(iw,ih)':'max(iw,ih)':(ow-iw)/2:(oh-ih)/2:color=white",
+            "[v]",
             "-c:v",
             "mjpeg",
             "-disposition:v:0",
