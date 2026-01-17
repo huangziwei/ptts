@@ -331,12 +331,20 @@
         overflow-y: auto;
       }
 
+      .toc-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
       .toc h3 {
         font-size: 13px;
         text-transform: uppercase;
         letter-spacing: 1px;
         color: var(--muted);
-        margin: 0 0 10px;
+        margin: 0;
       }
 
       .toc-item {
@@ -383,6 +391,13 @@
         margin: 0 0 16px;
       }
 
+      .panel {
+        background: #fffdf9;
+        border: 1px solid #eadfd2;
+        border-radius: 12px;
+        padding: 12px;
+      }
+
       .chunk {
         padding: 2px 1px;
         border-radius: 6px;
@@ -408,6 +423,165 @@
       .empty-state {
         color: var(--muted);
         font-size: 15px;
+      }
+
+      .edit-panel {
+        margin-top: 24px;
+        background: var(--panel);
+        border-radius: var(--radius);
+        border: 1px solid #eadfd2;
+        padding: 18px;
+        display: none;
+      }
+
+      .edit-panel.open {
+        display: block;
+      }
+
+      .edit-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .edit-header h3 {
+        margin: 0;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--muted);
+      }
+
+      .edit-meta {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .edit-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .edit-status {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .edit-grid {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        gap: 16px;
+      }
+
+      .edit-sidebar,
+      .edit-main {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .edit-section-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      .edit-chapter-list,
+      .edit-dropped-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 280px;
+        overflow-y: auto;
+      }
+
+      .edit-chapter-item,
+      .edit-dropped-item {
+        border: 1px solid #eadfd2;
+        background: #fffdf9;
+        color: var(--ink);
+        padding: 6px 8px;
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .edit-chapter-item.active {
+        background: #f2e2c7;
+      }
+
+      .edit-dropped-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .edit-selected {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .edit-selected-title {
+        font-weight: 600;
+        font-size: 13px;
+      }
+
+      .edit-split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .edit-block h4 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .edit-block pre {
+        margin: 0;
+        white-space: pre-wrap;
+        line-height: 1.5;
+        font-size: 13px;
+      }
+
+      .edit-panel mark {
+        background: #ffe4a8;
+        padding: 0 2px;
+        border-radius: 3px;
+      }
+
+      .edit-rules label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin: 10px 0 4px;
+      }
+
+      .edit-rules textarea {
+        width: 100%;
+        min-height: 80px;
+        border: 1px solid #eadfd2;
+        border-radius: 8px;
+        padding: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: var(--ink);
+      }
+
+      .edit-rules input[type="checkbox"] {
+        margin-right: 6px;
       }
 
       .player-bar {
@@ -643,6 +817,12 @@
         .toc {
           max-height: none;
         }
+        .edit-panel {
+          display: none !important;
+        }
+        .edit-toggle {
+          display: none;
+        }
         .jump-btn {
           display: inline-flex;
           align-items: center;
@@ -723,7 +903,10 @@
         </section>
         <div class="reader-body">
           <aside class="toc">
-            <h3>Chapters</h3>
+            <div class="toc-header">
+              <h3>Chapters</h3>
+              <button class="btn small edit-toggle" id="editToggle" type="button">Edit</button>
+            </div>
             <div id="chapterList"></div>
           </aside>
           <section class="text-pane" id="textPane">
@@ -733,6 +916,57 @@
             </div>
           </section>
         </div>
+        <section class="edit-panel" id="editPanel">
+          <div class="edit-header">
+            <div>
+              <h3>Sanitize & Preview</h3>
+              <p class="edit-meta">Rules auto-save. Re-sanitize refreshes clean text and clears TTS cache.</p>
+            </div>
+            <div class="edit-actions">
+              <button class="btn" id="sanitizeBtn" type="button">Re-sanitize</button>
+              <button class="btn" id="editReload" type="button">Reload</button>
+              <span class="edit-status" id="editStatus"></span>
+            </div>
+          </div>
+          <div class="edit-grid">
+            <aside class="edit-sidebar">
+              <div class="panel">
+                <div class="edit-section-title">Chapters</div>
+                <div class="edit-chapter-list" id="editChapterList"></div>
+              </div>
+              <div class="panel">
+                <div class="edit-section-title">Dropped</div>
+                <div class="edit-dropped-list" id="editDroppedList"></div>
+              </div>
+            </aside>
+            <div class="edit-main">
+              <div class="panel edit-selected">
+                <div class="edit-selected-title" id="editSelectedTitle">Select a chapter</div>
+                <button class="btn small" id="dropChapterBtn" type="button">Drop chapter</button>
+              </div>
+              <div class="panel edit-split">
+                <div class="edit-block">
+                  <h4>Raw</h4>
+                  <pre id="editRaw"></pre>
+                </div>
+                <div class="edit-block">
+                  <h4>Clean</h4>
+                  <pre id="editClean"></pre>
+                </div>
+              </div>
+              <div class="panel edit-rules">
+                <div class="edit-section-title">Rules</div>
+                <label for="rulesDrop">Drop chapter title patterns</label>
+                <textarea id="rulesDrop"></textarea>
+                <label for="rulesCutoff">Section cutoff patterns</label>
+                <textarea id="rulesCutoff"></textarea>
+                <label for="rulesRemove">Remove patterns</label>
+                <textarea id="rulesRemove"></textarea>
+                <label><input type="checkbox" id="rulesReplace" /> Replace defaults</label>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -801,6 +1035,12 @@
         mergeExitCode: null,
         mergeOutputExists: false,
         mergeStage: "idle",
+        editOpen: false,
+        previewChapterIndex: null,
+        previewSelectedTitle: "",
+        previewSelectedKind: "",
+        rulesLoading: false,
+        rulesSaveTimer: null,
       };
 
       const bookList = document.getElementById("bookList");
@@ -811,6 +1051,21 @@
       const bookMeta = document.getElementById("bookMeta");
       const bookStatus = document.getElementById("bookStatus");
       const coverLarge = document.getElementById("coverLarge");
+      const editToggle = document.getElementById("editToggle");
+      const editPanel = document.getElementById("editPanel");
+      const sanitizeBtn = document.getElementById("sanitizeBtn");
+      const editReload = document.getElementById("editReload");
+      const editStatus = document.getElementById("editStatus");
+      const editChapterList = document.getElementById("editChapterList");
+      const editDroppedList = document.getElementById("editDroppedList");
+      const editSelectedTitle = document.getElementById("editSelectedTitle");
+      const dropChapterBtn = document.getElementById("dropChapterBtn");
+      const editRaw = document.getElementById("editRaw");
+      const editClean = document.getElementById("editClean");
+      const rulesDrop = document.getElementById("rulesDrop");
+      const rulesCutoff = document.getElementById("rulesCutoff");
+      const rulesRemove = document.getElementById("rulesRemove");
+      const rulesReplace = document.getElementById("rulesReplace");
       const status = document.getElementById("status");
       const playBtn = document.getElementById("playBtn");
       const prevBtn = document.getElementById("prevBtn");
@@ -1179,6 +1434,9 @@
           }
           updateUrl(state.book.id, state.currentChapterId);
           startSynthPolling();
+          if (state.editOpen) {
+            await loadPreview();
+          }
           scrollToBookSection();
         } catch (err) {
           setStatus("Failed to load book.");
@@ -1594,6 +1852,9 @@
           mergeStatus.textContent = "";
           updateMergeButtonState();
           await selectBook(state.book.id);
+          if (state.editOpen) {
+            await loadPreview(state.previewChapterIndex);
+          }
         } catch (err) {
           setStatus(err.message || "Failed to clear TTS cache.");
         }
@@ -1759,6 +2020,203 @@
         }
         state.activeQueueIndex = index;
         applyLastPlayedHighlight();
+      }
+
+      function parseRuleLines(text) {
+        return text
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+      }
+
+      function rulesFromForm() {
+        return {
+          drop_chapter_title_patterns: parseRuleLines(rulesDrop.value || ""),
+          section_cutoff_patterns: parseRuleLines(rulesCutoff.value || ""),
+          remove_patterns: parseRuleLines(rulesRemove.value || ""),
+          replace_defaults: !!rulesReplace.checked,
+        };
+      }
+
+      function applyRulesToForm(rules) {
+        state.rulesLoading = true;
+        rulesDrop.value = (rules.drop_chapter_title_patterns || []).join("\n");
+        rulesCutoff.value = (rules.section_cutoff_patterns || []).join("\n");
+        rulesRemove.value = (rules.remove_patterns || []).join("\n");
+        rulesReplace.checked = !!rules.replace_defaults;
+        state.rulesLoading = false;
+      }
+
+      function scheduleRulesSave() {
+        if (state.rulesLoading) {
+          return;
+        }
+        if (state.rulesSaveTimer) {
+          clearTimeout(state.rulesSaveTimer);
+        }
+        state.rulesSaveTimer = setTimeout(() => {
+          saveRules();
+        }, 700);
+      }
+
+      async function saveRules() {
+        if (!state.book) {
+          return;
+        }
+        const payload = rulesFromForm();
+        editStatus.textContent = "Saving rules...";
+        try {
+          await fetchJson("/api/sanitize/rules", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          editStatus.textContent = "Rules saved.";
+          await loadPreview(state.previewChapterIndex);
+        } catch (err) {
+          editStatus.textContent = err.message || "Failed to save rules.";
+        }
+      }
+
+      function renderEditChapterList(chapters, selectedIndex) {
+        editChapterList.innerHTML = "";
+        if (!chapters.length) {
+          editChapterList.innerHTML = "<p class=\"empty-state\">No chapters.</p>";
+          return;
+        }
+        chapters.forEach((entry) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "edit-chapter-item";
+          if (entry.index === selectedIndex) {
+            button.classList.add("active");
+          }
+          const title = entry.title || "Chapter";
+          button.textContent = `${entry.index}. ${title}`;
+          button.addEventListener("click", () => {
+            loadPreview(entry.index);
+          });
+          editChapterList.appendChild(button);
+        });
+      }
+
+      function renderDroppedList(items) {
+        editDroppedList.innerHTML = "";
+        if (!items.length) {
+          editDroppedList.innerHTML = "<p class=\"empty-state\">None.</p>";
+          return;
+        }
+        items.forEach((entry) => {
+          const row = document.createElement("div");
+          row.className = "edit-dropped-item";
+          const title = entry.title || "Chapter";
+          row.innerHTML = `
+            <span>${entry.index}. ${title}</span>
+            <button class="btn small" type="button">Restore</button>
+          `;
+          const button = row.querySelector("button");
+          button.addEventListener("click", () => restoreChapter(entry.title));
+          editDroppedList.appendChild(row);
+        });
+      }
+
+      async function loadPreview(chapterIndex) {
+        if (!state.book) {
+          return;
+        }
+        const params = new URLSearchParams();
+        params.set("book_id", state.book.id);
+        if (chapterIndex) {
+          params.set("chapter", chapterIndex);
+        }
+        try {
+          const data = await fetchJson(`/api/sanitize/preview?${params.toString()}`);
+          const selected = data.selected || {};
+          state.previewChapterIndex = selected.index || null;
+          state.previewSelectedTitle = selected.title || "";
+          state.previewSelectedKind = selected.kind || "";
+          if (selected.title) {
+            const prefix = selected.index ? `${selected.index}. ` : "";
+            editSelectedTitle.textContent = `${prefix}${selected.title}`;
+          } else {
+            editSelectedTitle.textContent = "Select a chapter";
+          }
+          dropChapterBtn.disabled = !selected.title || selected.kind === "title";
+          editRaw.innerHTML = data.raw_text || "";
+          editClean.textContent = data.clean_text || "";
+          renderEditChapterList(data.chapters || [], selected.index);
+          renderDroppedList(data.dropped || []);
+          applyRulesToForm(data.rules || {});
+          editStatus.textContent = "";
+        } catch (err) {
+          editStatus.textContent = err.message || "Failed to load preview.";
+        }
+      }
+
+      function toggleEditPanel() {
+        state.editOpen = !state.editOpen;
+        editPanel.classList.toggle("open", state.editOpen);
+        editToggle.textContent = state.editOpen ? "Close" : "Edit";
+        if (state.editOpen) {
+          loadPreview(state.previewChapterIndex);
+        }
+      }
+
+      async function dropSelectedChapter() {
+        if (!state.book || !state.previewSelectedTitle) {
+          return;
+        }
+        try {
+          await fetchJson("/api/sanitize/drop", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              book_id: state.book.id,
+              title: state.previewSelectedTitle,
+            }),
+          });
+          editStatus.textContent = "Chapter queued for drop.";
+          await loadPreview(state.previewChapterIndex);
+        } catch (err) {
+          editStatus.textContent = err.message || "Failed to drop chapter.";
+        }
+      }
+
+      async function restoreChapter(title) {
+        if (!state.book || !title) {
+          return;
+        }
+        try {
+          await fetchJson("/api/sanitize/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id: state.book.id, title }),
+          });
+          editStatus.textContent = "Chapter restored.";
+          await loadPreview(state.previewChapterIndex);
+        } catch (err) {
+          editStatus.textContent = err.message || "Failed to restore chapter.";
+        }
+      }
+
+      async function runSanitize() {
+        if (!state.book) {
+          return;
+        }
+        editStatus.textContent = "Sanitizing...";
+        try {
+          const data = await fetchJson("/api/sanitize/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id: state.book.id }),
+          });
+          const cleared = data.tts_cleared ? " TTS cache cleared." : "";
+          editStatus.textContent = `Sanitized.${cleared}`;
+          await selectBook(state.book.id);
+          await loadPreview(state.previewChapterIndex);
+        } catch (err) {
+          editStatus.textContent = err.message || "Sanitize failed.";
+        }
       }
 
       async function chunkExists(item) {
@@ -1992,6 +2450,14 @@
       startTts.addEventListener("click", toggleSynth);
       mergeBtn.addEventListener("click", startMerge);
       clearTtsBtn.addEventListener("click", clearTtsCache);
+      editToggle.addEventListener("click", toggleEditPanel);
+      sanitizeBtn.addEventListener("click", runSanitize);
+      editReload.addEventListener("click", () => loadPreview(state.previewChapterIndex));
+      dropChapterBtn.addEventListener("click", dropSelectedChapter);
+      rulesDrop.addEventListener("input", scheduleRulesSave);
+      rulesCutoff.addEventListener("input", scheduleRulesSave);
+      rulesRemove.addEventListener("input", scheduleRulesSave);
+      rulesReplace.addEventListener("change", scheduleRulesSave);
       bookmarkBtn.addEventListener("click", () => {
         bookmarkPanel.classList.toggle("open");
       });

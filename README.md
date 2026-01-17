@@ -47,17 +47,7 @@ End-to-end workflow with podman:
   --overwrite
 ```
 
-### 3) Preview in a local web UI (optional)
-```bash
-PMX_OPTS="-p 8001:8001" ./bin/pmx uv run ptts preview \
-  out/some-book \
-  --host 0.0.0.0 \
-  --port 8001
-```
-
-Open `http://localhost:8001` to review and adjust rules.
-
-### 4) Synthesize audio (TTS)
+### 3) Synthesize audio (TTS)
 ```bash
 ./bin/pmx uv run --with pocket-tts ptts synth \
   --book out/some-book \
@@ -72,19 +62,7 @@ explicitly (or use a cloned wav), pass `--voice`:
 ./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --voice voices/ray.wav
 ```
 
-### 5) Play in the web player
-```bash
-PMX_OPTS="-p 8002:8002" ./bin/pmx uv run ptts play \
-  --root out \
-  --host 0.0.0.0 \
-  --port 8002
-```
-
-Open `http://localhost:8002` to browse books, start/stop TTS, and play audio.
-Playback state is saved per book at `out/<book>/playback.json`.
-If the player reports missing chunk spans, re-run TTS with `--rechunk`.
-
-### 6) Merge to M4B
+### 4) Merge to M4B
 ```bash
 ./bin/pmx uv run ptts merge \
   --book out/some-book \
@@ -96,3 +74,17 @@ same run (or use a custom image):
 ```bash
 ./bin/pmx bash -lc 'apt-get update && apt-get install -y ffmpeg && uv run ptts merge --book out/some-book --output out/some-book/some-book.m4b'
 ```
+
+### 5) Play in the web player
+
+**Everything above can be done within the local Player web app**.
+
+```bash
+PMX_OPTS="-p 1912:1912" ./bin/pmx uv run ptts play \
+  --root out \
+  --host 0.0.0.0 \
+  --port 1912
+```
+
+Open `http://localhost:1912` to browse books, open the “Edit” panel to adjust sanitize rules, re-sanitize chapters, start/stop TTS, and play audio.
+

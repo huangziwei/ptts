@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -16,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from . import sanitize
 from .text import read_clean_text
 from .voice import BUILTIN_VOICES, DEFAULT_VOICE, resolve_voice_prompt
 
@@ -39,6 +42,95 @@ def _find_repo_root(start: Path) -> Path:
         if (candidate / "pyproject.toml").exists():
             return candidate
     return start
+
+
+def _rules_path(base_dir: Path) -> Path:
+    return base_dir / ".codex" / "ptts-rules.json"
+
+
+def _load_rules_payload(base_dir: Path) -> dict:
+    rules = sanitize.load_rules(None, base_dir)
+    return {
+        "replace_defaults": rules.replace_defaults,
+        "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
+        "section_cutoff_patterns": rules.section_cutoff_patterns,
+        "remove_patterns": rules.remove_patterns,
+    }
+
+
+def _write_rules_payload(base_dir: Path, payload: dict) -> None:
+    data = {
+        "replace_defaults": bool(payload.get("replace_defaults", False)),
+        "drop_chapter_title_patterns": list(
+            payload.get("drop_chapter_title_patterns", [])
+        ),
+        "section_cutoff_patterns": list(payload.get("section_cutoff_patterns", [])),
+        "remove_patterns": list(payload.get("remove_patterns", [])),
+    }
+    rules_path = _rules_path(base_dir)
+    rules_path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(rules_path, data)
+
+
+def _highlight_ranges(text: str, patterns: list[re.Pattern]) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            if match.start() == match.end():
+                continue
+            ranges.append((match.start(), match.end()))
+    if not ranges:
+        return []
+    ranges.sort(key=lambda item: (item[0], item[1]))
+    merged: list[tuple[int, int]] = []
+    for start, end in ranges:
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    return merged
+
+
+def _render_highlight(text: str, ranges: list[tuple[int, int]]) -> str:
+    if not ranges:
+        return html.escape(text)
+    parts: list[str] = []
+    last = 0
+    for start, end in ranges:
+        parts.append(html.escape(text[last:start]))
+        parts.append(f"<mark>{html.escape(text[start:end])}</mark>")
+        last = end
+    parts.append(html.escape(text[last:]))
+    return "".join(parts)
+
+
+def _load_chapter_text(path: Optional[Path]) -> str:
+    if not path or not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _pick_preview_chapter(clean_toc: dict, chapter_index: Optional[int]) -> dict:
+    chapters = clean_toc.get("chapters", []) if isinstance(clean_toc, dict) else []
+    if not chapters:
+        return {}
+    if chapter_index is not None:
+        for entry in chapters:
+            if entry.get("index") == chapter_index:
+                return entry
+    return chapters[0]
+
+
+def _resolve_raw_path(book_dir: Path, raw_toc: dict, clean_entry: dict) -> Optional[Path]:
+    source_index = clean_entry.get("source_index")
+    if source_index is None:
+        return None
+    for entry in raw_toc.get("chapters", []):
+        if entry.get("index") == source_index:
+            rel = entry.get("path")
+            if rel:
+                return book_dir / rel
+    return None
 
 
 def _resolve_book_dir(root_dir: Path, book_id: str) -> Path:
@@ -286,6 +378,22 @@ class ClearRequest(BaseModel):
     book_id: str
 
 
+class RulesPayload(BaseModel):
+    drop_chapter_title_patterns: List[str] = []
+    section_cutoff_patterns: List[str] = []
+    remove_patterns: List[str] = []
+    replace_defaults: bool = False
+
+
+class ChapterAction(BaseModel):
+    book_id: str
+    title: str
+
+
+class SanitizeRequest(BaseModel):
+    book_id: str
+
+
 class PlaybackPayload(BaseModel):
     last_played: Optional[int] = None
     bookmarks: List[dict] = []
@@ -381,6 +489,100 @@ def create_app(root_dir: Path) -> FastAPI:
         _atomic_write_json(_playback_path(book_dir), cleaned)
         cleaned["exists"] = True
         return _no_store(cleaned)
+
+    @app.get("/api/sanitize/preview")
+    def sanitize_preview(
+        book_id: str, chapter: Optional[int] = None
+    ) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        clean_toc = _load_json(book_dir / "clean" / "toc.json")
+        raw_toc = _load_json(book_dir / "toc.json")
+        report = _load_json(book_dir / "clean" / "report.json")
+        if not clean_toc:
+            raise HTTPException(status_code=404, detail="Missing clean/toc.json.")
+        rules = sanitize.load_rules(None, repo_root)
+        selected = _pick_preview_chapter(clean_toc, chapter)
+
+        clean_path = None
+        clean_rel = selected.get("path") if selected else None
+        if clean_rel:
+            clean_path = book_dir / clean_rel
+        raw_path = _resolve_raw_path(book_dir, raw_toc, selected)
+
+        raw_text = _load_chapter_text(raw_path)
+        clean_text = _load_chapter_text(clean_path)
+        patterns = sanitize.compile_patterns(rules.remove_patterns)
+        raw_ranges = _highlight_ranges(raw_text, patterns)
+
+        dropped = []
+        for entry in report.get("chapters", []):
+            if entry.get("dropped"):
+                dropped.append(
+                    {
+                        "index": entry.get("index"),
+                        "title": entry.get("title") or "",
+                    }
+                )
+
+        payload = {
+            "book_id": book_id,
+            "chapters": clean_toc.get("chapters", []),
+            "selected": selected,
+            "raw_text": _render_highlight(raw_text, raw_ranges),
+            "clean_text": clean_text,
+            "dropped": dropped,
+            "rules": {
+                "replace_defaults": rules.replace_defaults,
+                "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
+                "section_cutoff_patterns": rules.section_cutoff_patterns,
+                "remove_patterns": rules.remove_patterns,
+            },
+        }
+        return _no_store(payload)
+
+    @app.post("/api/sanitize/rules")
+    def sanitize_rules(payload: RulesPayload) -> JSONResponse:
+        _write_rules_payload(repo_root, payload.dict())
+        return _no_store(payload.dict())
+
+    @app.post("/api/sanitize/drop")
+    def sanitize_drop(payload: ChapterAction) -> JSONResponse:
+        rules = _load_rules_payload(repo_root)
+        pattern = f"^{re.escape(payload.title)}$"
+        patterns = list(rules.get("drop_chapter_title_patterns", []))
+        if pattern not in patterns:
+            patterns.append(pattern)
+        rules["drop_chapter_title_patterns"] = patterns
+        _write_rules_payload(repo_root, rules)
+        return _no_store({"status": "ok", "pattern": pattern})
+
+    @app.post("/api/sanitize/restore")
+    def sanitize_restore(payload: ChapterAction) -> JSONResponse:
+        rules = _load_rules_payload(repo_root)
+        pattern = f"^{re.escape(payload.title)}$"
+        patterns = list(rules.get("drop_chapter_title_patterns", []))
+        if pattern in patterns:
+            patterns = [p for p in patterns if p != pattern]
+        rules["drop_chapter_title_patterns"] = patterns
+        _write_rules_payload(repo_root, rules)
+        return _no_store({"status": "ok", "pattern": pattern})
+
+    @app.post("/api/sanitize/run")
+    def sanitize_run(payload: SanitizeRequest) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop TTS before sanitizing.")
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop merge before sanitizing.")
+        sanitize.sanitize_book(book_dir=book_dir, overwrite=True, base_dir=repo_root)
+        tts_dir = book_dir / "tts"
+        tts_cleared = False
+        if tts_dir.exists():
+            shutil.rmtree(tts_dir)
+            tts_cleared = True
+        return _no_store({"status": "ok", "tts_cleared": tts_cleared})
 
     @app.get("/api/synth/status")
     def synth_status(book_id: str) -> JSONResponse:

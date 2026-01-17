@@ -10,7 +10,6 @@ from typing import Optional
 from . import epub as epub_util
 from . import merge as merge_util
 from . import player as player_util
-from . import preview as preview_util
 from . import sanitize as sanitize_util
 from . import tts as tts_util
 
@@ -267,18 +266,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write merge progress to JSON file",
     )
     merge.set_defaults(func=_merge)
-
-    preview = subparsers.add_parser(
-        "preview", help="Preview chapters in a web UI"
-    )
-    preview.add_argument("book", help="Book output directory")
-    preview.add_argument("--host", default="127.0.0.1")
-    preview.add_argument("--port", type=int, default=8001)
-    preview.set_defaults(
-        func=lambda args: preview_util.run(
-            Path(args.book), host=args.host, port=args.port
-        )
-    )
 
     play = subparsers.add_parser("play", help="Play generated audio in a web UI")
     play.add_argument(
