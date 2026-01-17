@@ -587,6 +587,23 @@
           border-right: none;
           border-bottom: 1px solid #eadfd2;
         }
+        .book-list {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+          gap: 12px;
+        }
+        .book-card {
+          grid-template-columns: 1fr;
+          justify-items: center;
+          padding: 8px;
+        }
+        .book-meta {
+          display: none;
+        }
+        .book-cover {
+          width: 72px;
+          height: 96px;
+        }
         .reader-body {
           grid-template-columns: 1fr;
         }
@@ -628,12 +645,12 @@
   </head>
   <body>
     <div class="app">
-      <aside class="library">
+      <aside class="library" id="bookshelf">
         <div class="brand">pTTS player</div>
         <div class="root-path">Root: {{ root_dir }}</div>
         <div id="bookList" class="book-list"></div>
       </aside>
-      <main class="reader">
+      <main class="reader" id="bookSection">
         <div class="reader-header">
           <div class="cover-large" id="coverLarge"></div>
           <div>
@@ -796,6 +813,20 @@
         const query = params.toString();
         const next = query ? `/?${query}` : "/";
         history.replaceState(null, "", next);
+      }
+
+      function isMobileLayout() {
+        return window.matchMedia("(max-width: 980px)").matches;
+      }
+
+      function scrollToBookSection() {
+        if (!isMobileLayout()) {
+          return;
+        }
+        const target = document.getElementById("bookSection");
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
       }
 
       function getBookmarks() {
@@ -1074,6 +1105,7 @@
           }
           updateUrl(state.book.id, state.currentChapterId);
           startSynthPolling();
+          scrollToBookSection();
         } catch (err) {
           setStatus("Failed to load book.");
         } finally {
