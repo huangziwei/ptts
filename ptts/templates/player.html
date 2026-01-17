@@ -425,6 +425,28 @@
         gap: 8px;
       }
 
+      .jump-btn {
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        border: 1px solid rgba(123, 112, 102, 0.6);
+        background: rgba(123, 112, 102, 0.75);
+        color: #fff;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        font-size: 18px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 8px 18px rgba(32, 28, 24, 0.2);
+        display: none;
+        z-index: 10;
+      }
+
+      .jump-btn:hover {
+        background: rgba(123, 112, 102, 0.9);
+      }
+
       .player-left,
       .player-right {
         display: flex;
@@ -594,21 +616,31 @@
         }
         .book-card {
           grid-template-columns: 1fr;
-          justify-items: center;
-          padding: 8px;
+          justify-items: stretch;
+          padding: 6px;
+          overflow: hidden;
         }
         .book-meta {
           display: none;
         }
         .book-cover {
-          width: 72px;
-          height: 96px;
+          width: 100%;
+          height: auto;
+          aspect-ratio: 2 / 3;
+        }
+        .book-cover img {
+          display: block;
         }
         .reader-body {
           grid-template-columns: 1fr;
         }
         .toc {
           max-height: none;
+        }
+        .jump-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
         }
       }
 
@@ -718,6 +750,7 @@
           <button class="speed-btn" id="speedBtn" type="button">Speed 1.0x</button>
         </div>
       </div>
+      <button class="jump-btn" id="jumpShelf" type="button" aria-label="Back to bookshelf">↑</button>
     </div>
 
     <audio id="audio"></audio>
@@ -770,6 +803,7 @@
       const prevBtn = document.getElementById("prevBtn");
       const nextBtn = document.getElementById("nextBtn");
       const speedBtn = document.getElementById("speedBtn");
+      const jumpShelf = document.getElementById("jumpShelf");
       const audio = document.getElementById("audio");
       const audioNext = document.getElementById("audioNext");
       let currentAudio = audio;
@@ -1861,6 +1895,7 @@
         const next = idx === -1 ? 1.0 : steps[(idx + 1) % steps.length];
         setSpeedRate(next);
       });
+      jumpShelf.addEventListener("click", scrollToBookSection);
 
       chapterText.addEventListener("click", (event) => {
         const target = event.target;
