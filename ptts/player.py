@@ -255,6 +255,27 @@ def _merge_ready(book_dir: Path) -> bool:
     return progress.get("done", 0) >= progress.get("total", 0)
 
 
+def _ffmpeg_install_command() -> str:
+    if sys.platform == "darwin":
+        installer = shutil.which("brew")
+        if installer is None:
+            raise RuntimeError(
+                "ffmpeg not found on PATH. Install Homebrew (https://brew.sh/) "
+                "or install ffmpeg manually, then retry."
+            )
+        install_cmd = f"{installer} install ffmpeg"
+    else:
+        installer = shutil.which("apt-get") or shutil.which("apt")
+        if installer is None:
+            raise RuntimeError(
+                "ffmpeg not found on PATH and apt-get is unavailable. "
+                "Install ffmpeg manually, then retry."
+            )
+        install_cmd = f"{installer} update && {installer} install -y ffmpeg"
+
+    return f"export DEBIAN_FRONTEND=noninteractive; {install_cmd}"
+
+
 def _build_merge_command(
     book_dir: Path,
     output_path: Path,
@@ -279,28 +300,9 @@ def _build_merge_command(
     if not install_ffmpeg:
         return merge_cmd
 
-    install_cmd = ""
-    if sys.platform == "darwin":
-        installer = shutil.which("brew")
-        if installer is None:
-            raise RuntimeError(
-                "ffmpeg not found on PATH. Install Homebrew (https://brew.sh/) "
-                "or install ffmpeg manually, then retry."
-            )
-        install_cmd = f"{installer} install ffmpeg"
-    else:
-        installer = shutil.which("apt-get") or shutil.which("apt")
-        if installer is None:
-            raise RuntimeError(
-                "ffmpeg not found on PATH and apt-get is unavailable. "
-                "Install ffmpeg manually, then retry."
-            )
-        install_cmd = f"{installer} update && {installer} install -y ffmpeg"
+    install_cmd = _ffmpeg_install_command()
     merge_cmd_str = " ".join(shlex.quote(part) for part in merge_cmd)
-    combined = (
-        "export DEBIAN_FRONTEND=noninteractive; "
-        f"{install_cmd} && {merge_cmd_str}"
-    )
+    combined = f"{install_cmd} && {merge_cmd_str}"
     return ["bash", "-lc", combined]
 
 
@@ -371,6 +373,40 @@ def _compute_progress(manifest: dict) -> dict:
     }
 
 
+def _ffmpeg_log_path(repo_root: Path) -> Path:
+    return repo_root / ".cache" / "ffmpeg-install.log"
+
+
+def _spawn_ffmpeg_install(
+    repo_root: Path,
+) -> tuple[Optional["FfmpegJob"], Optional[str]]:
+    if shutil.which("ffmpeg") is not None:
+        return None, None
+    try:
+        install_cmd = _ffmpeg_install_command()
+    except RuntimeError as exc:
+        return None, str(exc)
+
+    log_path = _ffmpeg_log_path(repo_root)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = log_path.open("w", encoding="utf-8")
+    process = subprocess.Popen(
+        ["bash", "-lc", install_cmd],
+        cwd=str(repo_root),
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+    return (
+        FfmpegJob(
+            process=process,
+            started_at=time.time(),
+            log_path=log_path,
+            log_handle=log_handle,
+        ),
+        None,
+    )
+
+
 @dataclass
 class SynthJob:
     book_id: str
@@ -398,6 +434,16 @@ class MergeJob:
     output_path: Path
     install_ffmpeg: bool
     progress_path: Path
+    log_handle: Optional[IO[str]] = None
+    exit_code: Optional[int] = None
+    ended_at: Optional[float] = None
+
+
+@dataclass
+class FfmpegJob:
+    process: subprocess.Popen
+    started_at: float
+    log_path: Path
     log_handle: Optional[IO[str]] = None
     exit_code: Optional[int] = None
     ended_at: Optional[float] = None
@@ -465,6 +511,8 @@ def create_app(root_dir: Path) -> FastAPI:
     repo_root = _find_repo_root(root_dir)
     jobs: dict[str, SynthJob] = {}
     merge_jobs: dict[str, MergeJob] = {}
+    ffmpeg_job: Optional[FfmpegJob] = None
+    ffmpeg_error: Optional[str] = None
 
     app.mount("/audio", StaticFiles(directory=str(root_dir)), name="audio")
 
@@ -778,6 +826,7 @@ def create_app(root_dir: Path) -> FastAPI:
 
     @app.get("/api/synth/status")
     def synth_status(book_id: str) -> JSONResponse:
+        nonlocal ffmpeg_job, ffmpeg_error
         book_dir = _resolve_book_dir(root_dir, book_id)
         manifest_path = book_dir / "tts" / "manifest.json"
         manifest = _load_json(manifest_path)
@@ -807,6 +856,30 @@ def create_app(root_dir: Path) -> FastAPI:
             if manifest_created and manifest_created < started_at:
                 progress = None
 
+        ffmpeg_status = (
+            "installed" if shutil.which("ffmpeg") is not None else "missing"
+        )
+        ffmpeg_log = ""
+        if ffmpeg_job:
+            ffmpeg_log = str(ffmpeg_job.log_path.relative_to(repo_root))
+            ffmpeg_exit = ffmpeg_job.process.poll()
+            if ffmpeg_exit is None:
+                ffmpeg_status = "installing"
+            else:
+                ffmpeg_job.exit_code = ffmpeg_exit
+                ffmpeg_job.ended_at = ffmpeg_job.ended_at or time.time()
+                if ffmpeg_job.log_handle:
+                    ffmpeg_job.log_handle.close()
+                    ffmpeg_job.log_handle = None
+                if ffmpeg_exit != 0:
+                    ffmpeg_status = "error"
+                    if not ffmpeg_error:
+                        ffmpeg_error = (
+                            f"ffmpeg install failed. Check {ffmpeg_log}."
+                        )
+        if ffmpeg_status == "installed":
+            ffmpeg_error = None
+
         log_path = ""
         if job:
             try:
@@ -821,6 +894,9 @@ def create_app(root_dir: Path) -> FastAPI:
             "progress": progress,
             "log_path": log_path,
             "stage": "idle",
+            "ffmpeg_status": ffmpeg_status,
+            "ffmpeg_error": ffmpeg_error,
+            "ffmpeg_log_path": ffmpeg_log,
         }
         if running:
             if not progress or not progress.get("total"):
@@ -833,6 +909,7 @@ def create_app(root_dir: Path) -> FastAPI:
 
     @app.post("/api/synth/start")
     def synth_start(payload: SynthRequest) -> JSONResponse:
+        nonlocal ffmpeg_job, ffmpeg_error
         book_dir = _resolve_book_dir(root_dir, payload.book_id)
         if payload.chunk_mode not in ("sentence", "packed"):
             raise HTTPException(status_code=400, detail="Invalid chunk_mode.")
@@ -845,6 +922,15 @@ def create_app(root_dir: Path) -> FastAPI:
             voice_prompt = resolve_voice_prompt(payload.voice, base_dir=repo_root)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if shutil.which("ffmpeg") is None:
+            if ffmpeg_job and ffmpeg_job.process.poll() is None:
+                pass
+            else:
+                ffmpeg_error = None
+                ffmpeg_job, error = _spawn_ffmpeg_install(repo_root)
+                if error:
+                    ffmpeg_error = error
 
         tts_dir = book_dir / "tts"
         tts_dir.mkdir(parents=True, exist_ok=True)
@@ -987,6 +1073,7 @@ def create_app(root_dir: Path) -> FastAPI:
 
     @app.post("/api/merge/start")
     def merge_start(payload: MergeRequest) -> JSONResponse:
+        nonlocal ffmpeg_job
         book_dir = _resolve_book_dir(root_dir, payload.book_id)
         output_path = _merge_output_path(book_dir)
 
@@ -999,6 +1086,9 @@ def create_app(root_dir: Path) -> FastAPI:
 
         if output_path.exists() and not payload.overwrite:
             raise HTTPException(status_code=409, detail="Output file already exists.")
+
+        if ffmpeg_job and ffmpeg_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="ffmpeg install in progress.")
 
         tts_dir = book_dir / "tts"
         tts_dir.mkdir(parents=True, exist_ok=True)

@@ -2,24 +2,85 @@
 set -euo pipefail
 
 image="ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
-rm_flag=""
-if [ "${PMX_RM:-0}" = "1" ] || [ "${PMX_KEEP:-}" = "0" ]; then
-  rm_flag="--rm"
+namespace="${PMX_NAMESPACE:-ptts}"
+prefix="${namespace}-"
+
+container="${PMX_NAME:-}"
+if [ -z "$container" ]; then
+  base="$(basename "$PWD" | tr -cs 'a-zA-Z0-9_.-' '-')"
+  base="${base#-}"
+  base="${base%-}"
+  if [ -z "$base" ]; then
+    base="repo"
+  fi
+  container="${prefix}${base}"
 fi
-if [ -n "${PMX_OPTS:-}" ]; then
-  # shellcheck disable=SC2086
-  exec podman run $rm_flag -it \
+
+if [ "${PMX_PRUNE:-0}" = "1" ]; then
+  mapfile -t containers < <(podman ps -a --format '{{.Names}}')
+  for name in "${containers[@]}"; do
+    case "$name" in
+      "${prefix}"*) podman rm -f "$name" >/dev/null 2>&1 || true ;;
+    esac
+  done
+fi
+
+if [ "${PMX_RM:-0}" = "1" ]; then
+  if [ -n "${PMX_OPTS:-}" ]; then
+    # shellcheck disable=SC2086
+    exec podman run --rm -it \
+      -v "$PWD":/work -w /work \
+      -e HF_HOME=/work/.cache/huggingface \
+      -e UV_CACHE_DIR=/work/.uv-cache \
+      $PMX_OPTS \
+      "$image" \
+      "$@"
+  fi
+
+  exec podman run --rm -it \
     -v "$PWD":/work -w /work \
     -e HF_HOME=/work/.cache/huggingface \
     -e UV_CACHE_DIR=/work/.uv-cache \
-    $PMX_OPTS \
     "$image" \
     "$@"
 fi
 
-exec podman run $rm_flag -it \
-  -v "$PWD":/work -w /work \
+if [ "${PMX_RESET:-0}" = "1" ]; then
+  podman rm -f "$container" >/dev/null 2>&1 || true
+fi
+
+if ! podman container exists "$container" >/dev/null 2>&1; then
+  if [ -n "${PMX_OPTS:-}" ]; then
+    # shellcheck disable=SC2086
+    podman run -d --name "$container" \
+      -v "$PWD":/work -w /work \
+      -e HF_HOME=/work/.cache/huggingface \
+      -e UV_CACHE_DIR=/work/.uv-cache \
+      $PMX_OPTS \
+      "$image" \
+      sleep infinity
+  else
+    podman run -d --name "$container" \
+      -v "$PWD":/work -w /work \
+      -e HF_HOME=/work/.cache/huggingface \
+      -e UV_CACHE_DIR=/work/.uv-cache \
+      "$image" \
+      sleep infinity
+  fi
+else
+  if [ -n "${PMX_OPTS:-}" ]; then
+    echo "pmx: container '$container' already exists; PMX_OPTS ignored. Use PMX_RESET=1 to recreate." >&2
+  fi
+fi
+
+running="$(podman inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)"
+if [ "$running" != "true" ]; then
+  podman start "$container" >/dev/null
+fi
+
+exec podman exec -it \
+  -w /work \
   -e HF_HOME=/work/.cache/huggingface \
   -e UV_CACHE_DIR=/work/.uv-cache \
-  "$image" \
+  "$container" \
   "$@"

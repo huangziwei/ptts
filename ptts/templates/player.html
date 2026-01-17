@@ -1052,6 +1052,7 @@
           </div>
           <div class="progress-text" id="progressText">Idle.</div>
           <div class="progress-detail" id="progressDetail"></div>
+          <div class="merge-status" id="ffmpegStatus"></div>
           <div class="merge-status" id="mergeStatus"></div>
         </section>
         <div class="reader-body">
@@ -1266,6 +1267,7 @@
       const progressFill = document.getElementById("progressFill");
       const progressText = document.getElementById("progressText");
       const progressDetail = document.getElementById("progressDetail");
+      const ffmpegStatus = document.getElementById("ffmpegStatus");
       const mergeStatus = document.getElementById("mergeStatus");
       const ttsPanel = document.getElementById("ttsPanel");
       const ttsToggle = document.getElementById("ttsToggle");
@@ -1562,6 +1564,7 @@
         chapterText.innerHTML =
           "<p class=\"empty-state\">Pick a book on the left to start.</p>";
         chapterList.innerHTML = "";
+        ffmpegStatus.textContent = "";
         editPanel.classList.remove("open");
         editToggle.textContent = "Edit";
         state.editOpen = false;
@@ -2014,6 +2017,18 @@
           bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "Waiting for audio.";
         }
         startTts.disabled = false;
+        const ffmpegState = data.ffmpeg_status || "unknown";
+        if (ffmpegState === "installing") {
+          ffmpegStatus.textContent = "Installing ffmpeg...";
+        } else if (ffmpegState === "error") {
+          ffmpegStatus.textContent =
+            data.ffmpeg_error || "ffmpeg install failed.";
+        } else if (ffmpegState === "missing") {
+          ffmpegStatus.textContent =
+            data.ffmpeg_error || "ffmpeg missing: merge will fail.";
+        } else {
+          ffmpegStatus.textContent = "";
+        }
         updateClearButtonState();
       }
 
