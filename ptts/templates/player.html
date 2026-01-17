@@ -686,7 +686,7 @@
             <h3>Chapters</h3>
             <div id="chapterList"></div>
           </aside>
-          <section class="text-pane">
+          <section class="text-pane" id="textPane">
             <h2 class="chapter-title" id="chapterTitle">Waiting for a book...</h2>
             <div class="chapter-text" id="chapterText">
               <p class="empty-state">Pick a book on the left to start.</p>
@@ -824,6 +824,16 @@
           return;
         }
         const target = document.getElementById("bookSection");
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }
+
+      function scrollToTextPane() {
+        if (!isMobileLayout()) {
+          return;
+        }
+        const target = document.getElementById("textPane");
         if (target) {
           target.scrollIntoView({ behavior: "smooth", block: "start" });
         }
@@ -1466,6 +1476,7 @@
             state.currentQueueIndex = state.chapterOffsets[chapter.id] || 0;
             setIdleStatus();
             updateUrl(state.book ? state.book.id : null, chapter.id);
+            scrollToTextPane();
           });
           chapterList.appendChild(item);
         });
