@@ -431,6 +431,10 @@ class PlaybackPayload(BaseModel):
     bookmarks: List[dict] = []
 
 
+class DeleteBookRequest(BaseModel):
+    book_id: str
+
+
 def create_app(root_dir: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app = FastAPI()
@@ -463,6 +467,19 @@ def create_app(root_dir: Path) -> FastAPI:
     def get_book(book_id: str) -> JSONResponse:
         book_dir = _resolve_book_dir(root_dir, book_id)
         return _no_store(_book_details(book_dir))
+
+    @app.post("/api/books/delete")
+    def delete_book(payload: DeleteBookRequest) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop TTS before deleting.")
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop merge before deleting.")
+        if book_dir.exists():
+            shutil.rmtree(book_dir)
+        return _no_store({"status": "deleted", "book_id": payload.book_id})
 
     @app.get("/api/voices")
     def list_voices() -> JSONResponse:

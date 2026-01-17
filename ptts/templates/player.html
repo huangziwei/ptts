@@ -365,6 +365,40 @@
         font-size: 14px;
       }
 
+      .book-actions {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .book-menu {
+        position: relative;
+      }
+
+      .menu-panel {
+        position: absolute;
+        top: 42px;
+        right: 0;
+        background: #fffdf9;
+        border: 1px solid #eadfd2;
+        border-radius: 12px;
+        box-shadow: 0 12px 24px rgba(30, 25, 20, 0.18);
+        padding: 8px;
+        display: none;
+        min-width: 160px;
+        z-index: 10;
+      }
+
+      .menu-panel.open {
+        display: block;
+      }
+
+      .menu-panel button {
+        width: 100%;
+        text-align: left;
+      }
+
       .reader-body {
         display: grid;
         grid-template-columns: 230px 1fr;
@@ -732,9 +766,26 @@
         transition: transform 0.2s ease, background 0.2s ease;
       }
 
+      .btn.circle {
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+      }
+
       .btn.primary {
         background: var(--accent);
         border-color: var(--accent);
+        color: #fff;
+      }
+
+      .btn.danger {
+        background: #b04838;
+        border-color: #b04838;
         color: #fff;
       }
 
@@ -964,6 +1015,14 @@
             <h1 class="book-title" id="bookTitle">Select a book</h1>
             <p class="book-subtitle" id="bookMeta">No book loaded.</p>
             <p class="book-subtitle" id="bookStatus"></p>
+            <div class="book-actions">
+              <div class="book-menu">
+                <button class="btn circle" id="bookMenuBtn" type="button" aria-haspopup="true" aria-expanded="false" disabled aria-label="More">⋯</button>
+                <div class="menu-panel" id="bookMenuPanel">
+                  <button class="btn danger" id="deleteBookBtn" type="button" disabled>Delete book</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         <section class="tts-panel" id="ttsPanel">
@@ -1173,6 +1232,9 @@
       const editCleanActions = document.getElementById("editCleanActions");
       const saveCleanBtn = document.getElementById("saveCleanBtn");
       const cancelCleanBtn = document.getElementById("cancelCleanBtn");
+      const bookMenuBtn = document.getElementById("bookMenuBtn");
+      const bookMenuPanel = document.getElementById("bookMenuPanel");
+      const deleteBookBtn = document.getElementById("deleteBookBtn");
       const rulesDrop = document.getElementById("rulesDrop");
       const rulesCutoff = document.getElementById("rulesCutoff");
       const rulesRemove = document.getElementById("rulesRemove");
@@ -1455,6 +1517,45 @@
         }
       }
 
+      function clearBookView() {
+        state.book = null;
+        state.chapters = [];
+        state.chapterMap = {};
+        state.queue = [];
+        state.chapterOffsets = {};
+        state.currentChapterId = null;
+        state.currentQueueIndex = 0;
+        state.activeQueueIndex = null;
+        state.audioBase = "";
+        state.padMs = 0;
+        state.mergeRunning = false;
+        state.mergeReady = false;
+        state.mergeExitCode = null;
+        state.mergeOutputExists = false;
+        state.mergeStage = "idle";
+        state.synthRunning = false;
+        state.playback = { lastPlayed: null, bookmarks: [] };
+        resetAudioPlayers();
+        bookTitle.textContent = "Select a book";
+        bookMeta.textContent = "No book loaded.";
+        bookStatus.textContent = "";
+        coverLarge.innerHTML = "";
+        chapterTitle.textContent = "Waiting for a book...";
+        chapterText.innerHTML =
+          "<p class=\"empty-state\">Pick a book on the left to start.</p>";
+        chapterList.innerHTML = "";
+        editPanel.classList.remove("open");
+        editToggle.textContent = "Edit";
+        state.editOpen = false;
+        state.previewChapterIndex = null;
+        state.previewSelectedTitle = "";
+        state.previewSelectedKind = "";
+        updateUrl(null, null);
+        updateMergeButtonState();
+        updateClearButtonState();
+        updateMarks();
+      }
+
       async function loadPlayback() {
         if (!state.book) {
           return;
@@ -1572,6 +1673,7 @@
           state.needsRechunk = state.chapters.length > 0 && !hasSpanData;
           renderBooks();
           renderBookHeader();
+          updateDeleteButtonState();
           renderChapters();
           if (state.chapters.length) {
             const desired = chapterId || state.chapters[0].id;
@@ -1903,6 +2005,17 @@
 
       function updateClearButtonState() {
         clearTtsBtn.disabled = state.synthRunning || state.mergeRunning;
+        updateDeleteButtonState();
+      }
+
+      function updateDeleteButtonState() {
+        const disabled = !state.book || state.synthRunning || state.mergeRunning;
+        deleteBookBtn.disabled = disabled;
+        bookMenuBtn.disabled = disabled;
+        if (disabled) {
+          bookMenuPanel.classList.remove("open");
+          bookMenuBtn.setAttribute("aria-expanded", "false");
+        }
       }
 
       function updateMergeUI(data) {
@@ -1928,6 +2041,19 @@
           mergeStatus.textContent = "";
         }
         updateClearButtonState();
+      }
+
+      function toggleBookMenu() {
+        if (bookMenuBtn.disabled) {
+          return;
+        }
+        const open = bookMenuPanel.classList.toggle("open");
+        bookMenuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      }
+
+      function closeBookMenu() {
+        bookMenuPanel.classList.remove("open");
+        bookMenuBtn.setAttribute("aria-expanded", "false");
       }
 
       async function startSynth() {
@@ -1981,6 +2107,37 @@
         } catch (err) {
           mergeStatus.textContent = err.message || "Merge failed to start.";
           setStatus(err.message || "Merge failed to start.");
+        }
+      }
+
+      async function deleteBook() {
+        if (!state.book) {
+          return;
+        }
+        if (state.synthRunning || state.mergeRunning) {
+          setStatus("Stop TTS or merge before deleting.");
+          return;
+        }
+        const label = state.book.title || state.book.id;
+        const confirmed = window.confirm(
+          `Delete "${label}" and all files in this book folder?`
+        );
+        if (!confirmed) {
+          return;
+        }
+        closeBookMenu();
+        setStatus("Deleting book...");
+        try {
+          await fetchJson("/api/books/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id: state.book.id }),
+          });
+          clearBookView();
+          await loadBooks();
+          setStatus("Book deleted.");
+        } catch (err) {
+          setStatus(err.message || "Failed to delete book.");
         }
       }
 
@@ -2755,6 +2912,21 @@
       startTts.addEventListener("click", toggleSynth);
       mergeBtn.addEventListener("click", startMerge);
       clearTtsBtn.addEventListener("click", clearTtsCache);
+      bookMenuBtn.addEventListener("click", toggleBookMenu);
+      document.addEventListener("click", (event) => {
+        if (!bookMenuPanel.classList.contains("open")) {
+          return;
+        }
+        const target = event.target;
+        if (
+          target === bookMenuBtn ||
+          bookMenuPanel.contains(target)
+        ) {
+          return;
+        }
+        closeBookMenu();
+      });
+      deleteBookBtn.addEventListener("click", deleteBook);
       editToggle.addEventListener("click", toggleEditPanel);
       sanitizeBtn.addEventListener("click", runSanitize);
       editReload.addEventListener("click", () => loadPreview(state.previewChapterIndex));
