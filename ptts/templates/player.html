@@ -664,6 +664,7 @@
     </div>
 
     <audio id="audio"></audio>
+    <audio id="audioNext" preload="auto"></audio>
 
     <script>
       const state = {
@@ -693,6 +694,9 @@
           bookmarks: [],
         },
         voicePreference: null,
+        preloadedIndex: null,
+        padMs: 0,
+        gaplessArmedIndex: null,
       };
 
       const bookList = document.getElementById("bookList");
@@ -710,6 +714,9 @@
       const speedInput = document.getElementById("speedInput");
       const speedValue = document.getElementById("speedValue");
       const audio = document.getElementById("audio");
+      const audioNext = document.getElementById("audioNext");
+      let currentAudio = audio;
+      let nextAudio = audioNext;
       const bookmarkBtn = document.getElementById("bookmarkBtn");
       const bookmarkList = document.getElementById("bookmarkList");
       const bookmarkPanel = document.getElementById("bookmarkPanel");
@@ -980,10 +987,12 @@
 
       async function selectBook(bookId, chapterId) {
         state.loadingBook = true;
+        resetAudioPlayers();
         try {
           const data = await fetchJson(`/api/books/${bookId}`);
           state.book = data.book;
           state.chapters = data.chapters || [];
+          state.padMs = data.book ? data.book.pad_ms || 0 : 0;
           state.playback = { lastPlayed: null, bookmarks: [] };
           state.chapterMap = {};
           state.chapters.forEach((chapter) => {
@@ -1498,15 +1507,127 @@
         return `${state.audioBase}/${item.chapterId}/${pad6(chunkNum)}.wav`;
       }
 
+      function resetAudioPlayers() {
+        [audio, audioNext].forEach((element) => {
+          element.ontimeupdate = null;
+          element.pause();
+          element.removeAttribute("src");
+          element.load();
+        });
+        currentAudio = audio;
+        nextAudio = audioNext;
+        state.preloadedIndex = null;
+        state.gaplessArmedIndex = null;
+        playBtn.textContent = "Play";
+      }
+
+      function setPlaybackRate(rate) {
+        currentAudio.playbackRate = rate;
+        nextAudio.playbackRate = rate;
+      }
+
+      function clearPreload() {
+        state.preloadedIndex = null;
+        nextAudio.pause();
+        nextAudio.removeAttribute("src");
+        nextAudio.load();
+      }
+
+      function usePreloadedAudio(index) {
+        if (state.preloadedIndex !== index || !nextAudio.src) {
+          return false;
+        }
+        currentAudio.pause();
+        [currentAudio, nextAudio] = [nextAudio, currentAudio];
+        clearPreload();
+        return true;
+      }
+
+      function clearGapless() {
+        state.gaplessArmedIndex = null;
+        currentAudio.ontimeupdate = null;
+      }
+
+      function gaplessTailSeconds() {
+        const padMs = Number(state.padMs) || 0;
+        if (!padMs) {
+          return 0;
+        }
+        return Math.min(0.2, padMs / 1000);
+      }
+
+      function armGapless(index) {
+        clearGapless();
+        const tailSec = gaplessTailSeconds();
+        if (!tailSec) {
+          return;
+        }
+        state.gaplessArmedIndex = index;
+        currentAudio.ontimeupdate = () => {
+          if (state.gaplessArmedIndex !== index) {
+            return;
+          }
+          if (currentAudio.paused) {
+            return;
+          }
+          const duration = currentAudio.duration;
+          if (!duration || Number.isNaN(duration)) {
+            return;
+          }
+          const remaining = duration - currentAudio.currentTime;
+          if (remaining > tailSec) {
+            return;
+          }
+          currentAudio.ontimeupdate = null;
+          const nextIndex = index + 1;
+          if (state.preloadedIndex === nextIndex && nextAudio.src) {
+            playIndex(nextIndex);
+          }
+        };
+      }
+
+      async function preloadIndex(index) {
+        if (!state.queue.length) {
+          return;
+        }
+        if (index < 0 || index >= state.queue.length) {
+          clearPreload();
+          return;
+        }
+        if (state.preloadedIndex === index && nextAudio.src) {
+          return;
+        }
+        const item = state.queue[index];
+        let available = false;
+        if (state.preloadedIndex === index && nextAudio.src) {
+          available = true;
+        } else {
+          try {
+            available = await chunkExists(item);
+          } catch (err) {
+            available = false;
+          }
+        }
+        if (!available) {
+          return;
+        }
+        nextAudio.src = chunkUrl(item);
+        nextAudio.load();
+        nextAudio.playbackRate = parseFloat(speedInput.value);
+        state.preloadedIndex = index;
+      }
+
       async function playIndex(index) {
         if (!state.queue.length) {
           return;
         }
         if (index < 0 || index >= state.queue.length) {
           setStatus("End of book.");
-          audio.pause();
+          currentAudio.pause();
+          clearGapless();
           return;
         }
+        clearGapless();
         const item = state.queue[index];
         state.currentQueueIndex = index;
         setLastPlayed(index);
@@ -1531,10 +1652,17 @@
         }
         state.waitingFor = null;
         setActiveChunk(index, false);
-        audio.src = chunkUrl(item);
-        audio.playbackRate = parseFloat(speedInput.value);
+        const usedPreload = usePreloadedAudio(index);
+        if (!usedPreload) {
+          clearPreload();
+          currentAudio.pause();
+          currentAudio.src = chunkUrl(item);
+          currentAudio.load();
+        }
+        const rate = parseFloat(speedInput.value);
+        setPlaybackRate(rate);
         try {
-          await audio.play();
+          await currentAudio.play();
           setStatus(
             `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${state.queue.length}`
           );
@@ -1542,6 +1670,8 @@
         } catch (err) {
           setStatus("Press Play to start audio.");
         }
+        armGapless(index);
+        void preloadIndex(index + 1);
       }
 
       function waitForChunk(index) {
@@ -1561,14 +1691,15 @@
         if (!state.queue.length) {
           return;
         }
-        if (audio.paused) {
+        if (currentAudio.paused) {
           const lastIndex = getLastPlayed();
           const startIndex = lastIndex === null ? 0 : lastIndex;
           playIndex(startIndex);
         } else {
-          audio.pause();
+          currentAudio.pause();
           playBtn.textContent = "Play";
           setIdleStatus();
+          clearGapless();
         }
       }
 
@@ -1626,14 +1757,19 @@
           ttsPanel.classList.contains("collapsed") ? "1" : "0"
         );
       });
-      audio.addEventListener("ended", () => {
+      function handleEnded(event) {
+        if (event.target !== currentAudio) {
+          return;
+        }
         playIndex(state.currentQueueIndex + 1);
-      });
+      }
+      audio.addEventListener("ended", handleEnded);
+      audioNext.addEventListener("ended", handleEnded);
 
       speedInput.addEventListener("input", () => {
         const val = parseFloat(speedInput.value);
         speedValue.textContent = `${val.toFixed(2)}x`;
-        audio.playbackRate = val;
+        setPlaybackRate(val);
       });
 
       chapterText.addEventListener("click", (event) => {

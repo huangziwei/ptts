@@ -77,7 +77,12 @@ def _book_details(book_dir: Path) -> dict:
 
     manifest = _load_json(book_dir / "tts" / "manifest.json")
     chapters: List[dict] = []
+    pad_ms = 0
     if manifest and isinstance(manifest.get("chapters"), list):
+        try:
+            pad_ms = int(manifest.get("pad_ms") or 0)
+        except (TypeError, ValueError):
+            pad_ms = 0
         for entry in manifest["chapters"]:
             chunk_spans = entry.get("chunk_spans", [])
             if not isinstance(chunk_spans, list):
@@ -106,6 +111,7 @@ def _book_details(book_dir: Path) -> dict:
             "year": metadata.get("year") or "",
             "cover_url": cover_url,
             "has_audio": bool(chapters),
+            "pad_ms": pad_ms,
         },
         "chapters": chapters,
         "audio_base": f"/audio/{book_dir.name}/tts/segments",
