@@ -556,8 +556,14 @@
         font-size: 13px;
       }
 
-      .speed input[type="range"] {
-        accent-color: var(--accent-2);
+      .speed-btn {
+        border: 1px solid #d8caba;
+        background: #fff;
+        color: var(--ink);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-weight: 600;
+        cursor: pointer;
       }
 
       @keyframes fade-up {
@@ -692,9 +698,7 @@
           </div>
         </div>
         <div class="speed">
-          Speed
-          <input id="speedInput" type="range" min="0.8" max="1.4" step="0.05" value="1" />
-          <span id="speedValue">1.0x</span>
+          <button class="speed-btn" id="speedBtn" type="button">Speed 1.0x</button>
         </div>
       </div>
     </div>
@@ -733,6 +737,7 @@
         preloadedIndex: null,
         padMs: 0,
         gaplessArmedIndex: null,
+        playbackRate: 1.0,
       };
 
       const bookList = document.getElementById("bookList");
@@ -747,8 +752,7 @@
       const playBtn = document.getElementById("playBtn");
       const prevBtn = document.getElementById("prevBtn");
       const nextBtn = document.getElementById("nextBtn");
-      const speedInput = document.getElementById("speedInput");
-      const speedValue = document.getElementById("speedValue");
+      const speedBtn = document.getElementById("speedBtn");
       const audio = document.getElementById("audio");
       const audioNext = document.getElementById("audioNext");
       let currentAudio = audio;
@@ -1562,6 +1566,12 @@
         nextAudio.playbackRate = rate;
       }
 
+      function setSpeedRate(rate) {
+        state.playbackRate = rate;
+        speedBtn.textContent = `Speed ${rate.toFixed(1)}x`;
+        setPlaybackRate(rate);
+      }
+
       function clearPreload() {
         state.preloadedIndex = null;
         nextAudio.pause();
@@ -1649,7 +1659,7 @@
         }
         nextAudio.src = chunkUrl(item);
         nextAudio.load();
-        nextAudio.playbackRate = parseFloat(speedInput.value);
+        nextAudio.playbackRate = state.playbackRate || 1;
         state.preloadedIndex = index;
       }
 
@@ -1695,8 +1705,7 @@
           currentAudio.src = chunkUrl(item);
           currentAudio.load();
         }
-        const rate = parseFloat(speedInput.value);
-        setPlaybackRate(rate);
+        setPlaybackRate(state.playbackRate || 1);
         try {
           await currentAudio.play();
           setStatus(
@@ -1802,10 +1811,12 @@
       audio.addEventListener("ended", handleEnded);
       audioNext.addEventListener("ended", handleEnded);
 
-      speedInput.addEventListener("input", () => {
-        const val = parseFloat(speedInput.value);
-        speedValue.textContent = `${val.toFixed(2)}x`;
-        setPlaybackRate(val);
+      speedBtn.addEventListener("click", () => {
+        const steps = [0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
+        const current = state.playbackRate || 1.0;
+        const idx = steps.findIndex((val) => Math.abs(val - current) < 0.01);
+        const next = idx === -1 ? 1.0 : steps[(idx + 1) % steps.length];
+        setSpeedRate(next);
       });
 
       chapterText.addEventListener("click", (event) => {
