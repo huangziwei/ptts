@@ -18,6 +18,7 @@
         --highlight: #fff0c2;
         --shadow: 0 12px 30px rgba(32, 28, 24, 0.15);
         --radius: 16px;
+        --cover-thumb-height: 70px;
         --ui: "Work Sans", "Segoe UI", sans-serif;
         --read: "Source Serif 4", Georgia, serif;
         --title: "Fraunces", "Times New Roman", serif;
@@ -79,6 +80,10 @@
         background: #fffdf9;
         cursor: pointer;
         transition: border 0.2s ease, background 0.2s ease;
+        min-height: var(--cover-thumb-height);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
       }
 
       .upload-zone strong {
@@ -144,7 +149,7 @@
 
       .book-cover {
         width: 52px;
-        height: 70px;
+        height: var(--cover-thumb-height);
         border-radius: 10px;
         background: linear-gradient(150deg, #f2cc8f, #e07a5f);
         overflow: hidden;
