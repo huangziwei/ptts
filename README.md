@@ -86,5 +86,4 @@ PMX_OPTS="-p 1912:1912" ./bin/pmx uv run ptts play \
   --port 1912
 ```
 
-Open `http://localhost:1912` to browse books, open the “Edit” panel to adjust sanitize rules, re-sanitize chapters, start/stop TTS, and play audio.
-
+Open `http://localhost:1912` to browse books, use the “Edit” panel to adjust sanitize rules, re-sanitize chapters (this clears TTS cache), start/stop TTS, and play audio.

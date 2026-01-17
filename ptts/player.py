@@ -49,13 +49,20 @@ def _rules_path(base_dir: Path) -> Path:
 
 
 def _load_rules_payload(base_dir: Path) -> dict:
-    rules = sanitize.load_rules(None, base_dir)
-    return {
-        "replace_defaults": rules.replace_defaults,
-        "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
-        "section_cutoff_patterns": rules.section_cutoff_patterns,
-        "remove_patterns": rules.remove_patterns,
-    }
+    rules_path = _rules_path(base_dir)
+    if not rules_path.exists():
+        return {
+            "replace_defaults": False,
+            "drop_chapter_title_patterns": [],
+            "section_cutoff_patterns": [],
+            "remove_patterns": [],
+        }
+    data = json.loads(rules_path.read_text(encoding="utf-8"))
+    data.setdefault("replace_defaults", False)
+    data.setdefault("drop_chapter_title_patterns", [])
+    data.setdefault("section_cutoff_patterns", [])
+    data.setdefault("remove_patterns", [])
+    return data
 
 
 def _write_rules_payload(base_dir: Path, payload: dict) -> None:
@@ -67,6 +74,9 @@ def _write_rules_payload(base_dir: Path, payload: dict) -> None:
         "section_cutoff_patterns": list(payload.get("section_cutoff_patterns", [])),
         "remove_patterns": list(payload.get("remove_patterns", [])),
     }
+    if not data["replace_defaults"]:
+        for key, defaults in sanitize.DEFAULT_RULES.items():
+            data[key] = [entry for entry in data[key] if entry not in defaults]
     rules_path = _rules_path(base_dir)
     rules_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(rules_path, data)
@@ -576,7 +586,10 @@ def create_app(root_dir: Path) -> FastAPI:
         merge_job = merge_jobs.get(payload.book_id)
         if merge_job and merge_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="Stop merge before sanitizing.")
-        sanitize.sanitize_book(book_dir=book_dir, overwrite=True, base_dir=repo_root)
+        try:
+            sanitize.sanitize_book(book_dir=book_dir, overwrite=True, base_dir=repo_root)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         tts_dir = book_dir / "tts"
         tts_cleared = False
         if tts_dir.exists():
