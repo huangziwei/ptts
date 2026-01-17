@@ -594,9 +594,17 @@
       }
 
       .edit-block h4 {
-        margin: 0 0 8px;
+        margin: 0;
         font-size: 13px;
         color: var(--muted);
+      }
+
+      .edit-block-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
       }
 
       .edit-block pre {
@@ -604,6 +612,25 @@
         white-space: pre-wrap;
         line-height: 1.5;
         font-size: 13px;
+      }
+
+      .edit-clean-textarea {
+        width: 100%;
+        min-height: 220px;
+        border: 1px solid #eadfd2;
+        border-radius: 8px;
+        padding: 8px;
+        font-family: var(--read);
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--ink);
+      }
+
+      .edit-clean-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 8px;
       }
 
       .edit-panel mark {
@@ -1008,12 +1035,22 @@
               </div>
               <div class="panel edit-split">
                 <div class="edit-block">
-                  <h4>Raw</h4>
+                  <div class="edit-block-header">
+                    <h4>Raw</h4>
+                  </div>
                   <pre id="editRaw"></pre>
                 </div>
                 <div class="edit-block">
-                  <h4>Clean</h4>
+                  <div class="edit-block-header">
+                    <h4>Clean</h4>
+                    <button class="btn small" id="editCleanBtn" type="button">Edit</button>
+                  </div>
                   <pre id="editClean"></pre>
+                  <textarea id="editCleanInput" class="edit-clean-textarea" hidden></textarea>
+                  <div class="edit-clean-actions" id="editCleanActions" hidden>
+                    <button class="btn small" id="saveCleanBtn" type="button">Save</button>
+                    <button class="btn small" id="cancelCleanBtn" type="button">Cancel</button>
+                  </div>
                 </div>
               </div>
               <div class="panel edit-rules">
@@ -1104,6 +1141,9 @@
         rulesLoading: false,
         rulesSaveTimer: null,
         ingestRunning: false,
+        cleanEditing: false,
+        cleanEditOriginal: "",
+        cleanEditChapter: null,
       };
 
       const bookList = document.getElementById("bookList");
@@ -1128,6 +1168,11 @@
       const dropChapterBtn = document.getElementById("dropChapterBtn");
       const editRaw = document.getElementById("editRaw");
       const editClean = document.getElementById("editClean");
+      const editCleanBtn = document.getElementById("editCleanBtn");
+      const editCleanInput = document.getElementById("editCleanInput");
+      const editCleanActions = document.getElementById("editCleanActions");
+      const saveCleanBtn = document.getElementById("saveCleanBtn");
+      const cancelCleanBtn = document.getElementById("cancelCleanBtn");
       const rulesDrop = document.getElementById("rulesDrop");
       const rulesCutoff = document.getElementById("rulesCutoff");
       const rulesRemove = document.getElementById("rulesRemove");
@@ -2134,6 +2179,87 @@
         applyLastPlayedHighlight();
       }
 
+      function hasUnsavedCleanChanges() {
+        return (
+          state.cleanEditing &&
+          editCleanInput.value !== state.cleanEditOriginal
+        );
+      }
+
+      function setCleanEditMode(enabled) {
+        state.cleanEditing = enabled;
+        editCleanInput.hidden = !enabled;
+        editCleanActions.hidden = !enabled;
+        editClean.hidden = enabled;
+        editCleanBtn.disabled = enabled;
+        editReload.disabled = enabled;
+        dropChapterBtn.disabled =
+          enabled ||
+          !state.previewSelectedTitle ||
+          state.previewSelectedKind === "title";
+        if (enabled) {
+          const text = editClean.textContent || "";
+          editCleanInput.value = text;
+          state.cleanEditOriginal = text;
+          state.cleanEditChapter = state.previewChapterIndex;
+          editStatus.textContent = "Editing clean text...";
+          setTimeout(() => editCleanInput.focus(), 0);
+        } else {
+          editCleanInput.value = "";
+          state.cleanEditOriginal = "";
+          state.cleanEditChapter = null;
+        }
+      }
+
+      function startCleanEdit() {
+        if (!state.book || state.previewChapterIndex === null) {
+          editStatus.textContent = "Select a chapter to edit.";
+          return;
+        }
+        setCleanEditMode(true);
+      }
+
+      function cancelCleanEdit() {
+        if (!state.cleanEditing) {
+          return;
+        }
+        if (hasUnsavedCleanChanges()) {
+          const discard = window.confirm("Discard unsaved clean text edits?");
+          if (!discard) {
+            return;
+          }
+        }
+        setCleanEditMode(false);
+        editStatus.textContent = "Edit canceled.";
+      }
+
+      async function saveCleanText() {
+        if (!state.book || state.previewChapterIndex === null) {
+          return;
+        }
+        const text = editCleanInput.value || "";
+        editStatus.textContent = "Saving clean text...";
+        try {
+          const data = await fetchJson("/api/sanitize/clean", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              book_id: state.book.id,
+              chapter_index: state.previewChapterIndex,
+              text,
+            }),
+          });
+          setCleanEditMode(false);
+          editStatus.textContent = data.tts_cleared
+            ? "Saved clean text. TTS cache cleared."
+            : "Saved clean text.";
+          await selectBook(state.book.id, state.currentChapterId);
+          await loadPreview(state.previewChapterIndex);
+        } catch (err) {
+          editStatus.textContent = err.message || "Failed to save clean text.";
+        }
+      }
+
       function parseRuleLines(text) {
         return text
           .split("\n")
@@ -2236,6 +2362,22 @@
         if (!state.book) {
           return;
         }
+        if (
+          state.cleanEditing &&
+          chapterIndex !== undefined &&
+          chapterIndex !== null &&
+          chapterIndex !== state.cleanEditChapter
+        ) {
+          if (hasUnsavedCleanChanges()) {
+            const discard = window.confirm(
+              "Discard unsaved clean text edits?"
+            );
+            if (!discard) {
+              return;
+            }
+          }
+          setCleanEditMode(false);
+        }
         const params = new URLSearchParams();
         params.set("book_id", state.book.id);
         if (chapterIndex) {
@@ -2253,12 +2395,24 @@
           } else {
             editSelectedTitle.textContent = "Select a chapter";
           }
-          dropChapterBtn.disabled = !selected.title || selected.kind === "title";
+          dropChapterBtn.disabled =
+            !selected.title || selected.kind === "title" || state.cleanEditing;
           editRaw.innerHTML = data.raw_text || "";
-          editClean.textContent = data.clean_text || "";
+          const selectedIndex =
+            typeof selected.index === "number"
+              ? selected.index
+              : state.previewChapterIndex;
+          const preserveClean =
+            state.cleanEditing && state.cleanEditChapter === selectedIndex;
+          if (!preserveClean) {
+            editClean.textContent = data.clean_text || "";
+            editCleanInput.value = data.clean_text || "";
+          }
           renderEditChapterList(data.chapters || [], selected.index);
           renderDroppedList(data.dropped || []);
-          applyRulesToForm(data.rules || {});
+          if (!state.cleanEditing) {
+            applyRulesToForm(data.rules || {});
+          }
           editStatus.textContent = "";
         } catch (err) {
           editStatus.textContent = err.message || "Failed to load preview.";
@@ -2271,6 +2425,8 @@
         editToggle.textContent = state.editOpen ? "Close" : "Edit";
         if (state.editOpen) {
           loadPreview(state.previewChapterIndex);
+        } else if (state.cleanEditing) {
+          setCleanEditMode(false);
         }
       }
 
@@ -2603,6 +2759,9 @@
       sanitizeBtn.addEventListener("click", runSanitize);
       editReload.addEventListener("click", () => loadPreview(state.previewChapterIndex));
       dropChapterBtn.addEventListener("click", dropSelectedChapter);
+      editCleanBtn.addEventListener("click", startCleanEdit);
+      saveCleanBtn.addEventListener("click", saveCleanText);
+      cancelCleanBtn.addEventListener("click", cancelCleanEdit);
       rulesDrop.addEventListener("input", scheduleRulesSave);
       rulesCutoff.addEventListener("input", scheduleRulesSave);
       rulesRemove.addEventListener("input", scheduleRulesSave);

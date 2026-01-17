@@ -133,6 +133,14 @@ def _pick_preview_chapter(clean_toc: dict, chapter_index: Optional[int]) -> dict
     return chapters[0]
 
 
+def _find_clean_chapter(clean_toc: dict, chapter_index: int) -> Optional[dict]:
+    chapters = clean_toc.get("chapters", []) if isinstance(clean_toc, dict) else []
+    for entry in chapters:
+        if entry.get("index") == chapter_index:
+            return entry
+    return None
+
+
 def _resolve_raw_path(book_dir: Path, raw_toc: dict, clean_entry: dict) -> Optional[Path]:
     source_index = clean_entry.get("source_index")
     if source_index is None:
@@ -410,6 +418,12 @@ class ChapterAction(BaseModel):
 
 class SanitizeRequest(BaseModel):
     book_id: str
+
+
+class CleanEditPayload(BaseModel):
+    book_id: str
+    chapter_index: int
+    text: str
 
 
 class PlaybackPayload(BaseModel):
@@ -692,6 +706,36 @@ def create_app(root_dir: Path) -> FastAPI:
             shutil.rmtree(tts_dir)
             tts_cleared = True
         return _no_store({"status": "ok", "tts_cleared": tts_cleared})
+
+    @app.post("/api/sanitize/clean")
+    def sanitize_clean(payload: CleanEditPayload) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop TTS before editing text.")
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop merge before editing text.")
+
+        clean_toc = _load_json(book_dir / "clean" / "toc.json")
+        if not clean_toc:
+            raise HTTPException(status_code=404, detail="Missing clean/toc.json.")
+        entry = _find_clean_chapter(clean_toc, payload.chapter_index)
+        rel_path = entry.get("path") if entry else None
+        if not rel_path:
+            raise HTTPException(status_code=404, detail="Chapter not found.")
+        clean_path = book_dir / rel_path
+        clean_path.parent.mkdir(parents=True, exist_ok=True)
+        clean_path.write_text(payload.text.rstrip() + "\n", encoding="utf-8")
+
+        tts_dir = book_dir / "tts"
+        tts_cleared = False
+        if tts_dir.exists():
+            shutil.rmtree(tts_dir)
+            tts_cleared = True
+        return _no_store(
+            {"status": "ok", "chapter_index": payload.chapter_index, "tts_cleared": tts_cleared}
+        )
 
     @app.get("/api/synth/status")
     def synth_status(book_id: str) -> JSONResponse:
