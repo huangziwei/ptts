@@ -425,6 +425,23 @@
         gap: 8px;
       }
 
+      .player-left,
+      .player-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex: 1;
+        min-width: 0;
+      }
+
+      .player-left {
+        justify-content: flex-start;
+      }
+
+      .player-right {
+        justify-content: flex-end;
+      }
+
       .btn {
         border: 1px solid #d8caba;
         background: #fff;
@@ -447,7 +464,6 @@
       }
 
       .status {
-        flex: 1;
         color: var(--muted);
         font-size: 13px;
       }
@@ -582,8 +598,24 @@
           flex-wrap: wrap;
           gap: 10px;
         }
-        .status {
+        .player-controls {
+          order: 0;
+          width: 100%;
+          justify-content: center;
+        }
+        .player-left {
+          order: 1;
           flex: 1 1 100%;
+          justify-content: center;
+        }
+        .player-right {
+          order: 2;
+          flex: 1 1 100%;
+          justify-content: center;
+          flex-wrap: wrap;
+        }
+        .status {
+          text-align: center;
         }
       }
     </style>
@@ -618,7 +650,7 @@
           </div>
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
-            <label title="Rebuild chunks and delete existing audio."><input id="rechunkInput" type="checkbox" /> Rechunk (delete audio)</label>
+            <label title="Rebuild chunks and delete existing audio."><input id="rechunkInput" type="checkbox" /> Delete caches</label>
           </div>
           <div class="progress-track">
             <div class="progress-fill" id="progressFill"></div>
@@ -642,24 +674,28 @@
     </div>
 
     <div class="player-bar">
+      <div class="player-left">
+        <div class="status" id="status">Last: —</div>
+      </div>
       <div class="player-controls">
         <button class="btn" id="prevBtn">Prev</button>
         <button class="btn primary" id="playBtn">Play</button>
         <button class="btn" id="nextBtn">Next</button>
       </div>
-      <div class="status" id="status">Last: —</div>
-      <div class="marks">
-        <button class="btn" id="bookmarkBtn">Bookmarks</button>
-        <div class="bookmark-panel" id="bookmarkPanel">
-          <div class="bookmark-title">Bookmarks</div>
-          <div class="bookmark-list" id="bookmarkList"></div>
-          <button class="btn" id="saveBookmarkBtn">Save current</button>
+      <div class="player-right">
+        <div class="marks">
+          <button class="btn" id="bookmarkBtn">Bookmarks</button>
+          <div class="bookmark-panel" id="bookmarkPanel">
+            <div class="bookmark-title">Bookmarks</div>
+            <div class="bookmark-list" id="bookmarkList"></div>
+            <button class="btn" id="saveBookmarkBtn">Save current</button>
+          </div>
         </div>
-      </div>
-      <div class="speed">
-        Speed
-        <input id="speedInput" type="range" min="0.8" max="1.4" step="0.05" value="1" />
-        <span id="speedValue">1.0x</span>
+        <div class="speed">
+          Speed
+          <input id="speedInput" type="range" min="0.8" max="1.4" step="0.05" value="1" />
+          <span id="speedValue">1.0x</span>
+        </div>
       </div>
     </div>
 
