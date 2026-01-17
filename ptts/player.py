@@ -554,6 +554,15 @@ def create_app(root_dir: Path) -> FastAPI:
             if not toc_path.exists():
                 continue
             books.append(_book_summary(child))
+        def sort_key(entry: dict) -> str:
+            title = str(entry.get("title") or "").strip().lower()
+            if title.startswith(("the ", "a ", "an ")):
+                parts = title.split(" ", 1)
+                if len(parts) == 2:
+                    title = parts[1]
+            return title or str(entry.get("id") or "").lower()
+
+        books.sort(key=sort_key)
         return _no_store({"root": str(root_dir), "books": books})
 
     @app.get("/api/books/{book_id}")
