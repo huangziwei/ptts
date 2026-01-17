@@ -1592,7 +1592,7 @@
           updateUrl(state.book.id, state.currentChapterId);
           startSynthPolling();
           if (state.editOpen) {
-            await loadPreview();
+            await loadPreview(state.previewChapterIndex);
           }
           scrollToBookSection();
         } catch (err) {
