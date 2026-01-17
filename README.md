@@ -81,3 +81,5 @@ PMX_OPTS="-p 8002:8002" ./bin/pmx uv run ptts play \
 Open `http://localhost:8002` to browse books, start/stop TTS, and play audio.
 Playback state is saved per book at `out/<book>/playback.json`.
 If the player reports missing chunk spans, re-run TTS with `--rechunk`.
+
+![screenshot](.github/screenshot/player.png)
