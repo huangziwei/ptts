@@ -8,8 +8,8 @@
 ## Prerequisites
 
 ```bash
-git clone <this-repo>
-cd ~/pocket
+git clone https://github.com/huangziwei/ptts
+cd ~/ptts
 mkdir -p .uv-cache .cache/huggingface
 chmod +x bin/pmx
 
