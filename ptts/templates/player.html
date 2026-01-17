@@ -712,7 +712,7 @@
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
             <button class="btn" id="mergeBtn" type="button">Merge M4B</button>
-            <label title="Rebuild chunks and delete existing audio."><input id="rechunkInput" type="checkbox" /> Delete caches</label>
+            <button class="btn" id="clearTtsBtn" type="button" title="Delete tts/ for this book.">Delete TTS cache</button>
           </div>
           <div class="progress-track">
             <div class="progress-fill" id="progressFill"></div>
@@ -826,9 +826,9 @@
       const bookmarkPanel = document.getElementById("bookmarkPanel");
       const saveBookmarkBtn = document.getElementById("saveBookmarkBtn");
       const voiceGroup = document.getElementById("voiceGroup");
-      const rechunkInput = document.getElementById("rechunkInput");
       const startTts = document.getElementById("startTts");
       const mergeBtn = document.getElementById("mergeBtn");
+      const clearTtsBtn = document.getElementById("clearTtsBtn");
       const progressFill = document.getElementById("progressFill");
       const progressText = document.getElementById("progressText");
       const progressDetail = document.getElementById("progressDetail");
@@ -1169,7 +1169,7 @@
               typeof offset === "number" ? offset : state.currentQueueIndex;
             setIdleStatus();
             if (state.needsRechunk) {
-              setStatus("Manifest missing chunk spans. Run `ptts synth --rechunk`.");
+              setStatus("Manifest missing chunk spans. Delete TTS cache and start TTS.");
             }
           } else {
             chapterTitle.textContent = "No audio yet";
@@ -1457,6 +1457,7 @@
           bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "Waiting for audio.";
         }
         startTts.disabled = false;
+        updateClearButtonState();
       }
 
       async function loadMergeStatus() {
@@ -1485,6 +1486,10 @@
         }
       }
 
+      function updateClearButtonState() {
+        clearTtsBtn.disabled = state.synthRunning || state.mergeRunning;
+      }
+
       function updateMergeUI(data) {
         state.mergeRunning = !!data.running;
         state.mergeExitCode =
@@ -1507,6 +1512,7 @@
         } else {
           mergeStatus.textContent = "";
         }
+        updateClearButtonState();
       }
 
       async function startSynth() {
@@ -1521,9 +1527,8 @@
         const payload = {
           book_id: state.book.id,
           voice: getSelectedVoice(),
-          rechunk: rechunkInput.checked,
         };
-        state.pendingManifestRefresh = payload.rechunk || !state.chapters.length;
+        state.pendingManifestRefresh = !state.chapters.length;
         try {
           await fetchJson("/api/synth/start", {
             method: "POST",
@@ -1561,6 +1566,36 @@
         } catch (err) {
           mergeStatus.textContent = err.message || "Merge failed to start.";
           setStatus(err.message || "Merge failed to start.");
+        }
+      }
+
+      async function clearTtsCache() {
+        if (!state.book) {
+          return;
+        }
+        if (state.synthRunning || state.mergeRunning) {
+          setStatus("Stop TTS/merge before clearing cache.");
+          return;
+        }
+        const ok = confirm("Delete all TTS cache for this book?");
+        if (!ok) {
+          return;
+        }
+        try {
+          await fetchJson("/api/tts/clear", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id: state.book.id }),
+          });
+          setStatus("TTS cache deleted.");
+          state.mergeOutputExists = false;
+          state.mergeExitCode = null;
+          state.mergeStage = "idle";
+          mergeStatus.textContent = "";
+          updateMergeButtonState();
+          await selectBook(state.book.id);
+        } catch (err) {
+          setStatus(err.message || "Failed to clear TTS cache.");
         }
       }
 
@@ -1956,6 +1991,7 @@
       nextBtn.addEventListener("click", nextChunk);
       startTts.addEventListener("click", toggleSynth);
       mergeBtn.addEventListener("click", startMerge);
+      clearTtsBtn.addEventListener("click", clearTtsCache);
       bookmarkBtn.addEventListener("click", () => {
         bookmarkPanel.classList.toggle("open");
       });
@@ -2026,6 +2062,7 @@
         }
       });
       updateMergeButtonState();
+      updateClearButtonState();
       loadSettings();
       loadVoices();
       readUrlState();

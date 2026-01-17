@@ -282,6 +282,10 @@ class StopRequest(BaseModel):
     book_id: str
 
 
+class ClearRequest(BaseModel):
+    book_id: str
+
+
 class PlaybackPayload(BaseModel):
     last_played: Optional[int] = None
     bookmarks: List[dict] = []
@@ -525,6 +529,20 @@ def create_app(root_dir: Path) -> FastAPI:
         return _no_store(
             {"status": "stopped", "book_id": payload.book_id, "exit_code": job.exit_code}
         )
+
+    @app.post("/api/tts/clear")
+    def clear_tts(payload: ClearRequest) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop TTS before clearing cache.")
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop merge before clearing cache.")
+        tts_dir = book_dir / "tts"
+        if tts_dir.exists():
+            shutil.rmtree(tts_dir)
+        return _no_store({"status": "cleared", "book_id": payload.book_id})
 
     @app.get("/api/merge/status")
     def merge_status(book_id: str) -> JSONResponse:
