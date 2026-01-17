@@ -282,6 +282,12 @@
         color: #8a7a6e;
       }
 
+      .merge-status {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
       .cover-large {
         width: 120px;
         height: 160px;
@@ -705,6 +711,7 @@
           </div>
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
+            <button class="btn" id="mergeBtn" type="button">Merge M4B</button>
             <label title="Rebuild chunks and delete existing audio."><input id="rechunkInput" type="checkbox" /> Delete caches</label>
           </div>
           <div class="progress-track">
@@ -712,6 +719,7 @@
           </div>
           <div class="progress-text" id="progressText">Idle.</div>
           <div class="progress-detail" id="progressDetail"></div>
+          <div class="merge-status" id="mergeStatus"></div>
         </section>
         <div class="reader-body">
           <aside class="toc">
@@ -788,6 +796,11 @@
         padMs: 0,
         gaplessArmedIndex: null,
         playbackRate: 1.0,
+        mergeRunning: false,
+        mergeReady: false,
+        mergeExitCode: null,
+        mergeOutputExists: false,
+        mergeStage: "idle",
       };
 
       const bookList = document.getElementById("bookList");
@@ -815,9 +828,11 @@
       const voiceGroup = document.getElementById("voiceGroup");
       const rechunkInput = document.getElementById("rechunkInput");
       const startTts = document.getElementById("startTts");
+      const mergeBtn = document.getElementById("mergeBtn");
       const progressFill = document.getElementById("progressFill");
       const progressText = document.getElementById("progressText");
       const progressDetail = document.getElementById("progressDetail");
+      const mergeStatus = document.getElementById("mergeStatus");
       const ttsPanel = document.getElementById("ttsPanel");
       const ttsToggle = document.getElementById("ttsToggle");
 
@@ -904,7 +919,16 @@
         }
         const res = await fetch(url, opts);
         if (!res.ok) {
-          throw new Error(`Request failed: ${res.status}`);
+          let detail = `Request failed: ${res.status}`;
+          try {
+            const payload = await res.json();
+            if (payload && payload.detail) {
+              detail = payload.detail;
+            }
+          } catch (err) {
+            // ignore parse errors
+          }
+          throw new Error(detail);
         }
         return res.json();
       }
@@ -1109,6 +1133,12 @@
           state.chapters = data.chapters || [];
           state.padMs = data.book ? data.book.pad_ms || 0 : 0;
           state.playback = { lastPlayed: null, bookmarks: [] };
+          state.mergeRunning = false;
+          state.mergeReady = false;
+          state.mergeExitCode = null;
+          state.mergeOutputExists = false;
+          state.mergeStage = "idle";
+          mergeStatus.textContent = "";
           state.chapterMap = {};
           state.chapters.forEach((chapter) => {
             if (chapter && chapter.id) {
@@ -1373,6 +1403,7 @@
             `/api/synth/status?book_id=${encodeURIComponent(state.book.id)}`
           );
           updateSynthUI(data);
+          await loadMergeStatus();
           if (
             !state.loadingBook &&
             data.progress &&
@@ -1390,8 +1421,14 @@
       function updateSynthUI(data) {
         state.synthRunning = !!data.running;
         startTts.textContent = state.synthRunning ? "Stop TTS" : "Start TTS";
-        const stage = data.stage || "idle";
         const progress = data.progress;
+        state.mergeReady =
+          !!progress &&
+          progress.total > 0 &&
+          progress.done >= progress.total &&
+          !state.synthRunning;
+        updateMergeButtonState();
+        const stage = data.stage || "idle";
         if (stage === "chunking") {
           progressFill.style.width = "0%";
           progressText.textContent = "Chunking text...";
@@ -1422,11 +1459,65 @@
         startTts.disabled = false;
       }
 
+      async function loadMergeStatus() {
+        if (!state.book) {
+          return;
+        }
+        try {
+          const data = await fetchJson(
+            `/api/merge/status?book_id=${encodeURIComponent(state.book.id)}`
+          );
+          updateMergeUI(data);
+        } catch (err) {
+          mergeStatus.textContent = err.message || "Unable to load merge status.";
+        }
+      }
+
+      function updateMergeButtonState() {
+        mergeBtn.disabled =
+          !state.mergeReady || state.mergeRunning || state.mergeOutputExists;
+        if (state.mergeRunning && state.mergeStage === "installing") {
+          mergeBtn.textContent = "Installing ffmpeg...";
+        } else if (state.mergeRunning) {
+          mergeBtn.textContent = "Merging...";
+        } else {
+          mergeBtn.textContent = "Merge M4B";
+        }
+      }
+
+      function updateMergeUI(data) {
+        state.mergeRunning = !!data.running;
+        state.mergeExitCode =
+          typeof data.exit_code === "number" ? data.exit_code : null;
+        state.mergeOutputExists = !!data.output_exists;
+        state.mergeStage = data.stage || (state.mergeRunning ? "merging" : "idle");
+        updateMergeButtonState();
+        let percentText = "";
+        if (data.progress && typeof data.progress.percent === "number") {
+          percentText = ` ${data.progress.percent.toFixed(1)}%`;
+        }
+        if (state.mergeStage === "installing") {
+          mergeStatus.textContent = "Installing ffmpeg...";
+        } else if (state.mergeStage === "merging") {
+          mergeStatus.textContent = `Merging book...${percentText}`;
+        } else if (state.mergeStage === "done") {
+          mergeStatus.textContent = "M4B ready.";
+        } else if (state.mergeStage === "failed") {
+          mergeStatus.textContent = "Merge failed. Check tts/merge.log.";
+        } else {
+          mergeStatus.textContent = "";
+        }
+      }
+
       async function startSynth() {
         if (!state.book) {
           return;
         }
         saveSettings();
+        state.mergeExitCode = null;
+        state.mergeOutputExists = false;
+        mergeStatus.textContent = "";
+        updateMergeButtonState();
         const payload = {
           book_id: state.book.id,
           voice: getSelectedVoice(),
@@ -1443,6 +1534,33 @@
           await loadSynthStatus();
         } catch (err) {
           setStatus("Failed to start TTS.");
+        }
+      }
+
+      async function startMerge() {
+        if (!state.book) {
+          return;
+        }
+        if (!state.mergeReady) {
+          setStatus("Finish TTS before merging.");
+          return;
+        }
+        if (state.mergeOutputExists) {
+          setStatus("M4B already exists.");
+          return;
+        }
+        mergeStatus.textContent = "Starting merge...";
+        try {
+          await fetchJson("/api/merge/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id: state.book.id }),
+          });
+          setStatus("Merge started.");
+          await loadMergeStatus();
+        } catch (err) {
+          mergeStatus.textContent = err.message || "Merge failed to start.";
+          setStatus(err.message || "Merge failed to start.");
         }
       }
 
@@ -1837,6 +1955,7 @@
       prevBtn.addEventListener("click", prevChunk);
       nextBtn.addEventListener("click", nextChunk);
       startTts.addEventListener("click", toggleSynth);
+      mergeBtn.addEventListener("click", startMerge);
       bookmarkBtn.addEventListener("click", () => {
         bookmarkPanel.classList.toggle("open");
       });
@@ -1906,6 +2025,7 @@
           }
         }
       });
+      updateMergeButtonState();
       loadSettings();
       loadVoices();
       readUrlState();

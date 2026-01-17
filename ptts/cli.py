@@ -150,6 +150,7 @@ def _merge(args: argparse.Namespace) -> int:
             output_path=output_path,
             bitrate=args.bitrate,
             overwrite=args.overwrite,
+            progress_path=Path(args.progress_file) if args.progress_file else None,
         )
     except Exception as exc:
         sys.stderr.write(f"Merge failed: {exc}\n")
@@ -260,6 +261,10 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--bitrate", default="64k", help="Audio bitrate (default: 64k)")
     merge.add_argument(
         "--overwrite", action="store_true", help="Overwrite output if it exists"
+    )
+    merge.add_argument(
+        "--progress-file",
+        help="Write merge progress to JSON file",
     )
     merge.set_defaults(func=_merge)
 

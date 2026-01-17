@@ -1,4 +1,4 @@
-# pTTS: Narrate English books with Pocket-TTS
+# pTTS: Narrate English EPUB with Pocket-TTS
 
 ![screenshot](.github/screenshot/player.png)
 
@@ -96,4 +96,3 @@ same run (or use a custom image):
 ```bash
 ./bin/pmx bash -lc 'apt-get update && apt-get install -y ffmpeg && uv run ptts merge --book out/some-book --output out/some-book/some-book.m4b'
 ```
-

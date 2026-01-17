@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -121,6 +122,56 @@ def _playback_path(book_dir: Path) -> Path:
     return book_dir / "playback.json"
 
 
+def _merge_output_path(book_dir: Path) -> Path:
+    return book_dir / f"{book_dir.name}.m4b"
+
+
+def _merge_ready(book_dir: Path) -> bool:
+    manifest = _load_json(book_dir / "tts" / "manifest.json")
+    if not manifest:
+        return False
+    progress = _compute_progress(manifest)
+    if not progress or not progress.get("total"):
+        return False
+    return progress.get("done", 0) >= progress.get("total", 0)
+
+
+def _build_merge_command(
+    book_dir: Path,
+    output_path: Path,
+    overwrite: bool,
+    install_ffmpeg: bool,
+    progress_path: Path,
+) -> list[str]:
+    merge_cmd = [
+        "uv",
+        "run",
+        "ptts",
+        "merge",
+        "--book",
+        str(book_dir),
+        "--output",
+        str(output_path),
+        "--progress-file",
+        str(progress_path),
+    ]
+    if overwrite:
+        merge_cmd.append("--overwrite")
+    if not install_ffmpeg:
+        return merge_cmd
+
+    installer = shutil.which("apt-get") or shutil.which("apt")
+    if installer is None:
+        raise RuntimeError("ffmpeg not found on PATH and apt-get is unavailable.")
+    install_cmd = f"{installer} update && {installer} install -y ffmpeg"
+    merge_cmd_str = " ".join(shlex.quote(part) for part in merge_cmd)
+    combined = (
+        "export DEBIAN_FRONTEND=noninteractive; "
+        f"{install_cmd} && {merge_cmd_str}"
+    )
+    return ["bash", "-lc", combined]
+
+
 def _sanitize_playback(data: dict) -> dict:
     last = data.get("last_played")
     if not isinstance(last, int) or last < 0:
@@ -198,6 +249,21 @@ class SynthJob:
     ended_at: Optional[float] = None
 
 
+@dataclass
+class MergeJob:
+    book_id: str
+    book_dir: Path
+    process: subprocess.Popen
+    started_at: float
+    log_path: Path
+    output_path: Path
+    install_ffmpeg: bool
+    progress_path: Path
+    log_handle: Optional[IO[str]] = None
+    exit_code: Optional[int] = None
+    ended_at: Optional[float] = None
+
+
 class SynthRequest(BaseModel):
     book_id: str
     voice: Optional[str] = None
@@ -205,6 +271,11 @@ class SynthRequest(BaseModel):
     pad_ms: int = 150
     chunk_mode: str = "sentence"
     rechunk: bool = False
+
+
+class MergeRequest(BaseModel):
+    book_id: str
+    overwrite: bool = False
 
 
 class StopRequest(BaseModel):
@@ -223,6 +294,7 @@ def create_app(root_dir: Path) -> FastAPI:
     root_dir.mkdir(parents=True, exist_ok=True)
     repo_root = _find_repo_root(root_dir)
     jobs: dict[str, SynthJob] = {}
+    merge_jobs: dict[str, MergeJob] = {}
 
     app.mount("/audio", StaticFiles(directory=str(root_dir)), name="audio")
 
@@ -452,6 +524,119 @@ def create_app(root_dir: Path) -> FastAPI:
 
         return _no_store(
             {"status": "stopped", "book_id": payload.book_id, "exit_code": job.exit_code}
+        )
+
+    @app.get("/api/merge/status")
+    def merge_status(book_id: str) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        output_path = _merge_output_path(book_dir)
+        tts_dir = book_dir / "tts"
+        progress_path = tts_dir / "merge.progress.json"
+        job = merge_jobs.get(book_id)
+        running = False
+        exit_code = None
+        stage = "idle"
+        if job:
+            exit_code = job.process.poll()
+            if exit_code is None:
+                running = True
+            else:
+                job.exit_code = exit_code
+                job.ended_at = job.ended_at or time.time()
+                if job.log_handle:
+                    job.log_handle.close()
+                    job.log_handle = None
+        log_path = ""
+        if job:
+            try:
+                log_path = str(job.log_path.relative_to(book_dir))
+            except ValueError:
+                log_path = str(job.log_path)
+        if running:
+            if job and job.install_ffmpeg and shutil.which("ffmpeg") is None:
+                stage = "installing"
+            else:
+                stage = "merging"
+        elif output_path.exists():
+            stage = "done"
+        elif exit_code is not None and exit_code != 0:
+            stage = "failed"
+        payload = {
+            "book_id": book_id,
+            "running": running,
+            "exit_code": exit_code,
+            "output_path": str(output_path),
+            "output_exists": output_path.exists(),
+            "log_path": log_path,
+            "stage": stage,
+            "progress": _load_json(progress_path) if progress_path.exists() else {},
+        }
+        return _no_store(payload)
+
+    @app.post("/api/merge/start")
+    def merge_start(payload: MergeRequest) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        output_path = _merge_output_path(book_dir)
+
+        existing = merge_jobs.get(payload.book_id)
+        if existing and existing.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Merge is already running.")
+
+        if not _merge_ready(book_dir):
+            raise HTTPException(status_code=409, detail="TTS is not complete.")
+
+        if output_path.exists() and not payload.overwrite:
+            raise HTTPException(status_code=409, detail="Output file already exists.")
+
+        tts_dir = book_dir / "tts"
+        tts_dir.mkdir(parents=True, exist_ok=True)
+        log_path = tts_dir / "merge.log"
+        progress_path = tts_dir / "merge.progress.json"
+        if progress_path.exists():
+            progress_path.unlink()
+        log_handle = log_path.open("w", encoding="utf-8")
+
+        install_ffmpeg = shutil.which("ffmpeg") is None
+        try:
+            cmd = _build_merge_command(
+                book_dir=book_dir,
+                output_path=output_path,
+                overwrite=payload.overwrite,
+                install_ffmpeg=install_ffmpeg,
+                progress_path=progress_path,
+            )
+        except RuntimeError as exc:
+            log_handle.write(f"{exc}\n")
+            log_handle.close()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        env = os.environ.copy()
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(repo_root),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+
+        merge_jobs[payload.book_id] = MergeJob(
+            book_id=payload.book_id,
+            book_dir=book_dir,
+            process=process,
+            started_at=time.time(),
+            log_path=log_path,
+            output_path=output_path,
+            install_ffmpeg=install_ffmpeg,
+            progress_path=progress_path,
+            log_handle=log_handle,
+        )
+
+        return _no_store(
+            {
+                "status": "started",
+                "book_id": payload.book_id,
+                "output_path": str(output_path),
+            }
         )
 
     return app
