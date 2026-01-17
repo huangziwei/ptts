@@ -187,6 +187,19 @@ def _synth(args: argparse.Namespace) -> int:
     )
 
 
+def _sample(args: argparse.Namespace) -> int:
+    book_dir = Path(args.book)
+    out_dir = Path(args.out) if args.out else None
+    return tts_util.synthesize_book_sample(
+        book_dir=book_dir,
+        voice=args.voice,
+        out_dir=out_dir,
+        max_chars=args.max_chars,
+        pad_ms=args.pad_ms,
+        chunk_mode=args.chunk_mode,
+        rechunk=args.rechunk,
+    )
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ptts")
     subparsers = parser.add_subparsers(dest="command")
@@ -253,6 +266,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     synth.add_argument("--rechunk", action="store_true")
     synth.set_defaults(func=_synth)
+
+    sample = subparsers.add_parser("sample", help="Generate a voice sample (first chapter)")
+    sample.add_argument("--book", required=True, help="Book output directory")
+    sample.add_argument(
+        "--out",
+        help="Output directory (default: <book>/tts)",
+    )
+    sample.add_argument(
+        "--voice",
+        help="Voice prompt: built-in name, wav path, or hf:// URL",
+    )
+    sample.add_argument("--max-chars", type=int, default=800)
+    sample.add_argument("--pad-ms", type=int, default=150)
+    sample.add_argument(
+        "--chunk-mode",
+        choices=["sentence", "packed"],
+        default="sentence",
+        help="Chunking strategy (default: sentence)",
+    )
+    sample.add_argument("--rechunk", action="store_true")
+    sample.set_defaults(func=_sample)
 
     merge = subparsers.add_parser("merge", help="Merge audio into M4B")
     merge.add_argument("--book", required=True, help="Book output directory")

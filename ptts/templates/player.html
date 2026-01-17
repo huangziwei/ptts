@@ -1044,6 +1044,7 @@
           </div>
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
+            <button class="btn" id="sampleTts" type="button">Sample</button>
             <button class="btn" id="mergeBtn" type="button">Merge M4B</button>
             <button class="btn" id="clearTtsBtn" type="button" title="Delete tts/ for this book.">Delete TTS cache</button>
           </div>
@@ -1183,6 +1184,7 @@
         pendingManifestRefresh: false,
         needsRechunk: false,
         synthRunning: false,
+        synthMode: "tts",
         statusMode: "idle",
         playbackSaveTimer: null,
         playback: {
@@ -1263,6 +1265,7 @@
       const saveBookmarkBtn = document.getElementById("saveBookmarkBtn");
       const voiceGroup = document.getElementById("voiceGroup");
       const startTts = document.getElementById("startTts");
+      const sampleTts = document.getElementById("sampleTts");
       const mergeBtn = document.getElementById("mergeBtn");
       const clearTtsBtn = document.getElementById("clearTtsBtn");
       const progressFill = document.getElementById("progressFill");
@@ -1569,6 +1572,7 @@
         state.mergeOutputExists = false;
         state.mergeStage = "idle";
         state.synthRunning = false;
+        state.synthMode = "tts";
         state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
         state.bookVoice = null;
         resetAudioPlayers();
@@ -1694,6 +1698,7 @@
           state.mergeExitCode = null;
           state.mergeOutputExists = false;
           state.mergeStage = "idle";
+          state.synthMode = "tts";
           mergeStatus.textContent = "";
           state.chapterMap = {};
           state.chapters.forEach((chapter) => {
@@ -1998,9 +2003,20 @@
 
       function updateSynthUI(data) {
         state.synthRunning = !!data.running;
-        startTts.textContent = state.synthRunning ? "Stop TTS" : "Start TTS";
+        state.synthMode = data.mode || "tts";
+        const sampling = state.synthMode === "sample";
+        if (state.synthRunning && sampling) {
+          startTts.textContent = "Start TTS";
+          startTts.disabled = true;
+          sampleTts.textContent = "Stop Sample";
+        } else {
+          startTts.textContent = state.synthRunning ? "Stop TTS" : "Start TTS";
+          startTts.disabled = false;
+          sampleTts.textContent = "Sample";
+        }
         const progress = data.progress;
         state.mergeReady =
+          !sampling &&
           !!progress &&
           progress.total > 0 &&
           progress.done >= progress.total &&
@@ -2009,15 +2025,26 @@
         const stage = data.stage || "idle";
         if (stage === "chunking") {
           progressFill.style.width = "0%";
-          progressText.textContent = "Chunking text...";
+          progressText.textContent = sampling
+            ? "Chunking sample..."
+            : "Chunking text...";
           progressDetail.textContent = "Preparing manifest and spans.";
+        } else if (stage === "sampled") {
+          progressFill.style.width = "100%";
+          progressText.textContent = "Sample ready.";
+          if (progress && progress.current) {
+            progressDetail.textContent = `${progress.current.chapter_title} · sample done.`;
+          } else {
+            progressDetail.textContent = "";
+          }
         } else if (!progress) {
           progressFill.style.width = "0%";
           progressText.textContent = "Idle.";
           progressDetail.textContent = "";
         } else {
           progressFill.style.width = `${progress.percent}%`;
-          progressText.textContent = `${progress.done} / ${progress.total} chunks (${progress.percent}%).`;
+          const prefix = sampling ? "Sample" : "Progress";
+          progressText.textContent = `${prefix}: ${progress.done} / ${progress.total} chunks (${progress.percent}%).`;
           if (progress.current) {
             progressDetail.textContent = `${progress.current.chapter_title} · chunk ${progress.current.chunk_index} of ${progress.current.chunk_total}`;
           } else {
@@ -2025,7 +2052,17 @@
           }
         }
 
-        if (stage === "chunking") {
+        if (sampling) {
+          if (stage === "chunking") {
+            bookStatus.textContent = "Preparing sample...";
+          } else if (stage === "sampling") {
+            bookStatus.textContent = "Generating sample...";
+          } else if (stage === "sampled") {
+            bookStatus.textContent = "Sample ready.";
+          } else {
+            bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "Waiting for audio.";
+          }
+        } else if (stage === "chunking") {
           bookStatus.textContent = "Chunking text...";
         } else if (stage === "synthesizing") {
           bookStatus.textContent = "Synthesizing audio...";
@@ -2034,7 +2071,7 @@
         } else {
           bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "Waiting for audio.";
         }
-        startTts.disabled = false;
+        startTts.disabled = state.synthRunning && sampling;
         const ffmpegState = data.ffmpeg_status || "unknown";
         if (ffmpegState === "installing") {
           ffmpegStatus.textContent = "Installing ffmpeg...";
@@ -2079,6 +2116,10 @@
       function updateClearButtonState() {
         clearTtsBtn.disabled = state.synthRunning || state.mergeRunning;
         updateDeleteButtonState();
+        sampleTts.disabled =
+          !state.book ||
+          state.mergeRunning ||
+          (state.synthRunning && state.synthMode !== "sample");
       }
 
       function updateDeleteButtonState() {
@@ -2180,6 +2221,39 @@
         } catch (err) {
           mergeStatus.textContent = err.message || "Merge failed to start.";
           setStatus(err.message || "Merge failed to start.");
+        }
+      }
+
+      async function sampleSynth() {
+        if (!state.book) {
+          return;
+        }
+        if (state.synthRunning) {
+          setStatus("Stop TTS before sampling.");
+          return;
+        }
+        saveSettings();
+        try {
+          await fetchJson("/api/synth/sample", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              book_id: state.book.id,
+              voice: getSelectedVoice(),
+            }),
+          });
+          setStatus("Generating sample...");
+          await loadSynthStatus();
+        } catch (err) {
+          setStatus(err.message || "Sample failed.");
+        }
+      }
+
+      function toggleSample() {
+        if (state.synthRunning && state.synthMode === "sample") {
+          stopSynth();
+        } else {
+          sampleSynth();
         }
       }
 
@@ -2983,6 +3057,7 @@
         ingestFile(file);
       });
       startTts.addEventListener("click", toggleSynth);
+      sampleTts.addEventListener("click", toggleSample);
       mergeBtn.addEventListener("click", startMerge);
       clearTtsBtn.addEventListener("click", clearTtsCache);
       bookMenuBtn.addEventListener("click", toggleBookMenu);

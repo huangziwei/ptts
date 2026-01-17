@@ -169,6 +169,27 @@ def _resolve_book_dir(root_dir: Path, book_id: str) -> Path:
     return candidate
 
 
+def _sample_chapter_info(book_dir: Path) -> tuple[str, str]:
+    manifest = _load_json(book_dir / "tts" / "manifest.json")
+    chapters = manifest.get("chapters") if isinstance(manifest, dict) else []
+    if isinstance(chapters, list) and chapters:
+        entry = chapters[0]
+        return str(entry.get("id") or ""), str(entry.get("title") or "")
+
+    clean_toc = _load_json(book_dir / "clean" / "toc.json")
+    entries = clean_toc.get("chapters") if isinstance(clean_toc, dict) else []
+    if isinstance(entries, list) and entries:
+        entry = entries[0]
+        title = str(entry.get("title") or "")
+        rel_path = entry.get("path") or ""
+        if rel_path:
+            return Path(rel_path).stem, title
+        idx = entry.get("index") or 1
+        slug = epub_util.slugify(title or "chapter")
+        return f"{int(idx):04d}-{slug}", title
+
+    return "", ""
+
 def _book_summary(book_dir: Path) -> dict:
     toc = _load_json(book_dir / "clean" / "toc.json")
     metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
@@ -396,6 +417,43 @@ def _compute_progress(manifest: dict) -> dict:
     }
 
 
+def _compute_chapter_progress(manifest: dict, chapter_id: str) -> dict:
+    chapters = manifest.get("chapters", [])
+    entry = None
+    for item in chapters if isinstance(chapters, list) else []:
+        if (item.get("id") or "") == chapter_id:
+            entry = item
+            break
+    if not entry:
+        return {}
+    chunks = entry.get("chunks", [])
+    durations = entry.get("durations_ms", [])
+    if not isinstance(chunks, list):
+        chunks = []
+    total = len(chunks)
+    done = 0
+    current = None
+    for idx in range(total):
+        if idx < len(durations) and durations[idx] is not None:
+            done += 1
+            continue
+        if current is None:
+            current = {
+                "chapter_id": entry.get("id") or "",
+                "chapter_title": entry.get("title") or "",
+                "chunk_index": idx + 1,
+                "chunk_total": total,
+                "global_index": idx + 1,
+            }
+    percent = (done / total * 100.0) if total else 0.0
+    return {
+        "total": total,
+        "done": done,
+        "percent": round(percent, 2),
+        "current": current,
+    }
+
+
 def _ffmpeg_log_path(repo_root: Path) -> Path:
     return repo_root / ".cache" / "ffmpeg-install.log"
 
@@ -442,6 +500,9 @@ class SynthJob:
     pad_ms: int
     chunk_mode: str
     rechunk: bool
+    mode: str = "tts"
+    sample_chapter_id: Optional[str] = None
+    sample_chapter_title: Optional[str] = None
     log_handle: Optional[IO[str]] = None
     exit_code: Optional[int] = None
     ended_at: Optional[float] = None
@@ -873,8 +934,12 @@ def create_app(root_dir: Path) -> FastAPI:
         job = jobs.get(book_id)
         running = False
         exit_code = None
+        mode = "tts"
+        sample_chapter = None
         if job:
             exit_code = job.process.poll()
+            mode = job.mode or "tts"
+            sample_chapter = job.sample_chapter_id
             if exit_code is None:
                 running = True
             else:
@@ -887,6 +952,9 @@ def create_app(root_dir: Path) -> FastAPI:
             started_at = int(job.started_at)
             if manifest_created and manifest_created < started_at:
                 progress = None
+
+        if manifest and mode == "sample" and sample_chapter:
+            progress = _compute_chapter_progress(manifest, sample_chapter) or None
 
         ffmpeg_status = (
             "installed" if shutil.which("ffmpeg") is not None else "missing"
@@ -929,12 +997,15 @@ def create_app(root_dir: Path) -> FastAPI:
             "ffmpeg_status": ffmpeg_status,
             "ffmpeg_error": ffmpeg_error,
             "ffmpeg_log_path": ffmpeg_log,
+            "mode": mode,
         }
         if running:
             if not progress or not progress.get("total"):
                 payload["stage"] = "chunking"
             else:
-                payload["stage"] = "synthesizing"
+                payload["stage"] = "sampling" if mode == "sample" else "synthesizing"
+        elif mode == "sample" and job and job.exit_code == 0:
+            payload["stage"] = "sampled"
         elif progress and progress.get("total") and progress.get("done") >= progress.get("total"):
             payload["stage"] = "done"
         return _no_store(payload)
@@ -1014,6 +1085,110 @@ def create_app(root_dir: Path) -> FastAPI:
             pad_ms=payload.pad_ms,
             chunk_mode=payload.chunk_mode,
             rechunk=payload.rechunk,
+            mode="tts",
+            log_handle=log_handle,
+        )
+
+        return _no_store({"status": "started", "book_id": payload.book_id})
+
+    @app.post("/api/synth/sample")
+    def synth_sample(payload: SynthRequest) -> JSONResponse:
+        nonlocal ffmpeg_job, ffmpeg_error
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        if payload.chunk_mode not in ("sentence", "packed"):
+            raise HTTPException(status_code=400, detail="Invalid chunk_mode.")
+
+        existing = jobs.get(payload.book_id)
+        if existing and existing.process.poll() is None:
+            raise HTTPException(status_code=409, detail="TTS is already running.")
+
+        try:
+            voice_prompt = resolve_voice_prompt(payload.voice, base_dir=repo_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if shutil.which("ffmpeg") is None:
+            if ffmpeg_job and ffmpeg_job.process.poll() is None:
+                pass
+            else:
+                ffmpeg_error = None
+                ffmpeg_job, error = _spawn_ffmpeg_install(repo_root)
+                if error:
+                    ffmpeg_error = error
+
+        tts_dir = book_dir / "tts"
+        tts_dir.mkdir(parents=True, exist_ok=True)
+        log_path = tts_dir / "sample.log"
+        log_handle = log_path.open("w", encoding="utf-8")
+        sample_id, sample_title = _sample_chapter_info(book_dir)
+        if not sample_id:
+            log_handle.close()
+            raise HTTPException(status_code=404, detail="No chapters available to sample.")
+
+        sample_seg_dir = tts_dir / "segments" / sample_id
+        if sample_seg_dir.exists():
+            shutil.rmtree(sample_seg_dir)
+
+        manifest_path = tts_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                manifest = {}
+            chapters_meta = manifest.get("chapters")
+            if isinstance(chapters_meta, list):
+                for entry in chapters_meta:
+                    if entry.get("id") == sample_id:
+                        chunks = entry.get("chunks")
+                        if isinstance(chunks, list):
+                            entry["durations_ms"] = [None] * len(chunks)
+                        break
+                _atomic_write_json(manifest_path, manifest)
+
+        cmd = [
+            "uv",
+            "run",
+            "--with",
+            "pocket-tts",
+            "ptts",
+            "sample",
+            "--book",
+            str(book_dir),
+            "--voice",
+            voice_prompt,
+            "--max-chars",
+            str(payload.max_chars),
+            "--pad-ms",
+            str(payload.pad_ms),
+            "--chunk-mode",
+            payload.chunk_mode,
+        ]
+        if payload.rechunk:
+            cmd.append("--rechunk")
+
+        env = os.environ.copy()
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(repo_root),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+
+        jobs[payload.book_id] = SynthJob(
+            book_id=payload.book_id,
+            book_dir=book_dir,
+            process=process,
+            started_at=time.time(),
+            log_path=log_path,
+            voice=voice_prompt,
+            max_chars=payload.max_chars,
+            pad_ms=payload.pad_ms,
+            chunk_mode=payload.chunk_mode,
+            rechunk=payload.rechunk,
+            mode="sample",
+            sample_chapter_id=sample_id,
+            sample_chapter_title=sample_title or None,
             log_handle=log_handle,
         )
 

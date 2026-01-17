@@ -632,12 +632,16 @@ def synthesize(
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
+    wipe_segments: Optional[bool] = None,
+    only_chapter_ids: Optional[set[str]] = None,
     base_dir: Optional[Path] = None,
 ) -> int:
     _require_tts()
 
     if base_dir is None:
         base_dir = Path.cwd()
+    if wipe_segments is None:
+        wipe_segments = rechunk
     if voice is None:
         voice = DEFAULT_VOICE
     else:
@@ -670,7 +674,7 @@ def synthesize(
         sys.stderr.write(f"{exc}\n")
         return 2
 
-    if rechunk and seg_dir.exists():
+    if wipe_segments and seg_dir.exists():
         shutil.rmtree(seg_dir)
 
     tts_model = TTSModel.load_model()
@@ -685,7 +689,19 @@ def synthesize(
     pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
 
     segment_paths: List[Path] = []
-    total_chunks = sum(len(chunks) for chunks in chapter_chunks)
+    selected_ids = set(only_chapter_ids) if only_chapter_ids else None
+    selected_indices = [
+        idx
+        for idx, entry in enumerate(manifest["chapters"])
+        if not selected_ids or (entry.get("id") or "chapter") in selected_ids
+    ]
+    if selected_ids and not selected_indices:
+        sys.stderr.write("No matching chapters found for synthesis.\n")
+        return 2
+    total_chunks = sum(len(chapter_chunks[idx]) for idx in selected_indices)
+    if total_chunks <= 0:
+        sys.stderr.write("No chunks selected for synthesis.\n")
+        return 2
 
     progress = Progress(
         TextColumn("{task.description}"),
@@ -703,6 +719,8 @@ def synthesize(
             chapter_id = ch_entry.get("id") or "chapter"
             chapter_title = ch_entry.get("title") or chapter_id
             chapter_total = len(chunks)
+            if selected_ids and chapter_id not in selected_ids:
+                continue
 
             progress.update(
                 chapter_task,
@@ -811,6 +829,64 @@ def synthesize_book(
         pad_ms=pad_ms,
         chunk_mode=chunk_mode,
         rechunk=rechunk,
+        base_dir=base_dir,
+    )
+
+
+def synthesize_book_sample(
+    book_dir: Path,
+    voice: Optional[str],
+    out_dir: Optional[Path] = None,
+    max_chars: int = 800,
+    pad_ms: int = 150,
+    chunk_mode: str = "sentence",
+    rechunk: bool = False,
+    base_dir: Optional[Path] = None,
+) -> int:
+    if out_dir is None:
+        out_dir = book_dir / "tts"
+    try:
+        chapters = load_book_chapters(book_dir)
+        write_combined_input(chapters, out_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+
+    if not chapters:
+        sys.stderr.write("No chapters found for sampling.\n")
+        return 2
+
+    sample_id = chapters[0].id
+    sample_dir = out_dir / "segments" / sample_id
+    if sample_dir.exists():
+        shutil.rmtree(sample_dir)
+
+    manifest_path = out_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+        chapters_meta = manifest.get("chapters")
+        if isinstance(chapters_meta, list):
+            for entry in chapters_meta:
+                if entry.get("id") == sample_id:
+                    chunks = entry.get("chunks")
+                    if isinstance(chunks, list):
+                        entry["durations_ms"] = [None] * len(chunks)
+                    break
+            atomic_write_json(manifest_path, manifest)
+
+    return synthesize(
+        chapters=chapters,
+        voice=voice,
+        out_dir=out_dir,
+        max_chars=max_chars,
+        pad_ms=pad_ms,
+        chunk_mode=chunk_mode,
+        rechunk=rechunk,
+        wipe_segments=False,
+        only_chapter_ids={sample_id},
         base_dir=base_dir,
     )
 
