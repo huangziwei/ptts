@@ -935,6 +935,7 @@ def create_app(root_dir: Path) -> FastAPI:
         manifest_path = book_dir / "tts" / "manifest.json"
         manifest = _load_json(manifest_path)
         progress = _compute_progress(manifest) if manifest else None
+        overall_progress = progress
         tts_status = _load_tts_status(book_dir)
         manifest_created = 0
         if manifest:
@@ -1011,6 +1012,7 @@ def create_app(root_dir: Path) -> FastAPI:
             "ffmpeg_log_path": ffmpeg_log,
             "mode": mode,
             "tts_status": tts_status,
+            "overall_progress": overall_progress,
         }
         if running:
             status_stage = str(tts_status.get("stage") or "")

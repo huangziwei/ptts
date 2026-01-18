@@ -2015,6 +2015,7 @@
           sampleTts.textContent = "Sample";
         }
         const progress = data.progress;
+        const overall = data.overall_progress || null;
         state.mergeReady =
           !sampling &&
           !!progress &&
@@ -2024,19 +2025,28 @@
         updateMergeButtonState();
         const stage = data.stage || "idle";
         if (stage === "chunking") {
-          progressFill.style.width = "0%";
+          progressFill.style.width =
+            sampling && overall
+              ? `${overall.percent}%`
+              : "0%";
           progressText.textContent = sampling
             ? "Chunking sample..."
             : "Chunking text...";
           progressDetail.textContent = "Preparing manifest and spans.";
         } else if (stage === "cloning") {
-          progressFill.style.width = "0%";
+          progressFill.style.width =
+            sampling && overall
+              ? `${overall.percent}%`
+              : "0%";
           progressText.textContent = sampling
             ? "Cloning voice for sample..."
             : "Cloning voice...";
           progressDetail.textContent = "Preparing voice prompt.";
         } else if (stage === "sampled") {
-          progressFill.style.width = "100%";
+          progressFill.style.width =
+            sampling && overall
+              ? `${overall.percent}%`
+              : "100%";
           progressText.textContent = "Sample ready.";
           if (progress && progress.current) {
             progressDetail.textContent = `${progress.current.chapter_title} · sample done.`;
@@ -2048,7 +2058,11 @@
           progressText.textContent = "Idle.";
           progressDetail.textContent = "";
         } else {
-          progressFill.style.width = `${progress.percent}%`;
+          const barPercent =
+            sampling && overall
+              ? overall.percent
+              : progress.percent;
+          progressFill.style.width = `${barPercent}%`;
           const prefix = sampling ? "Sample" : "Progress";
           progressText.textContent = `${prefix}: ${progress.done} / ${progress.total} chunks (${progress.percent}%).`;
           if (progress.current) {
@@ -2958,6 +2972,9 @@
 
         if (!available) {
           waitForChunk(index);
+          currentAudio.pause();
+          playBtn.textContent = "Play";
+          setStatus("Chunk not ready. Press Play to retry.");
           return;
         }
 
@@ -2992,12 +3009,7 @@
         if (state.waitTimer) {
           clearTimeout(state.waitTimer);
         }
-        state.waitTimer = setTimeout(async () => {
-          if (state.waitingFor !== index) {
-            return;
-          }
-          await playIndex(index);
-        }, 2000);
+        state.waitTimer = null;
       }
 
       function togglePlay() {
