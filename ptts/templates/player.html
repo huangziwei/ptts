@@ -800,6 +800,12 @@
         color: #fff;
       }
 
+      .btn.subtle {
+        background: #faf6f0;
+        border-color: #e6d9cb;
+        color: #6f6358;
+      }
+
       .btn.play {
         padding: 12px 22px;
         font-size: 16px;
@@ -1060,6 +1066,10 @@
         .status {
           text-align: center;
         }
+
+        .tts-delete {
+          margin-left: 0;
+        }
       }
     </style>
   </head>
@@ -1112,7 +1122,7 @@
             <button class="btn" id="sampleTts" type="button">Sample</button>
             <span class="tts-divider" aria-hidden="true"></span>
             <button class="btn" id="mergeBtn" type="button">Merge M4B</button>
-            <button class="btn tts-delete" id="clearTtsBtn" type="button" title="Delete tts/ for this book.">Delete TTS cache</button>
+            <button class="btn subtle tts-delete" id="clearTtsBtn" type="button" title="Delete tts/ for this book.">Delete TTS cache</button>
           </div>
           <div class="progress-track">
             <div class="progress-fill" id="progressFill"></div>
