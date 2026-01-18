@@ -33,6 +33,7 @@
         font-family: var(--ui);
         color: var(--ink);
         background: linear-gradient(130deg, #f6f1ea 0%, #f2e8da 40%, #e9f2ef 100%);
+        touch-action: manipulation;
       }
 
       .app {
@@ -797,7 +798,9 @@
       }
 
       .btn.icon {
-        padding: 8px 12px;
+        width: 36px;
+        height: 36px;
+        padding: 0;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -936,7 +939,8 @@
         border: 1px solid #d8caba;
         background: #fff;
         color: var(--ink);
-        padding: 6px 12px;
+        height: 36px;
+        padding: 0 12px;
         border-radius: 999px;
         font-weight: 600;
         cursor: pointer;
@@ -1247,12 +1251,14 @@
         <div class="speed">
           <button class="btn speed" id="speedBtn" type="button" aria-label="Playback speed" title="Playback speed">
             <svg
-              viewBox="0 0 24 24"
+              viewBox="0 0 30 30"
               aria-hidden="true"
               focusable="false"
             >
-              <path d="M12 3a9 9 0 0 0-9 9h2a7 7 0 1 1 7 7v2a9 9 0 0 0 0-18z" fill="currentColor"></path>
-              <path d="M12 7h-1v6l5 3 1-1.7-4-2.3z" fill="currentColor"></path>
+              <path
+                d="m 14.703125,5.5722656 a 12,12 0 0 0 -12,12.0000004 12,12 0 0 0 0.6894531,3.964843 A 10.746539,10.746539 0 0 1 3.0976562,19.09375 10.746539,10.746539 0 0 1 13.84375,8.3476562 10.746539,10.746539 0 0 1 19.826172,10.173828 L 21.966797,8.0332031 A 12,12 0 0 0 14.703125,5.5722656 Z m 9.148437,3.6035156 c -0.25173,0.00423 -0.507325,0.1022801 -0.71875,0.28125 l -9.193359,7.7812498 c -0.422789,0.35795 -1.416166,1.411952 -0.002,2.826172 1.414471,1.41445 2.468093,0.418804 2.826172,-0.0039 l 7.783203,-9.189453 c 0.358051,-0.42275 0.391737,-1.0223328 0,-1.4140628 -0.195869,-0.19587 -0.443582,-0.285475 -0.695313,-0.28125 z m 1.84961,3.6074218 -2.021484,2.021485 A 10.746539,10.746539 0 0 1 24.585938,19 h 2.015624 a 12,12 0 0 0 0.101563,-1.427734 12,12 0 0 0 -1.001953,-4.789063 z"
+                fill="currentColor"
+              ></path>
             </svg>
             <span id="speedValue">1.0x</span>
           </button>
@@ -3346,6 +3352,19 @@
       loadVoices();
       readUrlState();
       loadBooks();
+
+      let lastTouchEnd = 0;
+      document.addEventListener(
+        "touchend",
+        (event) => {
+          const now = Date.now();
+          if (now - lastTouchEnd <= 300) {
+            event.preventDefault();
+          }
+          lastTouchEnd = now;
+        },
+        { passive: false }
+      );
     </script>
   </body>
 </html>
