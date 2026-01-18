@@ -855,8 +855,9 @@
       .bookmark-panel {
         position: absolute;
         bottom: 52px;
-        left: 0;
+        right: 0;
         width: 280px;
+        max-width: min(280px, calc(100vw - 32px));
         background: #fffdf9;
         border: 1px solid #eadfd2;
         border-radius: 16px;
@@ -930,7 +931,7 @@
         font-size: 13px;
       }
 
-      .speed-btn {
+      .btn.speed {
         border: 1px solid #d8caba;
         background: #fff;
         color: var(--ink);
@@ -938,6 +939,15 @@
         border-radius: 999px;
         font-weight: 600;
         cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .btn.speed svg {
+        width: 16px;
+        height: 16px;
+        display: block;
       }
 
       @keyframes fade-up {
@@ -1218,7 +1228,15 @@
       </div>
       <div class="player-right">
         <div class="marks">
-          <button class="btn" id="bookmarkBtn">Bookmarks</button>
+          <button class="btn icon" id="bookmarkBtn" aria-label="Bookmarks" title="Bookmarks">
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="currentColor"></path>
+            </svg>
+          </button>
           <div class="bookmark-panel" id="bookmarkPanel">
             <div class="bookmark-title">Bookmarks</div>
             <div class="bookmark-list" id="bookmarkList"></div>
@@ -1226,7 +1244,17 @@
           </div>
         </div>
         <div class="speed">
-          <button class="speed-btn" id="speedBtn" type="button">Speed 1.0x</button>
+          <button class="btn speed" id="speedBtn" type="button" aria-label="Playback speed" title="Playback speed">
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M12 3a9 9 0 0 0-9 9h2a7 7 0 1 1 7 7v2a9 9 0 0 0 0-18z" fill="currentColor"></path>
+              <path d="M12 7h-1v6l5 3 1-1.7-4-2.3z" fill="currentColor"></path>
+            </svg>
+            <span id="speedValue">1.0x</span>
+          </button>
         </div>
       </div>
       <button class="jump-btn" id="jumpShelf" type="button" aria-label="Back to bookshelf">↑</button>
@@ -1327,6 +1355,7 @@
       const prevBtn = document.getElementById("prevBtn");
       const nextBtn = document.getElementById("nextBtn");
       const speedBtn = document.getElementById("speedBtn");
+      const speedValue = document.getElementById("speedValue");
       const jumpShelf = document.getElementById("jumpShelf");
       const audio = document.getElementById("audio");
       const audioNext = document.getElementById("audioNext");
@@ -2929,7 +2958,7 @@
 
       function setSpeedRate(rate) {
         state.playbackRate = rate;
-        speedBtn.textContent = `Speed ${rate.toFixed(1)}x`;
+        speedValue.textContent = `${rate.toFixed(1)}x`;
         setPlaybackRate(rate);
       }
 
