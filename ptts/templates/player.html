@@ -2276,14 +2276,18 @@
       }
 
       function updateMergeButtonState() {
-        mergeBtn.disabled =
-          !state.mergeReady || state.mergeRunning || state.mergeOutputExists;
         if (state.mergeRunning && state.mergeStage === "installing") {
           mergeBtn.textContent = "Installing ffmpeg...";
+          mergeBtn.disabled = true;
         } else if (state.mergeRunning) {
           mergeBtn.textContent = "Merging...";
+          mergeBtn.disabled = true;
+        } else if (state.mergeOutputExists) {
+          mergeBtn.textContent = "Download M4B";
+          mergeBtn.disabled = false;
         } else {
           mergeBtn.textContent = "Merge M4B";
+          mergeBtn.disabled = !state.mergeReady;
         }
       }
 
@@ -2396,6 +2400,22 @@
           mergeStatus.textContent = err.message || "Merge failed to start.";
           setStatus(err.message || "Merge failed to start.");
         }
+      }
+
+      function downloadM4b() {
+        if (!state.book) {
+          return;
+        }
+        const url = `/api/m4b/download?book_id=${encodeURIComponent(
+          state.book.id
+        )}`;
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${state.book.id}.m4b`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setStatus("Downloading M4B...");
       }
 
       async function sampleSynth() {
@@ -3242,7 +3262,13 @@
       });
       startTts.addEventListener("click", toggleSynth);
       sampleTts.addEventListener("click", toggleSample);
-      mergeBtn.addEventListener("click", startMerge);
+      mergeBtn.addEventListener("click", () => {
+        if (state.mergeOutputExists && !state.mergeRunning) {
+          downloadM4b();
+        } else {
+          startMerge();
+        }
+      });
       clearTtsBtn.addEventListener("click", clearTtsCache);
       bookMenuBtn.addEventListener("click", toggleBookMenu);
       document.addEventListener("click", (event) => {

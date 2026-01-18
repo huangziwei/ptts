@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import IO, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -285,8 +285,13 @@ def _playback_path(book_dir: Path) -> Path:
     return book_dir / "playback.json"
 
 
+def _m4b_library_dir(root_dir: Path) -> Path:
+    return root_dir / "_m4b"
+
+
 def _merge_output_path(book_dir: Path) -> Path:
-    return book_dir / f"{book_dir.name}.m4b"
+    library_dir = _m4b_library_dir(book_dir.parent)
+    return library_dir / f"{book_dir.name}.m4b"
 
 
 def _merge_ready(book_dir: Path) -> bool:
@@ -379,6 +384,8 @@ def _sanitize_playback(data: dict) -> dict:
         "furthest_played": furthest,
         "bookmarks": bookmarks,
     }
+
+
 
 
 def _compute_progress(manifest: dict) -> dict:
@@ -621,6 +628,8 @@ def create_app(root_dir: Path) -> FastAPI:
         books: List[dict] = []
         for child in sorted(root_dir.iterdir(), key=lambda p: p.name):
             if not child.is_dir():
+                continue
+            if child.name == "_m4b":
                 continue
             toc_path = child / "clean" / "toc.json"
             if not toc_path.exists():
@@ -1364,6 +1373,18 @@ def create_app(root_dir: Path) -> FastAPI:
                 "book_id": payload.book_id,
                 "output_path": str(output_path),
             }
+        )
+
+    @app.get("/api/m4b/download")
+    def download_m4b(book_id: str) -> FileResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        output_path = _merge_output_path(book_dir)
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="M4B not found.")
+        return FileResponse(
+            path=str(output_path),
+            media_type="audio/mp4",
+            filename=output_path.name,
         )
 
     return app
