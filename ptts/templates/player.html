@@ -1213,6 +1213,7 @@
         cleanEditOriginal: "",
         cleanEditChapter: null,
         bookVoice: null,
+        playTransitioning: false,
       };
 
       const bookList = document.getElementById("bookList");
@@ -2955,53 +2956,58 @@
           clearGapless();
           return;
         }
-        clearGapless();
-        const item = state.queue[index];
-        state.currentQueueIndex = index;
-        setLastPlayed(index);
-        setActiveChunk(index, true);
-        setStatus(`Waiting for chunk ${index + 1} of ${state.queue.length}...`);
-        updateMarks();
-
-        let available = false;
+        state.playTransitioning = true;
         try {
-          available = await chunkExists(item);
-        } catch (err) {
-          available = false;
-        }
+          clearGapless();
+          const item = state.queue[index];
+          state.currentQueueIndex = index;
+          setLastPlayed(index);
+          setActiveChunk(index, true);
+          setStatus(`Waiting for chunk ${index + 1} of ${state.queue.length}...`);
+          updateMarks();
 
-        if (!available) {
-          waitForChunk(index);
-          currentAudio.pause();
-          playBtn.textContent = "Play";
-          setStatus("Chunk not ready. Press Play to retry.");
-          return;
-        }
+          let available = false;
+          try {
+            available = await chunkExists(item);
+          } catch (err) {
+            available = false;
+          }
 
-        if (state.waitTimer) {
-          clearTimeout(state.waitTimer);
+          if (!available) {
+            waitForChunk(index);
+            currentAudio.pause();
+            playBtn.textContent = "Play";
+            setStatus("Chunk not ready. Press Play to retry.");
+            return;
+          }
+
+          if (state.waitTimer) {
+            clearTimeout(state.waitTimer);
+          }
+          state.waitingFor = null;
+          setActiveChunk(index, false);
+          const usedPreload = usePreloadedAudio(index);
+          if (!usedPreload) {
+            clearPreload();
+            currentAudio.pause();
+            currentAudio.src = chunkUrl(item);
+            currentAudio.load();
+          }
+          setPlaybackRate(state.playbackRate || 1);
+          try {
+            await currentAudio.play();
+            setStatus(
+              `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${state.queue.length}`
+            );
+            playBtn.textContent = "Pause";
+          } catch (err) {
+            setStatus("Press Play to start audio.");
+          }
+          armGapless(index);
+          void preloadIndex(index + 1);
+        } finally {
+          state.playTransitioning = false;
         }
-        state.waitingFor = null;
-        setActiveChunk(index, false);
-        const usedPreload = usePreloadedAudio(index);
-        if (!usedPreload) {
-          clearPreload();
-          currentAudio.pause();
-          currentAudio.src = chunkUrl(item);
-          currentAudio.load();
-        }
-        setPlaybackRate(state.playbackRate || 1);
-        try {
-          await currentAudio.play();
-          setStatus(
-            `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${state.queue.length}`
-          );
-          playBtn.textContent = "Pause";
-        } catch (err) {
-          setStatus("Press Play to start audio.");
-        }
-        armGapless(index);
-        void preloadIndex(index + 1);
       }
 
       function waitForChunk(index) {
@@ -3150,6 +3156,9 @@
       });
       function handleEnded(event) {
         if (event.target !== currentAudio) {
+          return;
+        }
+        if (state.playTransitioning) {
           return;
         }
         playIndex(state.currentQueueIndex + 1);
