@@ -1830,8 +1830,16 @@
             const desired = chapterId || state.chapters[0].id;
             renderChapter(desired);
             const offset = state.chapterOffsets[desired];
-            state.currentQueueIndex =
+            let anchorIndex =
               typeof offset === "number" ? offset : state.currentQueueIndex;
+            const lastIndex = getLastPlayed();
+            if (lastIndex !== null) {
+              const lastItem = state.queue[lastIndex];
+              if (lastItem && lastItem.chapterId === desired) {
+                anchorIndex = lastIndex;
+              }
+            }
+            state.currentQueueIndex = anchorIndex;
             setIdleStatus();
             if (state.needsRechunk) {
               setStatus("Manifest missing chunk spans. Delete TTS cache and start TTS.");
