@@ -15,3 +15,8 @@ def test_html_to_text_removes_footnotes() -> None:
         b"</body></html>"
     )
     assert html_to_text(html) == "Sentence."
+
+
+def test_html_to_text_normalizes_modifier_apostrophe() -> None:
+    html = "<html><body><p>It\u02bcs fine.</p></body></html>".encode("utf-8")
+    assert html_to_text(html) == "It's fine."

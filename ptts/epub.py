@@ -290,6 +290,7 @@ def html_to_text(html: bytes) -> str:
 
 
 def normalize_text(text: str) -> str:
+    text = text.replace("\u02bc", "'")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
