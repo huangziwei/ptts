@@ -853,9 +853,10 @@
       }
 
       .bookmark-panel {
-        position: absolute;
-        bottom: 52px;
-        right: 0;
+        position: fixed;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
+        left: 50%;
+        transform: translateX(-50%);
         width: 280px;
         max-width: min(280px, calc(100vw - 32px));
         background: #fffdf9;
@@ -2057,6 +2058,41 @@
         updateMarks();
       }
 
+      function positionBookmarkPanel() {
+        if (!bookmarkPanel.classList.contains("open")) {
+          return;
+        }
+        const playerBar = document.querySelector(".player-bar");
+        if (!playerBar) {
+          return;
+        }
+        const barRect = playerBar.getBoundingClientRect();
+        const panelRect = bookmarkPanel.getBoundingClientRect();
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const margin = 16;
+        const anchorRect = bookmarkBtn.getBoundingClientRect();
+        const anchorCenter = anchorRect.left + anchorRect.width / 2;
+        const idealLeft = anchorCenter - panelRect.width / 2;
+        const maxLeft = viewportWidth - panelRect.width - margin;
+        const left = Math.max(margin, Math.min(idealLeft, maxLeft));
+        const top = Math.max(margin, barRect.top - panelRect.height - 12);
+        bookmarkPanel.style.left = `${left}px`;
+        bookmarkPanel.style.top = `${top}px`;
+        bookmarkPanel.style.bottom = "auto";
+        bookmarkPanel.style.transform = "none";
+      }
+
+      function openBookmarkPanel() {
+        bookmarkPanel.classList.add("open");
+        requestAnimationFrame(positionBookmarkPanel);
+        window.addEventListener("resize", positionBookmarkPanel);
+      }
+
+      function closeBookmarkPanel() {
+        bookmarkPanel.classList.remove("open");
+        window.removeEventListener("resize", positionBookmarkPanel);
+      }
+
       function addBookmark(index) {
         if (index === null || index < 0 || index >= state.queue.length) {
           return;
@@ -3229,7 +3265,11 @@
       rulesRemove.addEventListener("input", scheduleRulesSave);
       rulesReplace.addEventListener("change", scheduleRulesSave);
       bookmarkBtn.addEventListener("click", () => {
-        bookmarkPanel.classList.toggle("open");
+        if (bookmarkPanel.classList.contains("open")) {
+          closeBookmarkPanel();
+        } else {
+          openBookmarkPanel();
+        }
       });
       bookmarkList.addEventListener("click", (event) => {
         const target = event.target;
@@ -3243,7 +3283,7 @@
         }
         if (action === "play" || action === "play-furthest") {
           jumpToIndex(index, true);
-          bookmarkPanel.classList.remove("open");
+          closeBookmarkPanel();
           return;
         }
         if (action === "remove") {
