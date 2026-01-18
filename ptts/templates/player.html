@@ -303,6 +303,17 @@
         margin-bottom: 12px;
       }
 
+      .tts-divider {
+        width: 1px;
+        height: 24px;
+        background: #e6d9cb;
+        border-radius: 999px;
+      }
+
+      .tts-delete {
+        margin-left: auto;
+      }
+
       .tts-actions label {
         font-size: 13px;
         color: var(--muted);
@@ -1099,8 +1110,9 @@
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
             <button class="btn" id="sampleTts" type="button">Sample</button>
+            <span class="tts-divider" aria-hidden="true"></span>
             <button class="btn" id="mergeBtn" type="button">Merge M4B</button>
-            <button class="btn" id="clearTtsBtn" type="button" title="Delete tts/ for this book.">Delete TTS cache</button>
+            <button class="btn tts-delete" id="clearTtsBtn" type="button" title="Delete tts/ for this book.">Delete TTS cache</button>
           </div>
           <div class="progress-track">
             <div class="progress-fill" id="progressFill"></div>
