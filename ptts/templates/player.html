@@ -800,6 +800,12 @@
         color: #fff;
       }
 
+      .btn.success {
+        background: #e4f3ee;
+        border-color: #a6d2c8;
+        color: #1d7f6e;
+      }
+
       .btn.subtle {
         background: #faf6f0;
         border-color: #e6d9cb;
@@ -2179,22 +2185,30 @@
         state.synthRunning = !!data.running;
         state.synthMode = data.mode || "tts";
         const sampling = state.synthMode === "sample";
+        const progress = data.progress;
+        const complete =
+          !sampling &&
+          !!progress &&
+          progress.total > 0 &&
+          progress.done >= progress.total;
+        startTts.classList.remove("success");
         if (state.synthRunning && sampling) {
           startTts.textContent = "Start TTS";
           startTts.disabled = true;
           sampleTts.textContent = "Stop Sample";
+        } else if (complete && !state.synthRunning) {
+          startTts.textContent = "TTS Complete";
+          startTts.disabled = true;
+          startTts.classList.add("success");
+          sampleTts.textContent = "Sample";
         } else {
           startTts.textContent = state.synthRunning ? "Stop TTS" : "Start TTS";
           startTts.disabled = false;
           sampleTts.textContent = "Sample";
         }
-        const progress = data.progress;
         const overall = data.overall_progress || null;
         state.mergeReady =
-          !sampling &&
-          !!progress &&
-          progress.total > 0 &&
-          progress.done >= progress.total &&
+          complete &&
           !state.synthRunning;
         updateMergeButtonState();
         const stage = data.stage || "idle";
@@ -2267,7 +2281,8 @@
         } else {
           bookStatus.textContent = state.book && state.book.has_audio ? "Audio ready." : "Waiting for audio.";
         }
-        startTts.disabled = state.synthRunning && sampling;
+        startTts.disabled =
+          startTts.disabled || (state.synthRunning && sampling);
         const ffmpegState = data.ffmpeg_status || "unknown";
         if (ffmpegState === "installing") {
           ffmpegStatus.textContent = "Installing ffmpeg...";
