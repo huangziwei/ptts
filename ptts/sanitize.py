@@ -18,6 +18,8 @@ RULE_KEYS = (
     "section_cutoff_patterns",
     "remove_patterns",
 )
+PARAGRAPH_BREAK_OPTIONS = ("double", "single")
+DEFAULT_PARAGRAPH_BREAKS = "double"
 
 DEFAULT_RULES: Dict[str, List[str]] = {
     "drop_chapter_title_patterns": [
@@ -65,6 +67,7 @@ class Ruleset:
     drop_chapter_title_patterns: List[str]
     section_cutoff_patterns: List[str]
     remove_patterns: List[str]
+    paragraph_breaks: str = DEFAULT_PARAGRAPH_BREAKS
     source_path: Optional[Path] = None
     replace_defaults: bool = False
 
@@ -88,6 +91,7 @@ def load_rules(
     rules = deepcopy(DEFAULT_RULES)
     source_path = None
     replace_defaults = False
+    paragraph_breaks = DEFAULT_PARAGRAPH_BREAKS
 
     if rules_path is None:
         candidate = base_dir / ".codex" / "ptts-rules.json"
@@ -98,6 +102,13 @@ def load_rules(
         source_path = rules_path
         data = json.loads(rules_path.read_text(encoding="utf-8"))
         replace_defaults = bool(data.get("replace_defaults", False))
+        paragraph_value = data.get("paragraph_breaks", DEFAULT_PARAGRAPH_BREAKS)
+        paragraph_cleaned = str(paragraph_value).strip().lower()
+        if paragraph_cleaned not in PARAGRAPH_BREAK_OPTIONS:
+            raise ValueError(
+                "Rules key 'paragraph_breaks' must be 'double' or 'single'."
+            )
+        paragraph_breaks = paragraph_cleaned
         if replace_defaults:
             rules = {key: [] for key in RULE_KEYS}
         for key in RULE_KEYS:
@@ -111,6 +122,7 @@ def load_rules(
         drop_chapter_title_patterns=rules["drop_chapter_title_patterns"],
         section_cutoff_patterns=rules["section_cutoff_patterns"],
         remove_patterns=rules["remove_patterns"],
+        paragraph_breaks=paragraph_breaks,
         source_path=source_path,
         replace_defaults=replace_defaults,
     )
@@ -175,7 +187,11 @@ def _should_preserve_lines(lines: List[str]) -> bool:
     return False
 
 
-def normalize_text(text: str, unwrap_lines: bool = True) -> str:
+def normalize_text(
+    text: str,
+    unwrap_lines: bool = True,
+    paragraph_breaks: str = DEFAULT_PARAGRAPH_BREAKS,
+) -> str:
     text = text.replace("\u02bc", "'").replace("\u2018", "'").replace("\u2019", "'")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
@@ -198,6 +214,9 @@ def normalize_text(text: str, unwrap_lines: bool = True) -> str:
         text = "\n\n".join(normalized_blocks)
     else:
         text = re.sub(r"[ \t]{2,}", " ", text)
+
+    if paragraph_breaks == "single":
+        text = re.sub(r"(?<!\n)\n(?!\n)", "\n\n", text)
 
     return text.strip()
 
@@ -334,12 +353,20 @@ def sanitize_book(
             continue
 
         raw_text = raw_path.read_text(encoding="utf-8")
-        raw_text = normalize_text(raw_text)
+        raw_text = normalize_text(
+            raw_text,
+            unwrap_lines=rules.paragraph_breaks != "single",
+            paragraph_breaks=rules.paragraph_breaks,
+        )
         cutoff_text, cutoff_reason = apply_section_cutoff(
             raw_text, cutoff_patterns
         )
         cleaned, stats = apply_remove_patterns(cutoff_text, remove_patterns)
-        cleaned = normalize_text(cleaned)
+        cleaned = normalize_text(
+            cleaned,
+            unwrap_lines=rules.paragraph_breaks != "single",
+            paragraph_breaks=rules.paragraph_breaks,
+        )
 
         clean_path.write_text(cleaned + "\n", encoding="utf-8")
 
@@ -379,6 +406,7 @@ def sanitize_book(
             "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
             "section_cutoff_patterns": rules.section_cutoff_patterns,
             "remove_patterns": rules.remove_patterns,
+            "paragraph_breaks": rules.paragraph_breaks,
         },
         "stats": {
             "total_chapters": len(report_entries),
@@ -652,10 +680,18 @@ def restore_chapter(
         raise ValueError("Chapter title still matches drop rules.")
 
     raw_text = raw_path.read_text(encoding="utf-8")
-    raw_text = normalize_text(raw_text)
+    raw_text = normalize_text(
+        raw_text,
+        unwrap_lines=rules.paragraph_breaks != "single",
+        paragraph_breaks=rules.paragraph_breaks,
+    )
     cutoff_text, cutoff_reason = apply_section_cutoff(raw_text, cutoff_patterns)
     cleaned, _stats = apply_remove_patterns(cutoff_text, remove_patterns)
-    cleaned = normalize_text(cleaned)
+    cleaned = normalize_text(
+        cleaned,
+        unwrap_lines=rules.paragraph_breaks != "single",
+        paragraph_breaks=rules.paragraph_breaks,
+    )
 
     clean_dir = book_dir / "clean" / "chapters"
     clean_dir.mkdir(parents=True, exist_ok=True)

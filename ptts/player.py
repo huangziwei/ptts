@@ -59,16 +59,21 @@ def _load_rules_payload(base_dir: Path) -> dict:
             "drop_chapter_title_patterns": [],
             "section_cutoff_patterns": [],
             "remove_patterns": [],
+            "paragraph_breaks": "double",
         }
     data = json.loads(rules_path.read_text(encoding="utf-8"))
     data.setdefault("replace_defaults", False)
     data.setdefault("drop_chapter_title_patterns", [])
     data.setdefault("section_cutoff_patterns", [])
     data.setdefault("remove_patterns", [])
+    data.setdefault("paragraph_breaks", "double")
     return data
 
 
 def _write_rules_payload(base_dir: Path, payload: dict) -> None:
+    paragraph_breaks = str(payload.get("paragraph_breaks", "double") or "double").strip().lower()
+    if paragraph_breaks not in sanitize.PARAGRAPH_BREAK_OPTIONS:
+        paragraph_breaks = "double"
     data = {
         "replace_defaults": bool(payload.get("replace_defaults", False)),
         "drop_chapter_title_patterns": list(
@@ -76,6 +81,7 @@ def _write_rules_payload(base_dir: Path, payload: dict) -> None:
         ),
         "section_cutoff_patterns": list(payload.get("section_cutoff_patterns", [])),
         "remove_patterns": list(payload.get("remove_patterns", [])),
+        "paragraph_breaks": paragraph_breaks,
     }
     if not data["replace_defaults"]:
         for key, defaults in sanitize.DEFAULT_RULES.items():
@@ -615,6 +621,7 @@ class RulesPayload(BaseModel):
     drop_chapter_title_patterns: List[str] = []
     section_cutoff_patterns: List[str] = []
     remove_patterns: List[str] = []
+    paragraph_breaks: str = "double"
     replace_defaults: bool = False
 
 
@@ -917,12 +924,13 @@ def create_app(root_dir: Path) -> FastAPI:
             "clean_text": clean_text,
             "dropped": dropped,
             "rules": {
-                "replace_defaults": rules.replace_defaults,
-                "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
-                "section_cutoff_patterns": rules.section_cutoff_patterns,
-                "remove_patterns": rules.remove_patterns,
-            },
-        }
+            "replace_defaults": rules.replace_defaults,
+            "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
+            "section_cutoff_patterns": rules.section_cutoff_patterns,
+            "remove_patterns": rules.remove_patterns,
+            "paragraph_breaks": rules.paragraph_breaks,
+        },
+    }
         return _no_store(payload)
 
     @app.post("/api/sanitize/rules")
