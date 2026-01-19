@@ -20,3 +20,8 @@ def test_html_to_text_removes_footnotes() -> None:
 def test_html_to_text_normalizes_modifier_apostrophe() -> None:
     html = "<html><body><p>It\u02bcs fine.</p></body></html>".encode("utf-8")
     assert html_to_text(html) == "It's fine."
+
+
+def test_html_to_text_normalizes_curly_apostrophe() -> None:
+    html = "<html><body><p>It\u2019s fine.</p></body></html>".encode("utf-8")
+    assert html_to_text(html) == "It's fine."

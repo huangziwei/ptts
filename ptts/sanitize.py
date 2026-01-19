@@ -172,6 +172,7 @@ def _should_preserve_lines(lines: List[str]) -> bool:
 
 
 def normalize_text(text: str, unwrap_lines: bool = True) -> str:
+    text = text.replace("\u02bc", "'").replace("\u2018", "'").replace("\u2019", "'")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)

@@ -16,7 +16,7 @@ def test_normalize_text_unwraps_bracketed_dropcap() -> None:
     text = "[T]o see what is in front of one’s nose needs a constant struggle."
     assert (
         sanitize.normalize_text(text)
-        == "To see what is in front of one’s nose needs a constant struggle."
+        == "To see what is in front of one's nose needs a constant struggle."
     )
 
 
