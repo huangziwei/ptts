@@ -1782,6 +1782,23 @@
           .join(" ");
       }
 
+      function voiceLabelFromValue(value) {
+        if (!value) {
+          return "";
+        }
+        const match = state.voiceOptions.find((entry) => entry.value === value);
+        if (match && match.label) {
+          return formatVoiceLabel(match.label);
+        }
+        const parts = String(value).split(/[\\/]/);
+        let leaf = parts[parts.length - 1] || "";
+        if (leaf) {
+          leaf = leaf.replace(/\.[^.]+$/, "");
+          return formatVoiceLabel(leaf);
+        }
+        return formatVoiceLabel(value);
+      }
+
       async function loadVoices() {
         try {
           const data = await fetchJson("/api/voices");
@@ -1932,7 +1949,7 @@
         state.advancedSelection = new Set(
           [...state.advancedSelection].filter((id) => chapterIds.has(id))
         );
-        const defaultLabel = formatVoiceLabel(state.voiceMap.default || "");
+        const defaultLabel = voiceLabelFromValue(state.voiceMap.default || "");
         buildVoiceOptions(advancedBulkVoice, defaultLabel);
         if (!advancedBulkVoice.value) {
           advancedBulkVoice.value = "default";
