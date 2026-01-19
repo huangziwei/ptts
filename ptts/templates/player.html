@@ -2715,6 +2715,19 @@
         return state.chapterMap[chapterId] || null;
       }
 
+      function getChapterChunkTotal(item) {
+        const chapter = getChapterById(item.chapterId);
+        if (!chapter) {
+          return 0;
+        }
+        const count = chapter.chunk_count;
+        if (Number.isInteger(count) && count > 0) {
+          return count;
+        }
+        const spans = chapter.chunk_spans || [];
+        return Array.isArray(spans) ? spans.length : 0;
+      }
+
       function getChunkSpan(item) {
         const chapter = getChapterById(item.chapterId);
         if (!chapter) {
@@ -3996,10 +4009,13 @@
         try {
           clearGapless();
           const item = state.queue[index];
+          const chapterTotal = getChapterChunkTotal(item);
           state.currentQueueIndex = index;
           setLastPlayed(index);
           setActiveChunk(index, true);
-          setStatus(`Waiting for chunk ${index + 1} of ${state.queue.length}...`);
+          setStatus(
+            `Waiting for chunk ${item.chunkIndex + 1} of ${chapterTotal}...`
+          );
           updateMarks();
 
           let available = false;
@@ -4033,7 +4049,7 @@
           try {
             await currentAudio.play();
             setStatus(
-              `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${state.queue.length}`
+              `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${chapterTotal}`
             );
             setPlayButton(true);
           } catch (err) {
