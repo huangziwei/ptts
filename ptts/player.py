@@ -1369,7 +1369,30 @@ def create_app(root_dir: Path) -> FastAPI:
             raise HTTPException(status_code=409, detail="Stop merge before clearing cache.")
         tts_dir = book_dir / "tts"
         if tts_dir.exists():
-            shutil.rmtree(tts_dir)
+            seg_dir = tts_dir / "segments"
+            if seg_dir.exists():
+                shutil.rmtree(seg_dir)
+            manifest_path = tts_dir / "manifest.json"
+            if manifest_path.exists():
+                manifest = _load_json(manifest_path)
+                chapters = manifest.get("chapters", [])
+                changed = False
+                if isinstance(chapters, list):
+                    for entry in chapters:
+                        if not isinstance(entry, dict):
+                            continue
+                        chunks = entry.get("chunks", [])
+                        if not isinstance(chunks, list) or not chunks:
+                            continue
+                        durations = entry.get("durations_ms")
+                        reset = not isinstance(durations, list) or len(durations) != len(chunks)
+                        if not reset and any(value is not None for value in durations):
+                            reset = True
+                        if reset:
+                            entry["durations_ms"] = [None] * len(chunks)
+                            changed = True
+                if changed:
+                    _atomic_write_json(manifest_path, manifest)
         return _no_store({"status": "cleared", "book_id": payload.book_id})
 
     @app.get("/api/merge/status")

@@ -204,7 +204,7 @@ def _clone(args: argparse.Namespace) -> int:
     voices_dir = repo_root / "voices"
     voices_dir.mkdir(parents=True, exist_ok=True)
     start = args.start or "00:00:00"
-    duration_value = int(args.duration or 0)
+    duration_value = float(args.duration or 0)
     if duration_value <= 0:
         sys.stderr.write("--duration must be a positive number of seconds.\n")
         return 2
@@ -451,9 +451,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     clone.add_argument(
         "--duration",
-        type=int,
+        type=float,
         default=10,
-        help="Duration in seconds (integer)",
+        help="Duration in seconds",
     )
     clone.set_defaults(func=_clone)
 

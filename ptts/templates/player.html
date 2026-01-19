@@ -1273,7 +1273,7 @@
             <button class="btn" id="sampleTts" type="button">Sample</button>
             <span class="tts-divider" aria-hidden="true"></span>
             <button class="btn" id="mergeBtn" type="button">Merge M4B</button>
-            <button class="btn subtle tts-delete" id="clearTtsBtn" type="button" title="Delete tts/ for this book.">Delete TTS cache</button>
+            <button class="btn subtle tts-delete" id="clearTtsBtn" type="button" title="Delete TTS segments for this book.">Delete TTS cache</button>
           </div>
           <div class="progress-track">
             <div class="progress-fill" id="progressFill"></div>
@@ -3001,7 +3001,7 @@
           setStatus("Stop TTS/merge before clearing cache.");
           return;
         }
-        const ok = confirm("Delete all TTS cache for this book?");
+        const ok = confirm("Delete all TTS segments for this book?");
         if (!ok) {
           return;
         }
