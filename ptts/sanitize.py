@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from . import tts as tts_util
+from .text import read_clean_text
 
 RULE_KEYS = (
     "drop_chapter_title_patterns",
@@ -445,3 +446,328 @@ def refresh_chunks(
         rechunk=True,
     )
     return tts_cleared
+
+
+def _load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _reindex_clean_entries(entries: List[dict]) -> None:
+    for idx, entry in enumerate(entries, start=1):
+        entry["index"] = idx
+
+
+def _match_report_entry(entry: dict, rel_path: str, title: str) -> bool:
+    clean_path = str(entry.get("clean_path") or "")
+    if clean_path.endswith(rel_path):
+        return True
+    if Path(clean_path).name == Path(rel_path).name:
+        return True
+    return (entry.get("title") or "") == title
+
+
+def _update_report(
+    book_dir: Path,
+    rel_path: str,
+    title: str,
+    dropped: bool,
+    drop_reason: str = "",
+    cutoff_reason: str = "",
+    raw_chars: Optional[int] = None,
+    clean_chars: Optional[int] = None,
+) -> None:
+    report_path = book_dir / "clean" / "report.json"
+    if not report_path.exists():
+        return
+    report = _load_json(report_path)
+    chapters = report.get("chapters", [])
+    if not isinstance(chapters, list):
+        return
+    target = None
+    for entry in chapters:
+        if isinstance(entry, dict) and _match_report_entry(entry, rel_path, title):
+            target = entry
+            break
+    if not target:
+        return
+
+    target["dropped"] = dropped
+    target["drop_reason"] = drop_reason if dropped else ""
+    if cutoff_reason:
+        target["cutoff_reason"] = cutoff_reason
+    if raw_chars is not None:
+        target["raw_chars"] = raw_chars
+    if clean_chars is not None:
+        target["clean_chars"] = clean_chars
+    target["clean_path"] = str((book_dir / rel_path).resolve())
+
+    stats = report.get("stats", {}) if isinstance(report.get("stats"), dict) else {}
+    stats["dropped_chapters"] = sum(
+        1 for entry in chapters if isinstance(entry, dict) and entry.get("dropped")
+    )
+    stats["total_chapters"] = len(chapters)
+    report["stats"] = stats
+    _write_json(report_path, report)
+
+
+def _drop_tts_chapter(book_dir: Path, chapter_id: str) -> None:
+    tts_dir = book_dir / "tts"
+    if not tts_dir.exists():
+        return
+    for dir_name in ("chunks", "segments"):
+        target = tts_dir / dir_name / chapter_id
+        if target.exists():
+            shutil.rmtree(target)
+    manifest_path = tts_dir / "manifest.json"
+    if not manifest_path.exists():
+        return
+    manifest = _load_json(manifest_path)
+    chapters = manifest.get("chapters", [])
+    if not isinstance(chapters, list):
+        return
+    filtered = [
+        entry
+        for entry in chapters
+        if isinstance(entry, dict) and (entry.get("id") or "") != chapter_id
+    ]
+    if len(filtered) == len(chapters):
+        return
+    manifest["chapters"] = filtered
+    tts_util.atomic_write_json(manifest_path, manifest)
+
+
+def drop_chapter(
+    book_dir: Path,
+    title: str,
+    chapter_index: Optional[int] = None,
+) -> bool:
+    clean_toc_path = book_dir / "clean" / "toc.json"
+    if not clean_toc_path.exists():
+        raise FileNotFoundError(f"Missing clean/toc.json at {clean_toc_path}")
+    clean_toc = _load_json(clean_toc_path)
+    entries = clean_toc.get("chapters", [])
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("clean/toc.json contains no chapters.")
+
+    target = None
+    if chapter_index is not None:
+        for entry in entries:
+            if entry.get("index") == chapter_index:
+                target = entry
+                break
+    if target is None:
+        for entry in entries:
+            if (entry.get("title") or "") == title:
+                target = entry
+                break
+    if not target:
+        return False
+    if target.get("kind") == "title":
+        raise ValueError("Title chapter cannot be dropped.")
+
+    rel_path = target.get("path") or ""
+    chapter_id = tts_util.chapter_id_from_path(
+        int(target.get("index") or 0),
+        str(target.get("title") or ""),
+        rel_path or None,
+    )
+
+    if rel_path:
+        clean_path = book_dir / rel_path
+        if clean_path.exists():
+            clean_path.unlink()
+
+    entries = [entry for entry in entries if entry is not target]
+    _reindex_clean_entries(entries)
+    clean_toc["chapters"] = entries
+    _write_json(clean_toc_path, clean_toc)
+
+    if rel_path:
+        _update_report(
+            book_dir,
+            rel_path=rel_path,
+            title=str(target.get("title") or ""),
+            dropped=True,
+            drop_reason="manual_drop",
+            clean_chars=0,
+        )
+    _drop_tts_chapter(book_dir, chapter_id)
+    return True
+
+
+def restore_chapter(
+    book_dir: Path,
+    title: str,
+    chapter_index: Optional[int] = None,
+    base_dir: Optional[Path] = None,
+) -> bool:
+    toc_path = book_dir / "toc.json"
+    if not toc_path.exists():
+        raise FileNotFoundError(f"Missing toc.json at {toc_path}")
+    toc = _load_json(toc_path)
+    chapters = toc.get("chapters", [])
+    if not isinstance(chapters, list) or not chapters:
+        raise ValueError("toc.json contains no chapters.")
+
+    raw_entry = None
+    if chapter_index is not None:
+        for entry in chapters:
+            if entry.get("index") == chapter_index:
+                raw_entry = entry
+                break
+    if raw_entry is None:
+        for entry in chapters:
+            if (entry.get("title") or "") == title:
+                raw_entry = entry
+                break
+    if not raw_entry:
+        return False
+
+    raw_rel = raw_entry.get("path") or ""
+    if not raw_rel:
+        raise FileNotFoundError("Missing raw chapter path.")
+    raw_path = book_dir / raw_rel
+    if not raw_path.exists():
+        raise FileNotFoundError(f"Missing raw chapter at {raw_path}")
+
+    if base_dir is None:
+        base_dir = Path.cwd()
+    rules = load_rules(None, base_dir)
+    drop_patterns = compile_patterns(rules.drop_chapter_title_patterns)
+    cutoff_patterns = compile_patterns(rules.section_cutoff_patterns)
+    remove_patterns = compile_patterns(rules.remove_patterns)
+
+    raw_title = str(raw_entry.get("title") or "").strip()
+    drop_reason = should_drop_title(raw_title, drop_patterns)
+    if drop_reason:
+        raise ValueError("Chapter title still matches drop rules.")
+
+    raw_text = raw_path.read_text(encoding="utf-8")
+    raw_text = normalize_text(raw_text)
+    cutoff_text, cutoff_reason = apply_section_cutoff(raw_text, cutoff_patterns)
+    cleaned, _stats = apply_remove_patterns(cutoff_text, remove_patterns)
+    cleaned = normalize_text(cleaned)
+
+    clean_dir = book_dir / "clean" / "chapters"
+    clean_dir.mkdir(parents=True, exist_ok=True)
+    clean_rel = (clean_dir / Path(raw_rel).name).relative_to(book_dir).as_posix()
+    clean_path = book_dir / clean_rel
+    clean_path.write_text(cleaned + "\n", encoding="utf-8")
+    tts_text = read_clean_text(clean_path)
+
+    clean_toc_path = book_dir / "clean" / "toc.json"
+    if not clean_toc_path.exists():
+        raise FileNotFoundError(f"Missing clean/toc.json at {clean_toc_path}")
+    clean_toc = _load_json(clean_toc_path)
+    clean_entries = clean_toc.get("chapters", [])
+    if not isinstance(clean_entries, list):
+        clean_entries = []
+
+    for entry in clean_entries:
+        if (entry.get("path") or "") == clean_rel:
+            return False
+
+    source_index = raw_entry.get("index")
+    new_entry = {
+        "index": 0,
+        "title": raw_title or "Chapter",
+        "path": clean_rel,
+        "source_index": source_index,
+        "kind": "chapter",
+    }
+
+    insert_at = len(clean_entries)
+    for idx, entry in enumerate(clean_entries):
+        entry_source = entry.get("source_index")
+        if entry_source is None:
+            continue
+        if source_index is not None and entry_source >= source_index:
+            insert_at = idx
+            break
+    clean_entries.insert(insert_at, new_entry)
+    _reindex_clean_entries(clean_entries)
+    clean_toc["chapters"] = clean_entries
+    _write_json(clean_toc_path, clean_toc)
+
+    _update_report(
+        book_dir,
+        rel_path=clean_rel,
+        title=raw_title,
+        dropped=False,
+        cutoff_reason=cutoff_reason,
+        raw_chars=len(raw_text),
+        clean_chars=len(cleaned),
+    )
+
+    tts_dir = book_dir / "tts"
+    manifest_path = tts_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = _load_json(manifest_path)
+        manifest_chapters = manifest.get("chapters", [])
+        if isinstance(manifest_chapters, list):
+            chapter_id = tts_util.chapter_id_from_path(
+                int(new_entry.get("index") or 0),
+                raw_title,
+                clean_rel,
+            )
+            max_chars = int(manifest.get("max_chars") or 800)
+            pad_ms = int(manifest.get("pad_ms") or 150)
+            chunk_mode = str(manifest.get("chunk_mode") or "sentence")
+            spans = tts_util.make_chunk_spans(
+                tts_text, max_chars=max_chars, chunk_mode=chunk_mode
+            )
+            chunks = [tts_text[start:end] for start, end in spans]
+            if not chunks:
+                raise ValueError("No chunks generated for restored chapter.")
+            span_list = [[start, end] for start, end in spans]
+            chunk_dir = tts_dir / "chunks" / chapter_id
+            tts_util.write_chunk_files(chunks, chunk_dir, overwrite=True)
+
+            restored_entry = {
+                "index": new_entry.get("index"),
+                "id": chapter_id,
+                "title": raw_title or chapter_id,
+                "path": clean_rel,
+                "text_sha256": tts_util.sha256_str(tts_text),
+                "chunks": chunks,
+                "chunk_spans": span_list,
+                "durations_ms": [None] * len(chunks),
+            }
+
+            order_ids = [
+                tts_util.chapter_id_from_path(
+                    int(entry.get("index") or 0),
+                    str(entry.get("title") or ""),
+                    str(entry.get("path") or ""),
+                )
+                for entry in clean_entries
+            ]
+            positions = {cid: idx for idx, cid in enumerate(order_ids)}
+            existing = [
+                entry
+                for entry in manifest_chapters
+                if isinstance(entry, dict)
+                and (entry.get("id") or "") in positions
+                and (entry.get("id") or "") != chapter_id
+            ]
+            insert_at = len(existing)
+            for idx, entry in enumerate(existing):
+                if positions.get(entry.get("id") or "", 0) > positions.get(chapter_id, 0):
+                    insert_at = idx
+                    break
+            existing.insert(insert_at, restored_entry)
+            manifest["chapters"] = existing
+            manifest["max_chars"] = max_chars
+            manifest["pad_ms"] = pad_ms
+            manifest["chunk_mode"] = chunk_mode
+            tts_util.atomic_write_json(manifest_path, manifest)
+    return True

@@ -583,6 +583,7 @@ class RulesPayload(BaseModel):
 class ChapterAction(BaseModel):
     book_id: str
     title: str
+    chapter_index: Optional[int] = None
 
 
 class SanitizeRequest(BaseModel):
@@ -867,6 +868,13 @@ def create_app(root_dir: Path) -> FastAPI:
 
     @app.post("/api/sanitize/drop")
     def sanitize_drop(payload: ChapterAction) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop TTS before editing.")
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop merge before editing.")
         rules = _load_rules_payload(repo_root)
         pattern = f"^{re.escape(payload.title)}$"
         patterns = list(rules.get("drop_chapter_title_patterns", []))
@@ -874,10 +882,25 @@ def create_app(root_dir: Path) -> FastAPI:
             patterns.append(pattern)
         rules["drop_chapter_title_patterns"] = patterns
         _write_rules_payload(repo_root, rules)
-        return _no_store({"status": "ok", "pattern": pattern})
+        try:
+            dropped = sanitize.drop_chapter(
+                book_dir=book_dir,
+                title=payload.title,
+                chapter_index=payload.chapter_index,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _no_store({"status": "ok", "pattern": pattern, "dropped": dropped})
 
     @app.post("/api/sanitize/restore")
     def sanitize_restore(payload: ChapterAction) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop TTS before editing.")
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop merge before editing.")
         rules = _load_rules_payload(repo_root)
         pattern = f"^{re.escape(payload.title)}$"
         patterns = list(rules.get("drop_chapter_title_patterns", []))
@@ -885,7 +908,16 @@ def create_app(root_dir: Path) -> FastAPI:
             patterns = [p for p in patterns if p != pattern]
         rules["drop_chapter_title_patterns"] = patterns
         _write_rules_payload(repo_root, rules)
-        return _no_store({"status": "ok", "pattern": pattern})
+        try:
+            restored = sanitize.restore_chapter(
+                book_dir=book_dir,
+                title=payload.title,
+                chapter_index=payload.chapter_index,
+                base_dir=repo_root,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _no_store({"status": "ok", "pattern": pattern, "restored": restored})
 
     @app.post("/api/sanitize/run")
     def sanitize_run(payload: SanitizeRequest) -> JSONResponse:

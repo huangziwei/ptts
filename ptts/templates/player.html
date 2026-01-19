@@ -2888,7 +2888,9 @@
             <button class="btn small" type="button">Restore</button>
           `;
           const button = row.querySelector("button");
-          button.addEventListener("click", () => restoreChapter(entry.title));
+          button.addEventListener("click", () =>
+            restoreChapter(entry.title, entry.index)
+          );
           editDroppedList.appendChild(row);
         });
       }
@@ -2970,33 +2972,42 @@
           return;
         }
         try {
-          await fetchJson("/api/sanitize/drop", {
+          const data = await fetchJson("/api/sanitize/drop", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               book_id: state.book.id,
               title: state.previewSelectedTitle,
+              chapter_index: state.previewChapterIndex,
             }),
           });
-          editStatus.textContent = "Chapter queued for drop.";
-          await loadPreview(state.previewChapterIndex);
+          editStatus.textContent = data.dropped
+            ? "Chapter dropped."
+            : "Chapter already dropped.";
+          await selectBook(state.book.id);
         } catch (err) {
           editStatus.textContent = err.message || "Failed to drop chapter.";
         }
       }
 
-      async function restoreChapter(title) {
+      async function restoreChapter(title, chapterIndex) {
         if (!state.book || !title) {
           return;
         }
         try {
-          await fetchJson("/api/sanitize/restore", {
+          const data = await fetchJson("/api/sanitize/restore", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ book_id: state.book.id, title }),
+            body: JSON.stringify({
+              book_id: state.book.id,
+              title,
+              chapter_index: chapterIndex,
+            }),
           });
-          editStatus.textContent = "Chapter restored.";
-          await loadPreview(state.previewChapterIndex);
+          editStatus.textContent = data.restored
+            ? "Chapter restored."
+            : "Chapter already restored.";
+          await selectBook(state.book.id);
         } catch (err) {
           editStatus.textContent = err.message || "Failed to restore chapter.";
         }
