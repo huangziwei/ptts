@@ -116,6 +116,12 @@
         }
       }
 
+      :root.theme-switching *,
+      :root.theme-switching *::before,
+      :root.theme-switching *::after {
+        transition: none !important;
+      }
+
       :root[data-theme="light"] {
         color-scheme: light;
         --bg: #f6f1ea;
@@ -1940,12 +1946,16 @@
       function applyTheme(preference, persist = false) {
         const normalized = normalizeTheme(preference);
         state.themePreference = normalized;
+        document.documentElement.classList.add("theme-switching");
         if (normalized === "system") {
           document.documentElement.removeAttribute("data-theme");
         } else {
           document.documentElement.setAttribute("data-theme", normalized);
         }
         updateThemeToggle();
+        window.setTimeout(() => {
+          document.documentElement.classList.remove("theme-switching");
+        }, 80);
         if (persist) {
           if (normalized === "system") {
             localStorage.removeItem("ptts.theme");
