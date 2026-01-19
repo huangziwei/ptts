@@ -898,13 +898,9 @@ def create_app(root_dir: Path) -> FastAPI:
             raise HTTPException(status_code=409, detail="Stop merge before sanitizing.")
         try:
             sanitize.sanitize_book(book_dir=book_dir, overwrite=True, base_dir=repo_root)
+            tts_cleared = sanitize.refresh_chunks(book_dir=book_dir)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        tts_dir = book_dir / "tts"
-        tts_cleared = False
-        if tts_dir.exists():
-            shutil.rmtree(tts_dir)
-            tts_cleared = True
         return _no_store({"status": "ok", "tts_cleared": tts_cleared})
 
     @app.post("/api/sanitize/clean")
@@ -928,11 +924,10 @@ def create_app(root_dir: Path) -> FastAPI:
         clean_path.parent.mkdir(parents=True, exist_ok=True)
         clean_path.write_text(payload.text.rstrip() + "\n", encoding="utf-8")
 
-        tts_dir = book_dir / "tts"
-        tts_cleared = False
-        if tts_dir.exists():
-            shutil.rmtree(tts_dir)
-            tts_cleared = True
+        try:
+            tts_cleared = sanitize.refresh_chunks(book_dir=book_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _no_store(
             {"status": "ok", "chapter_index": payload.chapter_index, "tts_cleared": tts_cleared}
         )

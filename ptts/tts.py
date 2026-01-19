@@ -631,6 +631,37 @@ def prepare_manifest(
     return manifest, chapter_chunks, int(manifest["pad_ms"])
 
 
+def chunk_book(
+    book_dir: Path,
+    out_dir: Optional[Path] = None,
+    voice: Optional[str] = None,
+    max_chars: int = 800,
+    pad_ms: int = 150,
+    chunk_mode: str = "sentence",
+    rechunk: bool = True,
+) -> Dict[str, Any]:
+    if out_dir is None:
+        out_dir = book_dir / "tts"
+    if voice is None:
+        voice = DEFAULT_VOICE
+    else:
+        voice = voice.strip()
+        if not voice or voice.lower() == "default":
+            voice = DEFAULT_VOICE
+
+    chapters = load_book_chapters(book_dir)
+    manifest, _chapter_chunks, _pad_ms = prepare_manifest(
+        chapters=chapters,
+        out_dir=out_dir,
+        voice=voice,
+        max_chars=max_chars,
+        pad_ms=pad_ms,
+        chunk_mode=chunk_mode,
+        rechunk=rechunk,
+    )
+    return manifest
+
+
 def synthesize(
     chapters: Sequence[ChapterInput],
     voice: Optional[str],

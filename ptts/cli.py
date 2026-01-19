@@ -131,12 +131,17 @@ def _sanitize(args: argparse.Namespace) -> int:
             overwrite=args.overwrite,
             base_dir=Path.cwd(),
         )
+        tts_cleared = sanitize_util.refresh_chunks(book_dir=book_dir)
     except Exception as exc:
         sys.stderr.write(f"Sanitize failed: {exc}\n")
         return 2
 
     print(f"Wrote {written} cleaned chapters to {book_dir / 'clean' / 'chapters'}")
     print(f"Report saved to {book_dir / 'clean' / 'report.json'}")
+    if tts_cleared:
+        print("Cleared TTS cache and prepared chunks.")
+    else:
+        print("Prepared chunks for TTS.")
     return 0
 
 

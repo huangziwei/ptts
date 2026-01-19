@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 import warnings
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+
+from . import tts as tts_util
 
 RULE_KEYS = (
     "drop_chapter_title_patterns",
@@ -421,3 +424,24 @@ def sanitize_book(
     )
 
     return len(clean_entries)
+
+
+def refresh_chunks(
+    book_dir: Path,
+    max_chars: int = 800,
+    pad_ms: int = 150,
+    chunk_mode: str = "sentence",
+) -> bool:
+    tts_dir = book_dir / "tts"
+    tts_cleared = tts_dir.exists()
+    if tts_dir.exists():
+        shutil.rmtree(tts_dir)
+    tts_util.chunk_book(
+        book_dir=book_dir,
+        out_dir=tts_dir,
+        max_chars=max_chars,
+        pad_ms=pad_ms,
+        chunk_mode=chunk_mode,
+        rechunk=True,
+    )
+    return tts_cleared
