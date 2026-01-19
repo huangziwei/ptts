@@ -165,6 +165,7 @@ def _synth(args: argparse.Namespace) -> int:
     book_dir = Path(args.book) if args.book else None
     text_path = Path(args.text) if args.text else None
     out_dir = Path(args.out) if args.out else None
+    voice_map = Path(args.voice_map) if args.voice_map else None
 
     if book_dir is not None:
         return tts_util.synthesize_book(
@@ -175,6 +176,7 @@ def _synth(args: argparse.Namespace) -> int:
             pad_ms=args.pad_ms,
             chunk_mode=args.chunk_mode,
             rechunk=args.rechunk,
+            voice_map_path=voice_map,
         )
 
     if text_path is None or out_dir is None:
@@ -189,12 +191,14 @@ def _synth(args: argparse.Namespace) -> int:
         pad_ms=args.pad_ms,
         chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
+        voice_map_path=voice_map,
     )
 
 
 def _sample(args: argparse.Namespace) -> int:
     book_dir = Path(args.book)
     out_dir = Path(args.out) if args.out else None
+    voice_map = Path(args.voice_map) if args.voice_map else None
     return tts_util.synthesize_book_sample(
         book_dir=book_dir,
         voice=args.voice,
@@ -203,6 +207,7 @@ def _sample(args: argparse.Namespace) -> int:
         pad_ms=args.pad_ms,
         chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
+        voice_map_path=voice_map,
     )
 
 def build_parser() -> argparse.ArgumentParser:
@@ -261,6 +266,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--voice",
         help="Voice prompt: built-in name, wav path, or hf:// URL",
     )
+    synth.add_argument(
+        "--voice-map",
+        help="Path to voice map JSON for per-chapter voices",
+    )
     synth.add_argument("--max-chars", type=int, default=800)
     synth.add_argument("--pad-ms", type=int, default=150)
     synth.add_argument(
@@ -281,6 +290,10 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument(
         "--voice",
         help="Voice prompt: built-in name, wav path, or hf:// URL",
+    )
+    sample.add_argument(
+        "--voice-map",
+        help="Path to voice map JSON for per-chapter voices",
     )
     sample.add_argument("--max-chars", type=int, default=800)
     sample.add_argument("--pad-ms", type=int, default=150)

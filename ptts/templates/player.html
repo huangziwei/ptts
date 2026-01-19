@@ -202,6 +202,12 @@
         gap: 12px;
       }
 
+      .tts-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
       .tts-toggle {
         border: 1px solid #d8caba;
         background: #fff;
@@ -213,8 +219,21 @@
         cursor: pointer;
       }
 
+      .tts-toggle.mode-on {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .tts-toggle.mode-off {
+        background: #fff;
+        border-color: #d8caba;
+        color: var(--ink);
+      }
+
       .tts-panel.collapsed .tts-grid,
-      .tts-panel.collapsed .tts-actions {
+      .tts-panel.collapsed .tts-actions,
+      .tts-panel.collapsed .advanced-panel {
         display: none;
       }
 
@@ -293,6 +312,95 @@
       .voice-empty {
         font-size: 12px;
         color: var(--muted);
+      }
+
+      .advanced-panel {
+        margin: 12px 0;
+        padding: 10px;
+        border-radius: 12px;
+        border: 1px solid #eadfd2;
+        background: #fffdf9;
+        display: none;
+      }
+
+      .advanced-panel.open {
+        display: block;
+      }
+
+      .advanced-header {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .advanced-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--muted);
+      }
+
+      .advanced-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .advanced-actions label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .advanced-actions select {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid #d8caba;
+        font-family: var(--ui);
+        font-size: 12px;
+        background: #fff;
+      }
+
+      .advanced-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+
+      .advanced-row {
+        display: grid;
+        grid-template-columns: 22px 1fr 180px;
+        gap: 10px;
+        align-items: center;
+        padding: 6px 8px;
+        border-radius: 10px;
+        border: 1px solid #eadfd2;
+        background: #fff;
+      }
+
+      .advanced-row.selected {
+        background: #f2e2c7;
+      }
+
+      .advanced-meta {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .advanced-select {
+        width: 100%;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid #d8caba;
+        font-family: var(--ui);
+        font-size: 12px;
+        background: #fff;
       }
 
       .tts-actions {
@@ -1076,6 +1184,14 @@
         .tts-delete {
           margin-left: 0;
         }
+
+        .advanced-row {
+          grid-template-columns: 22px 1fr;
+          grid-template-rows: auto auto;
+        }
+        .advanced-row .advanced-select {
+          grid-column: 2 / -1;
+        }
       }
     </style>
   </head>
@@ -1114,7 +1230,10 @@
         <section class="tts-panel" id="ttsPanel">
           <div class="tts-header">
             <h3>Text To Speech</h3>
-            <button class="tts-toggle" id="ttsToggle">Collapse</button>
+            <div class="tts-header-actions">
+              <button class="tts-toggle" id="advancedToggle" type="button">Multi-Voices</button>
+              <button class="tts-toggle" id="ttsToggle">Collapse</button>
+            </div>
           </div>
           <div class="tts-grid">
             <div class="tts-field">
@@ -1122,6 +1241,22 @@
                 <div class="voice-empty">Loading voices...</div>
               </div>
             </div>
+          </div>
+          <div class="advanced-panel" id="advancedPanel">
+            <div class="advanced-header">
+              <div class="advanced-title">Per-chapter voices</div>
+              <div class="advanced-actions">
+                <label>
+                  <input type="checkbox" id="advancedSelectAll" />
+                  Select all
+                </label>
+                <span id="advancedSelectedCount">0 selected</span>
+                <select id="advancedBulkVoice"></select>
+                <button class="btn small" id="advancedApplyVoice" type="button">Assign</button>
+                <button class="btn small" id="advancedClearVoice" type="button">Clear</button>
+              </div>
+            </div>
+            <div class="advanced-list" id="advancedList"></div>
           </div>
           <div class="tts-actions">
             <button class="btn primary" id="startTts">Start TTS</button>
@@ -1328,6 +1463,13 @@
           bookmarks: [],
         },
         voicePreference: null,
+        selectedVoice: null,
+        advancedMode: false,
+        voiceMap: { default: null, chapters: {} },
+        voiceOptions: [],
+        advancedSelection: new Set(),
+        advancedLastIndex: null,
+        voiceMapSaveTimer: null,
         preloadedIndex: null,
         padMs: 0,
         gaplessArmedIndex: null,
@@ -1412,6 +1554,14 @@
       const mergeStatus = document.getElementById("mergeStatus");
       const ttsPanel = document.getElementById("ttsPanel");
       const ttsToggle = document.getElementById("ttsToggle");
+      const advancedToggle = document.getElementById("advancedToggle");
+      const advancedPanel = document.getElementById("advancedPanel");
+      const advancedList = document.getElementById("advancedList");
+      const advancedSelectAll = document.getElementById("advancedSelectAll");
+      const advancedSelectedCount = document.getElementById("advancedSelectedCount");
+      const advancedBulkVoice = document.getElementById("advancedBulkVoice");
+      const advancedApplyVoice = document.getElementById("advancedApplyVoice");
+      const advancedClearVoice = document.getElementById("advancedClearVoice");
 
       function setStatus(message, mode = "message") {
         status.textContent = message;
@@ -1567,19 +1717,28 @@
         }
       }
 
-      function setSelectedVoice(value) {
-        state.voicePreference = value;
+      function setSelectedVoice(value, persist = true) {
+        state.selectedVoice = value;
         const buttons = voiceGroup.querySelectorAll(".voice-button");
         buttons.forEach((button) => {
           button.classList.toggle("active", button.dataset.voice === value);
         });
-        if (value) {
-          localStorage.setItem("ptts.voice", value);
+        if (state.advancedMode) {
+          state.voiceMap.default = value;
+          if (persist) {
+            scheduleVoiceMapSave();
+          }
+          renderAdvancedPanel();
+        } else {
+          state.voicePreference = value;
+          if (persist && value) {
+            localStorage.setItem("ptts.voice", value);
+          }
         }
       }
 
       function getSelectedVoice() {
-        return state.voicePreference;
+        return state.selectedVoice;
       }
 
       function appendVoiceGroup(container, label, items) {
@@ -1630,18 +1789,21 @@
           const builtin = Array.isArray(data.builtin) ? data.builtin : [];
           const defaultVoice = data.default || "";
 
+          state.voiceOptions = [...local, ...builtin];
           voiceGroup.innerHTML = "";
           appendVoiceGroup(voiceGroup, "Local voices", local);
           appendVoiceGroup(voiceGroup, "Built-in voices", builtin);
 
-          const available = [...local, ...builtin].map((item) => item.value);
+          const available = state.voiceOptions.map((item) => item.value);
           if (!available.length) {
             voiceGroup.innerHTML = "<div class=\"voice-empty\">No voices found.</div>";
-            setSelectedVoice(null);
+            setSelectedVoice(null, false);
             return;
           }
 
-          let selected = state.bookVoice || state.voicePreference;
+          let selected = state.advancedMode
+            ? state.voiceMap.default
+            : state.bookVoice || state.voicePreference;
           if (!selected || !available.includes(selected)) {
             if (local.length) {
               selected = local[0].value;
@@ -1651,10 +1813,255 @@
               selected = builtin[0].value;
             }
           }
-          setSelectedVoice(selected);
+          setSelectedVoice(selected, false);
+          if (state.advancedMode && state.voiceMap.default !== selected) {
+            state.voiceMap.default = selected;
+            scheduleVoiceMapSave();
+          }
+          renderAdvancedPanel();
         } catch (err) {
           voiceGroup.innerHTML = "<div class=\"voice-empty\">Unable to load voices.</div>";
         }
+      }
+
+      async function loadVoiceMap() {
+        if (!state.book) {
+          return;
+        }
+        try {
+          const data = await fetchJson(
+            `/api/books/${encodeURIComponent(state.book.id)}/voices`
+          );
+          const chapters =
+            data && typeof data.chapters === "object" ? data.chapters : {};
+          state.voiceMap = {
+            default: data.default || null,
+            chapters,
+          };
+        } catch (err) {
+          state.voiceMap = {
+            default: state.voicePreference,
+            chapters: {},
+          };
+        }
+      }
+
+      function scheduleVoiceMapSave() {
+        if (!state.book || !state.advancedMode) {
+          return;
+        }
+        if (state.voiceMapSaveTimer) {
+          clearTimeout(state.voiceMapSaveTimer);
+        }
+        state.voiceMapSaveTimer = setTimeout(() => {
+          saveVoiceMap();
+        }, 600);
+      }
+
+      async function saveVoiceMap() {
+        if (!state.book || !state.advancedMode) {
+          return false;
+        }
+        const payload = {
+          default: state.voiceMap.default,
+          chapters: state.voiceMap.chapters || {},
+        };
+        try {
+          const data = await fetchJson(
+            `/api/books/${encodeURIComponent(state.book.id)}/voices`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            }
+          );
+          const chapters =
+            data && typeof data.chapters === "object" ? data.chapters : {};
+          state.voiceMap = {
+            default: data.default || state.voiceMap.default,
+            chapters,
+          };
+          renderAdvancedPanel();
+          return true;
+        } catch (err) {
+          console.warn("Failed to save voice map.", err);
+          return false;
+        }
+      }
+
+      function updateAdvancedMode(persist = true) {
+        advancedPanel.classList.toggle("open", !!state.advancedMode);
+        advancedToggle.textContent = "Multi-Voices";
+        advancedToggle.classList.toggle("mode-on", state.advancedMode);
+        advancedToggle.classList.toggle("mode-off", !state.advancedMode);
+        if (persist) {
+          saveSettings();
+        }
+        updateSampleButtonState();
+        if (state.book) {
+          loadVoiceMap().then(() => loadVoices());
+        } else {
+          renderAdvancedPanel();
+        }
+        updateAdvancedControls();
+      }
+
+      function renderAdvancedPanel() {
+        const show = state.advancedMode && !!state.book;
+        advancedPanel.classList.toggle("open", show);
+        if (!show) {
+          advancedList.innerHTML = "";
+          return;
+        }
+        renderAdvancedList();
+        updateAdvancedControls();
+      }
+
+      function renderAdvancedList() {
+        advancedList.innerHTML = "";
+        const chapters = state.chapters || [];
+        if (!chapters.length) {
+          advancedList.innerHTML =
+            "<p class=\"voice-empty\">No chapters yet.</p>";
+          updateAdvancedSelectionStats();
+          return;
+        }
+        const chapterIds = new Set(
+          chapters.map((chapter) => chapter.id).filter(Boolean)
+        );
+        state.advancedSelection = new Set(
+          [...state.advancedSelection].filter((id) => chapterIds.has(id))
+        );
+        const defaultLabel = formatVoiceLabel(state.voiceMap.default || "");
+        buildVoiceOptions(advancedBulkVoice, defaultLabel);
+        if (!advancedBulkVoice.value) {
+          advancedBulkVoice.value = "default";
+        }
+        chapters.forEach((chapter, index) => {
+          const row = document.createElement("div");
+          const chapterId = chapter.id || "";
+          row.className = "advanced-row";
+          if (state.advancedSelection.has(chapterId)) {
+            row.classList.add("selected");
+          }
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = state.advancedSelection.has(chapterId);
+          checkbox.addEventListener("click", (event) => {
+            handleAdvancedSelection(event, index, chapterId);
+          });
+
+          const info = document.createElement("div");
+          const title = document.createElement("div");
+          title.textContent = chapter.title || chapterId || "Chapter";
+          const meta = document.createElement("div");
+          meta.className = "advanced-meta";
+          meta.textContent = `${chapter.chunk_count || 0} chunks`;
+          info.appendChild(title);
+          info.appendChild(meta);
+
+          const select = document.createElement("select");
+          select.className = "advanced-select";
+          buildVoiceOptions(select, defaultLabel);
+          const override = state.voiceMap.chapters
+            ? state.voiceMap.chapters[chapterId]
+            : null;
+          select.value = override || "default";
+          select.addEventListener("change", () => {
+            updateChapterVoice(chapterId, select.value);
+          });
+
+          row.appendChild(checkbox);
+          row.appendChild(info);
+          row.appendChild(select);
+          advancedList.appendChild(row);
+        });
+        updateAdvancedSelectionStats();
+      }
+
+      function buildVoiceOptions(select, defaultLabel) {
+        select.innerHTML = "";
+        const defaultOption = document.createElement("option");
+        defaultOption.value = "default";
+        defaultOption.textContent = defaultLabel
+          ? `Default (${defaultLabel})`
+          : "Default";
+        select.appendChild(defaultOption);
+        state.voiceOptions.forEach((entry) => {
+          const option = document.createElement("option");
+          option.value = entry.value;
+          option.textContent = formatVoiceLabel(entry.label);
+          select.appendChild(option);
+        });
+      }
+
+      function updateChapterVoice(chapterId, voiceValue) {
+        if (!chapterId) {
+          return;
+        }
+        if (voiceValue === "default" || !voiceValue) {
+          delete state.voiceMap.chapters[chapterId];
+        } else {
+          state.voiceMap.chapters[chapterId] = voiceValue;
+        }
+        scheduleVoiceMapSave();
+        renderAdvancedList();
+      }
+
+      function handleAdvancedSelection(event, index, chapterId) {
+        const checked = event.target.checked;
+        if (event.shiftKey && state.advancedLastIndex !== null) {
+          const start = Math.min(state.advancedLastIndex, index);
+          const end = Math.max(state.advancedLastIndex, index);
+          for (let i = start; i <= end; i += 1) {
+            const entry = state.chapters[i];
+            if (!entry || !entry.id) {
+              continue;
+            }
+            if (checked) {
+              state.advancedSelection.add(entry.id);
+            } else {
+              state.advancedSelection.delete(entry.id);
+            }
+          }
+        } else {
+          if (checked) {
+            state.advancedSelection.add(chapterId);
+          } else {
+            state.advancedSelection.delete(chapterId);
+          }
+        }
+        state.advancedLastIndex = index;
+        renderAdvancedList();
+      }
+
+      function updateAdvancedSelectionStats() {
+        const total = state.chapters.length;
+        const selected = state.advancedSelection.size;
+        advancedSelectedCount.textContent = `${selected} selected`;
+        if (total > 0) {
+          advancedSelectAll.checked = selected === total;
+          advancedSelectAll.indeterminate = selected > 0 && selected < total;
+        } else {
+          advancedSelectAll.checked = false;
+          advancedSelectAll.indeterminate = false;
+        }
+      }
+
+      function updateAdvancedControls() {
+        const disabled =
+          !state.book ||
+          !state.advancedMode ||
+          state.synthRunning ||
+          state.mergeRunning;
+        advancedSelectAll.disabled = disabled;
+        advancedBulkVoice.disabled = disabled;
+        const hasSelection = state.advancedSelection.size > 0;
+        advancedApplyVoice.disabled = disabled || !hasSelection;
+        advancedClearVoice.disabled = disabled || !hasSelection;
+        advancedList.querySelectorAll("input, select").forEach((element) => {
+          element.disabled = disabled;
+        });
       }
 
       function schedulePlaybackSave() {
@@ -1712,6 +2119,11 @@
         state.synthMode = "tts";
         state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
         state.bookVoice = null;
+        state.voiceMap = { default: null, chapters: {} };
+        state.selectedVoice = null;
+        state.voiceOptions = [];
+        state.advancedSelection = new Set();
+        state.advancedLastIndex = null;
         resetAudioPlayers();
         bookTitle.textContent = "Select a book";
         bookMeta.textContent = "No book loaded.";
@@ -1731,6 +2143,7 @@
         updateUrl(null, null);
         updateMergeButtonState();
         updateClearButtonState();
+        renderAdvancedPanel();
         updateMarks();
       }
 
@@ -1782,17 +2195,20 @@
 
       function loadSettings() {
         state.voicePreference = localStorage.getItem("ptts.voice");
+        state.advancedMode = localStorage.getItem("ptts.advancedMode") === "1";
         const collapsed = localStorage.getItem("ptts.ttsCollapsed") === "1";
         if (collapsed) {
           ttsPanel.classList.add("collapsed");
           ttsToggle.textContent = "Expand";
         }
+        updateAdvancedMode(false);
       }
 
       function saveSettings() {
         if (state.voicePreference) {
           localStorage.setItem("ptts.voice", state.voicePreference);
         }
+        localStorage.setItem("ptts.advancedMode", state.advancedMode ? "1" : "0");
       }
 
       function renderBooks() {
@@ -1827,6 +2243,8 @@
           const data = await fetchJson(`/api/books/${bookId}`);
           state.book = data.book;
           state.chapters = data.chapters || [];
+          state.advancedSelection = new Set();
+          state.advancedLastIndex = null;
           state.padMs = data.book ? data.book.pad_ms || 0 : 0;
           state.bookVoice = data.book ? data.book.last_voice || null : null;
           state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
@@ -1858,6 +2276,7 @@
           state.needsRechunk = state.chapters.length > 0 && !hasSpanData;
           renderBooks();
           renderBookHeader();
+          await loadVoiceMap();
           await loadVoices();
           updateDeleteButtonState();
           renderChapters();
@@ -2328,13 +2747,23 @@
         }
       }
 
+      function updateSampleButtonState() {
+        const disabled =
+          !state.book ||
+          state.mergeRunning ||
+          state.advancedMode ||
+          (state.synthRunning && state.synthMode !== "sample");
+        sampleTts.disabled = disabled;
+        sampleTts.title = state.advancedMode
+          ? "Sample disabled in Advanced Mode."
+          : "Sample";
+      }
+
       function updateClearButtonState() {
         clearTtsBtn.disabled = state.synthRunning || state.mergeRunning;
         updateDeleteButtonState();
-        sampleTts.disabled =
-          !state.book ||
-          state.mergeRunning ||
-          (state.synthRunning && state.synthMode !== "sample");
+        updateSampleButtonState();
+        updateAdvancedControls();
       }
 
       function updateDeleteButtonState() {
@@ -2390,6 +2819,13 @@
           return;
         }
         saveSettings();
+        if (state.advancedMode) {
+          const saved = await saveVoiceMap();
+          if (!saved) {
+            setStatus("Failed to save voice map.");
+            return;
+          }
+        }
         state.mergeExitCode = null;
         state.mergeOutputExists = false;
         mergeStatus.textContent = "";
@@ -2397,6 +2833,7 @@
         const payload = {
           book_id: state.book.id,
           voice: getSelectedVoice(),
+          use_voice_map: state.advancedMode,
         };
         state.pendingManifestRefresh = !state.chapters.length;
         try {
@@ -2457,6 +2894,10 @@
 
       async function sampleSynth() {
         if (!state.book) {
+          return;
+        }
+        if (state.advancedMode) {
+          setStatus("Sample disabled in Advanced Mode.");
           return;
         }
         if (state.synthRunning) {
@@ -3379,6 +3820,45 @@
         addBookmark(state.currentQueueIndex);
         updateMarks();
         setStatus("Bookmark saved.");
+      });
+      advancedToggle.addEventListener("click", () => {
+        state.advancedMode = !state.advancedMode;
+        updateAdvancedMode();
+      });
+      advancedSelectAll.addEventListener("change", () => {
+        if (!state.book) {
+          return;
+        }
+        if (advancedSelectAll.checked) {
+          state.advancedSelection = new Set(
+            state.chapters.map((chapter) => chapter.id).filter(Boolean)
+          );
+        } else {
+          state.advancedSelection = new Set();
+        }
+        renderAdvancedList();
+      });
+      advancedApplyVoice.addEventListener("click", () => {
+        const value = advancedBulkVoice.value;
+        if (!value) {
+          return;
+        }
+        state.advancedSelection.forEach((chapterId) => {
+          if (value === "default") {
+            delete state.voiceMap.chapters[chapterId];
+          } else {
+            state.voiceMap.chapters[chapterId] = value;
+          }
+        });
+        scheduleVoiceMapSave();
+        renderAdvancedList();
+      });
+      advancedClearVoice.addEventListener("click", () => {
+        state.advancedSelection.forEach((chapterId) => {
+          delete state.voiceMap.chapters[chapterId];
+        });
+        scheduleVoiceMapSave();
+        renderAdvancedList();
       });
       ttsToggle.addEventListener("click", () => {
         ttsPanel.classList.toggle("collapsed");

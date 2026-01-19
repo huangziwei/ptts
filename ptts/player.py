@@ -229,6 +229,43 @@ def _normalize_voice_value(value: object, repo_root: Path) -> str:
     return cleaned
 
 
+def _default_book_voice(book_dir: Path, repo_root: Path) -> str:
+    manifest = _load_json(book_dir / "tts" / "manifest.json")
+    fallback = _normalize_voice_value(manifest.get("voice"), repo_root)
+    return fallback or DEFAULT_VOICE
+
+
+def _voice_map_path(book_dir: Path) -> Path:
+    return book_dir / "voice-map.json"
+
+
+def _sanitize_voice_map(payload: dict, repo_root: Path, fallback_default: str) -> dict:
+    default_voice = _normalize_voice_value(payload.get("default"), repo_root)
+    if not default_voice:
+        default_voice = fallback_default or DEFAULT_VOICE
+    chapters: dict[str, str] = {}
+    raw_chapters = payload.get("chapters", {})
+    if isinstance(raw_chapters, dict):
+        for key, value in raw_chapters.items():
+            voice = _normalize_voice_value(value, repo_root)
+            if not voice or voice == default_voice:
+                continue
+            chapters[str(key)] = voice
+    return {"default": default_voice, "chapters": chapters}
+
+
+def _load_voice_map(book_dir: Path, repo_root: Path) -> dict:
+    path = _voice_map_path(book_dir)
+    if not path.exists():
+        return {"default": _default_book_voice(book_dir, repo_root), "chapters": {}}
+    data = _load_json(path)
+    return _sanitize_voice_map(
+        data if isinstance(data, dict) else {},
+        repo_root,
+        fallback_default=_default_book_voice(book_dir, repo_root),
+    )
+
+
 def _book_details(book_dir: Path, repo_root: Path) -> dict:
     toc = _load_json(book_dir / "clean" / "toc.json")
     metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
@@ -558,6 +595,7 @@ class SynthRequest(BaseModel):
     pad_ms: int = 150
     chunk_mode: str = "sentence"
     rechunk: bool = False
+    use_voice_map: bool = False
 
 
 class MergeRequest(BaseModel):
@@ -578,6 +616,11 @@ class RulesPayload(BaseModel):
     section_cutoff_patterns: List[str] = []
     remove_patterns: List[str] = []
     replace_defaults: bool = False
+
+
+class VoiceMapPayload(BaseModel):
+    default: Optional[str] = None
+    chapters: dict = {}
 
 
 class ChapterAction(BaseModel):
@@ -651,6 +694,24 @@ def create_app(root_dir: Path) -> FastAPI:
     def get_book(book_id: str) -> JSONResponse:
         book_dir = _resolve_book_dir(root_dir, book_id)
         return _no_store(_book_details(book_dir, repo_root))
+
+    @app.get("/api/books/{book_id}/voices")
+    def get_book_voices(book_id: str) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        payload = _load_voice_map(book_dir, repo_root)
+        return _no_store(payload)
+
+    @app.post("/api/books/{book_id}/voices")
+    def set_book_voices(book_id: str, payload: VoiceMapPayload) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        data = _sanitize_voice_map(
+            payload.dict(),
+            repo_root,
+            fallback_default=_default_book_voice(book_dir, repo_root),
+        )
+        path = _voice_map_path(book_dir)
+        _atomic_write_json(path, data)
+        return _no_store(data)
 
     @app.post("/api/books/delete")
     def delete_book(payload: DeleteBookRequest) -> JSONResponse:
@@ -1075,8 +1136,16 @@ def create_app(root_dir: Path) -> FastAPI:
         if existing and existing.process.poll() is None:
             raise HTTPException(status_code=409, detail="TTS is already running.")
 
+        use_voice_map = bool(payload.use_voice_map)
+        voice_value = payload.voice
+        voice_map_path = None
+        if use_voice_map:
+            voice_map_path = _voice_map_path(book_dir)
+            voice_map = _load_voice_map(book_dir, repo_root)
+            voice_value = voice_map.get("default") or voice_value
+
         try:
-            voice_prompt = resolve_voice_prompt(payload.voice, base_dir=repo_root)
+            voice_prompt = resolve_voice_prompt(voice_value, base_dir=repo_root)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1116,6 +1185,8 @@ def create_app(root_dir: Path) -> FastAPI:
             "--chunk-mode",
             payload.chunk_mode,
         ]
+        if use_voice_map and voice_map_path and voice_map_path.exists():
+            cmd += ["--voice-map", str(voice_map_path)]
         if payload.rechunk:
             cmd.append("--rechunk")
 
@@ -1151,6 +1222,11 @@ def create_app(root_dir: Path) -> FastAPI:
         book_dir = _resolve_book_dir(root_dir, payload.book_id)
         if payload.chunk_mode not in ("sentence", "packed"):
             raise HTTPException(status_code=400, detail="Invalid chunk_mode.")
+        if payload.use_voice_map:
+            raise HTTPException(
+                status_code=400,
+                detail="Sample is disabled in Advanced Mode.",
+            )
 
         existing = jobs.get(payload.book_id)
         if existing and existing.process.poll() is None:

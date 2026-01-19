@@ -631,6 +631,34 @@ def prepare_manifest(
     return manifest, chapter_chunks, int(manifest["pad_ms"])
 
 
+def _normalize_voice_id(value: Optional[str], default_voice: str) -> str:
+    if value is None:
+        return default_voice
+    cleaned = str(value).strip()
+    if not cleaned:
+        return default_voice
+    if cleaned.lower() == "default":
+        return default_voice
+    return cleaned
+
+
+def _load_voice_map(path: Optional[Path]) -> dict:
+    if path is None:
+        return {}
+    if not path.exists():
+        raise FileNotFoundError(f"Voice map not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Voice map must be a JSON object: {path}")
+    chapters = data.get("chapters", {})
+    if not isinstance(chapters, dict):
+        chapters = {}
+    return {
+        "default": data.get("default"),
+        "chapters": chapters,
+    }
+
+
 def chunk_book(
     book_dir: Path,
     out_dir: Optional[Path] = None,
@@ -672,6 +700,7 @@ def synthesize(
     rechunk: bool = False,
     wipe_segments: Optional[bool] = None,
     only_chapter_ids: Optional[set[str]] = None,
+    voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
 ) -> int:
     _require_tts()
@@ -686,11 +715,16 @@ def synthesize(
         voice = voice.strip()
         if not voice or voice.lower() == "default":
             voice = DEFAULT_VOICE
+
     try:
-        voice_prompt = resolve_voice_prompt(voice, base_dir=base_dir)
-    except ValueError as exc:
+        voice_map = _load_voice_map(voice_map_path)
+    except (FileNotFoundError, ValueError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
+
+    default_voice = voice
+    if voice_map:
+        default_voice = _normalize_voice_id(voice_map.get("default"), default_voice)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     seg_dir = out_dir / "segments"
@@ -702,7 +736,7 @@ def synthesize(
         manifest, chapter_chunks, pad_ms = prepare_manifest(
             chapters=chapters,
             out_dir=out_dir,
-            voice=voice,
+            voice=default_voice,
             max_chars=max_chars,
             pad_ms=pad_ms,
             chunk_mode=chunk_mode,
@@ -715,6 +749,36 @@ def synthesize(
     if wipe_segments and seg_dir.exists():
         shutil.rmtree(seg_dir)
 
+    chapter_voice_map: Dict[str, str] = {}
+    voice_overrides: Dict[str, str] = {}
+    if voice_map:
+        raw_overrides = voice_map.get("chapters", {})
+        for entry in manifest.get("chapters", []):
+            chapter_id = entry.get("id") or "chapter"
+            raw_value = raw_overrides.get(chapter_id) if isinstance(raw_overrides, dict) else None
+            selected = _normalize_voice_id(raw_value, default_voice)
+            chapter_voice_map[chapter_id] = selected
+            entry["voice"] = selected
+            if selected != default_voice:
+                voice_overrides[chapter_id] = selected
+        manifest["voice_overrides"] = voice_overrides
+        manifest["voice"] = default_voice
+        atomic_write_json(manifest_path, manifest)
+    else:
+        for entry in manifest.get("chapters", []):
+            chapter_id = entry.get("id") or "chapter"
+            chapter_voice_map[chapter_id] = default_voice
+
+    voice_prompts: Dict[str, str] = {}
+    try:
+        for voice_id in sorted(set(chapter_voice_map.values())):
+            voice_prompts[voice_id] = resolve_voice_prompt(
+                voice_id, base_dir=base_dir
+            )
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+
     write_status(out_dir, "cloning", "Preparing voice")
 
     tts_model = TTSModel.load_model()
@@ -723,7 +787,9 @@ def synthesize(
         manifest["sample_rate"] = sample_rate
         atomic_write_json(manifest_path, manifest)
 
-    voice_state = tts_model.get_state_for_audio_prompt(voice_prompt)
+    voice_states: Dict[str, Any] = {}
+    for voice_id, voice_prompt in voice_prompts.items():
+        voice_states[voice_id] = tts_model.get_state_for_audio_prompt(voice_prompt)
     write_status(out_dir, "synthesizing")
 
     pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
@@ -791,6 +857,8 @@ def synthesize(
                     continue
 
                 tts_text = prepare_tts_text(chunk_text)
+                voice_id = chapter_voice_map.get(chapter_id, default_voice)
+                voice_state = voice_states[voice_id]
                 audio = tts_model.generate_audio(voice_state, tts_text)
                 a16 = tensor_to_int16(audio)
 
@@ -830,6 +898,7 @@ def synthesize_text(
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
+    voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
 ) -> int:
     chapters = load_text_chapters(text_path)
@@ -841,6 +910,7 @@ def synthesize_text(
         pad_ms=pad_ms,
         chunk_mode=chunk_mode,
         rechunk=rechunk,
+        voice_map_path=voice_map_path,
         base_dir=base_dir,
     )
 
@@ -853,6 +923,7 @@ def synthesize_book(
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
+    voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
 ) -> int:
     if out_dir is None:
@@ -871,6 +942,7 @@ def synthesize_book(
         pad_ms=pad_ms,
         chunk_mode=chunk_mode,
         rechunk=rechunk,
+        voice_map_path=voice_map_path,
         base_dir=base_dir,
     )
 
@@ -883,6 +955,7 @@ def synthesize_book_sample(
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
+    voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
 ) -> int:
     if out_dir is None:
@@ -929,6 +1002,7 @@ def synthesize_book_sample(
         rechunk=rechunk,
         wipe_segments=False,
         only_chapter_ids={sample_id},
+        voice_map_path=voice_map_path,
         base_dir=base_dir,
     )
 
@@ -947,6 +1021,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--voice",
         help="Voice prompt: built-in name, wav path, or hf:// URL",
+    )
+    ap.add_argument(
+        "--voice-map",
+        type=Path,
+        help="Path to voice map JSON for per-chapter voices",
     )
     ap.add_argument(
         "--out",
@@ -991,6 +1070,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             pad_ms=args.pad_ms,
             chunk_mode=args.chunk_mode,
             rechunk=args.rechunk,
+            voice_map_path=args.voice_map,
         )
     if not args.out:
         parser.error("--out is required when using --text")
@@ -1002,6 +1082,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pad_ms=args.pad_ms,
         chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
+        voice_map_path=args.voice_map,
     )
 
 
