@@ -722,6 +722,9 @@ def create_app(root_dir: Path) -> FastAPI:
         merge_job = merge_jobs.get(payload.book_id)
         if merge_job and merge_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="Stop merge before deleting.")
+        m4b_path = _merge_output_path(book_dir)
+        if m4b_path.exists():
+            m4b_path.unlink()
         if book_dir.exists():
             shutil.rmtree(book_dir)
         return _no_store({"status": "deleted", "book_id": payload.book_id})
