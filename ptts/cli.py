@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -119,6 +124,133 @@ def _write_cover_image(cover: dict, out_dir: Path) -> Optional[Path]:
 def _not_implemented(command: str) -> int:
     sys.stderr.write(f"Command not implemented yet: {command}\n")
     return 2
+
+
+def _find_repo_root(start: Path) -> Path:
+    for candidate in [start] + list(start.parents):
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return start
+
+
+def _is_http_url(value: str) -> bool:
+    parsed = urllib.parse.urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _download_to(url: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(url, headers={"User-Agent": "ptts clone"})
+    with urllib.request.urlopen(request) as response, dest.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+
+
+def _coerce_voice_name(raw: Optional[str], source_name: str) -> str:
+    value = raw or source_name
+    base = Path(value).name.strip()
+    if not base:
+        return "voice"
+    suffix = Path(base).suffix.lower()
+    if suffix in {".mp3", ".wav"}:
+        base = Path(base).stem
+    base = base.strip()
+    return base or "voice"
+
+
+def _build_clone_ffmpeg_cmd(
+    input_path: Path,
+    output_path: Path,
+    start: str,
+    duration: str,
+) -> list[str]:
+    filter_chain = (
+        "aresample=24000,"
+        "silenceremove=start_periods=1:start_duration=0.20:start_threshold=-40dB,"
+        "areverse,silenceremove=start_periods=1:start_duration=0.20:start_threshold=-40dB,areverse,"
+        "highpass=f=80,lowpass=f=11900,afftdn=nr=12:nf=-45,"
+        "loudnorm=I=-18:TP=-1.5:LRA=11,alimiter=limit=0.98"
+    )
+    return [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        start,
+        "-t",
+        duration,
+        "-i",
+        str(input_path),
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-sn",
+        "-dn",
+        "-map_metadata",
+        "-1",
+        "-af",
+        filter_chain,
+        "-ac",
+        "1",
+        "-ar",
+        "24000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_path),
+    ]
+
+
+def _clone(args: argparse.Namespace) -> int:
+    source = str(args.source)
+    repo_root = _find_repo_root(Path.cwd())
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    start = args.start or "00:00:00"
+    duration_value = int(args.duration or 0)
+    if duration_value <= 0:
+        sys.stderr.write("--duration must be a positive number of seconds.\n")
+        return 2
+    duration = str(duration_value)
+
+    if shutil.which("ffmpeg") is None:
+        sys.stderr.write("ffmpeg not found on PATH.\n")
+        return 2
+
+    if _is_http_url(source):
+        parsed = urllib.parse.urlparse(source)
+        filename = Path(parsed.path).name or "voice.mp3"
+        if not Path(filename).suffix:
+            filename = f"{filename}.mp3"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = Path(tmp_dir) / filename
+            try:
+                _download_to(source, input_path)
+            except Exception as exc:
+                sys.stderr.write(f"Download failed: {exc}\n")
+                return 2
+            output_name = _coerce_voice_name(args.name, Path(filename).stem)
+            output_path = voices_dir / f"{output_name}.wav"
+            cmd = _build_clone_ffmpeg_cmd(
+                input_path, output_path, start, duration
+            )
+            result = subprocess.run(cmd)
+            if result.returncode != 0:
+                sys.stderr.write("ffmpeg failed to process the audio.\n")
+                return 2
+            print(f"Wrote {output_path}")
+            return 0
+
+    input_path = Path(source).expanduser()
+    if not input_path.exists():
+        sys.stderr.write(f"Input file not found: {input_path}\n")
+        return 2
+    output_name = _coerce_voice_name(args.name, input_path.stem)
+    output_path = voices_dir / f"{output_name}.wav"
+    cmd = _build_clone_ffmpeg_cmd(input_path, output_path, start, duration)
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        sys.stderr.write("ffmpeg failed to process the audio.\n")
+        return 2
+    print(f"Wrote {output_path}")
+    return 0
 
 
 def _sanitize(args: argparse.Namespace) -> int:
@@ -305,6 +437,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sample.add_argument("--rechunk", action="store_true")
     sample.set_defaults(func=_sample)
+
+    clone = subparsers.add_parser("clone", help="Create a voice sample from audio")
+    clone.add_argument("source", help="URL or local path to an .mp3 file")
+    clone.add_argument(
+        "--name",
+        help="Output voice name (default: input filename without extension)",
+    )
+    clone.add_argument(
+        "--start",
+        default="00:00:00",
+        help="Start timestamp (HH:MM:SS or seconds)",
+    )
+    clone.add_argument(
+        "--duration",
+        type=int,
+        default=10,
+        help="Duration in seconds (integer)",
+    )
+    clone.set_defaults(func=_clone)
 
     merge = subparsers.add_parser("merge", help="Merge audio into M4B")
     merge.add_argument("--book", required=True, help="Book output directory")
