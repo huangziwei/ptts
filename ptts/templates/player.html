@@ -74,7 +74,7 @@
           --accent: #2fa88f;
           --accent-2: #f0a269;
           --accent-ink: #fff;
-          --highlight: #3b2a1c;
+          --highlight: #f2b56b;
           --shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
           --shadow-accent: 0 12px 26px rgba(47, 168, 143, 0.35);
           --shadow-pop: 0 18px 36px rgba(0, 0, 0, 0.45);
@@ -177,7 +177,7 @@
         --accent: #2fa88f;
         --accent-2: #f0a269;
         --accent-ink: #fff;
-        --highlight: #3b2a1c;
+        --highlight: #f2b56b;
         --shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
         --shadow-accent: 0 12px 26px rgba(47, 168, 143, 0.35);
         --shadow-pop: 0 18px 36px rgba(0, 0, 0, 0.45);
@@ -852,6 +852,7 @@
 
       .chunk.active {
         background: var(--highlight);
+        color: #000;
       }
 
       .chunk.waiting {
@@ -860,6 +861,11 @@
 
       .chunk.played {
         color: var(--text-dim);
+      }
+
+      .chunk.active,
+      .chunk.played.active {
+        color: #000;
       }
 
       .empty-state {
