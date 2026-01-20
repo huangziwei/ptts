@@ -2836,13 +2836,27 @@
         return snip ? `${chapterNum}/${chunkNum} ${snip}` : `${chapterNum}/${chunkNum}`;
       }
 
+      function describeStatusIndex(index) {
+        const item = state.queue[index];
+        if (!item) {
+          return "—";
+        }
+        const chapterTotal = getChapterChunkTotal(item);
+        const chunkLabel =
+          chapterTotal > 0
+            ? `${item.chunkIndex + 1} / ${chapterTotal}`
+            : `${item.chunkIndex + 1}`;
+        const chapterId = item.chapterId || "";
+        return chapterId ? `${chapterId} ${chunkLabel}` : chunkLabel;
+      }
+
       function idleStatusText() {
         const lastIndex = getLastPlayed();
         const furthestIndex = getFurthestPlayed();
         const lastLabel =
-          lastIndex === null ? "—" : describeIndex(lastIndex);
+          lastIndex === null ? "—" : describeStatusIndex(lastIndex);
         const furthestLabel =
-          furthestIndex === null ? "—" : describeIndex(furthestIndex);
+          furthestIndex === null ? "—" : describeStatusIndex(furthestIndex);
         return `Last: ${lastLabel} · Furthest: ${furthestLabel}`;
       }
 

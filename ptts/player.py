@@ -1555,7 +1555,7 @@ def create_app(root_dir: Path) -> FastAPI:
             raise HTTPException(status_code=404, detail="M4B not found.")
         return FileResponse(
             path=str(output_path),
-            media_type="audio/mp4",
+            media_type="audio/x-m4b",
             filename=output_path.name,
         )
 
