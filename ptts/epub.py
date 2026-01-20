@@ -222,6 +222,37 @@ def build_spine_entries(book: epub.EpubBook) -> List[TocEntry]:
     return entries
 
 
+def _build_spine_items(book: epub.EpubBook) -> List[tuple[str, object]]:
+    items: List[tuple[str, object]] = []
+    for idref, _linear in book.spine:
+        item = book.get_item_with_id(idref)
+        if not item or item.get_type() != ITEM_DOCUMENT:
+            continue
+        name = _item_name(item)
+        if not name:
+            continue
+        items.append((normalize_href(name), item))
+    return items
+
+
+def _split_series_key(href: str) -> tuple[str, str] | None:
+    match = re.match(r"^(?P<prefix>.+?)(?:_split_|-split-)\d+(?P<ext>\.[^./]+)$", href)
+    if not match:
+        return None
+    return (match.group("prefix"), match.group("ext"))
+
+
+def _join_item_text(items: Iterable[object]) -> str:
+    parts: List[str] = []
+    for item in items:
+        text = html_to_text(item.get_content())
+        if text:
+            parts.append(text)
+    if not parts:
+        return ""
+    return normalize_text("\n\n".join(parts))
+
+
 def html_to_text(html: bytes) -> str:
     head = html.lstrip()[:512].lower()
     parser = "lxml-xml" if (head.startswith(b"<?xml") or b"xmlns=" in head) else "lxml"
@@ -353,9 +384,69 @@ def _chapters_from_entries(
     return chapters
 
 
+def _chapters_from_toc_entries(
+    book: epub.EpubBook, entries: Iterable[TocEntry]
+) -> List[Chapter]:
+    spine_items = _build_spine_items(book)
+    spine_index = {href: idx for idx, (href, _item) in enumerate(spine_items)}
+    chapters: List[Chapter] = []
+    seen: set[str] = set()
+
+    for entry in entries:
+        base_href = normalize_href(entry.href)
+        if not base_href or base_href in seen:
+            continue
+        seen.add(base_href)
+
+        start_idx = spine_index.get(base_href)
+        merged_items: List[object] = []
+        if start_idx is not None:
+            key = _split_series_key(base_href)
+            prev_key = (
+                _split_series_key(spine_items[start_idx - 1][0])
+                if start_idx > 0
+                else None
+            )
+            if key and key != prev_key:
+                idx = start_idx
+                while idx < len(spine_items):
+                    href, item = spine_items[idx]
+                    if _split_series_key(href) != key:
+                        break
+                    merged_items.append(item)
+                    idx += 1
+
+        if merged_items:
+            text = _join_item_text(merged_items)
+            item_for_title = merged_items[0]
+        else:
+            item_for_title = None
+            if start_idx is not None:
+                item_for_title = spine_items[start_idx][1]
+            if not item_for_title:
+                item_for_title = book.get_item_with_href(base_href)
+            if not item_for_title:
+                item_for_title = book.get_item_with_id(base_href)
+            if not item_for_title or item_for_title.get_type() != ITEM_DOCUMENT:
+                continue
+            text = html_to_text(item_for_title.get_content())
+
+        if not text:
+            continue
+
+        title = entry.title or _item_title(item_for_title) or Path(base_href).stem
+        chapters.append(
+            Chapter(title=title, href=entry.href, source=base_href, text=text)
+        )
+
+    return chapters
+
+
 def extract_chapters(book: epub.EpubBook, prefer_toc: bool = True) -> List[Chapter]:
     entries = build_toc_entries(book) if prefer_toc else []
-    chapters = _chapters_from_entries(book, entries) if entries else []
+    chapters = _chapters_from_toc_entries(book, entries) if entries else []
+    if entries and not chapters:
+        chapters = _chapters_from_entries(book, entries)
     if not chapters:
         chapters = _chapters_from_entries(book, build_spine_entries(book))
     return chapters
