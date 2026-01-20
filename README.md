@@ -10,7 +10,7 @@
 ```bash
 git clone https://github.com/huangziwei/ptts
 cd ~/ptts
-mkdir -p .uv-cache .cache/huggingface
+mkdir -p .cache/huggingface
 chmod +x bin/pmx
 
 brew install podman
