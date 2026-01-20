@@ -92,7 +92,7 @@ def test_sanitize_book_adds_title_chapter(tmp_path: Path) -> None:
     title_text = title_path.read_text(encoding="utf-8").strip()
     assert (
         title_text
-        == "Sample: Subtitle, 2024\n\nby Author One, Author Two"
+        == "Sample: Subtitle\n\n2024\n\nby Author One, Author Two"
     )
 
     clean_toc = json.loads((book_dir / "clean" / "toc.json").read_text())

@@ -245,16 +245,13 @@ def format_title_chapter(metadata: dict) -> str:
     if author_line:
         author_line = f"by {author_line}"
 
-    if year:
-        headline = f"{headline}, {year}" if headline else year
-
     lines: List[str] = []
-    if headline:
-        lines.append(headline)
-    if author_line:
+    for block in (headline, year, author_line):
+        if not block:
+            continue
         if lines:
             lines.append("")
-        lines.append(author_line)
+        lines.append(block)
 
     return "\n".join(lines).strip()
 
