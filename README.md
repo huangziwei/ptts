@@ -18,15 +18,15 @@ podman --version # tested with 5.7.1
 podman machine init --cpus 6 --memory 8192 --disk-size 60 --now pocket-tts
 
 # Install project dependencies into .venv (required for `ptts` CLI)
-./bin/pmx uv sync
+PMX_OPTS="-p 1912:1912" ./bin/pmx uv sync
 
 # To use voice cloning, you need to accept the terms via browser at https://huggingface.co/kyutai/pocket-tts
 # Then you need to save the access token with correct permissions (I ticked everything in Repositories and Inference)
 # This step can be skipped if no need for voice cloning
 ./bin/pmx uvx hf auth login
 
-# Run once and test if it works in the web ui
-PMX_OPTS="-p 8000:8000" ./bin/pmx uvx pocket-tts serve --host 0.0.0.0 --port 8000
+# # Run once and test if it works in the pocket-tts web ui
+./bin/pmx uv run pocket-tts serve --host 0.0.0.0 --port 1912 
 ```
 
 ## TTS a book
@@ -80,7 +80,7 @@ explicitly (or use a cloned wav), pass `--voice`:
 **Everything above can be done within the local Player web app**.
 
 ```bash
-PMX_OPTS="-p 1912:1912" ./bin/pmx uv run ptts play \
+./bin/pmx uv run ptts play \
   --root out \
   --host 0.0.0.0 \
   --port 1912

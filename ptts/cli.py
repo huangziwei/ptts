@@ -228,9 +228,7 @@ def _clone(args: argparse.Namespace) -> int:
                 return 2
             output_name = _coerce_voice_name(args.name, Path(filename).stem)
             output_path = voices_dir / f"{output_name}.wav"
-            cmd = _build_clone_ffmpeg_cmd(
-                input_path, output_path, start, duration
-            )
+            cmd = _build_clone_ffmpeg_cmd(input_path, output_path, start, duration)
             result = subprocess.run(cmd)
             if result.returncode != 0:
                 sys.stderr.write("ffmpeg failed to process the audio.\n")
@@ -342,6 +340,7 @@ def _sample(args: argparse.Namespace) -> int:
         voice_map_path=voice_map,
     )
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ptts")
     subparsers = parser.add_subparsers(dest="command")
@@ -360,7 +359,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.set_defaults(func=_ingest)
 
-    run = subparsers.add_parser("run", help="Run the full pipeline (not yet implemented)")
+    run = subparsers.add_parser(
+        "run", help="Run the full pipeline (not yet implemented)"
+    )
     run.add_argument("--input", required=True, help="Path to input .epub")
     run.add_argument("--output", required=True, help="Path to output .m4b")
     run.add_argument(
@@ -369,9 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.set_defaults(func=lambda _args: _not_implemented("run"))
 
-    sanitize = subparsers.add_parser(
-        "sanitize", help="Clean chapter text"
-    )
+    sanitize = subparsers.add_parser("sanitize", help="Clean chapter text")
     sanitize.add_argument("--book", required=True, help="Book output directory")
     sanitize.add_argument(
         "--rules",
@@ -413,7 +412,9 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--rechunk", action="store_true")
     synth.set_defaults(func=_synth)
 
-    sample = subparsers.add_parser("sample", help="Generate a voice sample (first chapter)")
+    sample = subparsers.add_parser(
+        "sample", help="Generate a voice sample (first chapter)"
+    )
     sample.add_argument("--book", required=True, help="Book output directory")
     sample.add_argument(
         "--out",
@@ -476,8 +477,8 @@ def build_parser() -> argparse.ArgumentParser:
         default="out",
         help="Root folder containing book outputs (default: out)",
     )
-    play.add_argument("--host", default="127.0.0.1")
-    play.add_argument("--port", type=int, default=8002)
+    play.add_argument("--host", default="0.0.0.0")
+    play.add_argument("--port", type=int, default=1912)
     play.set_defaults(
         func=lambda args: player_util.run(
             Path(args.root), host=args.host, port=args.port

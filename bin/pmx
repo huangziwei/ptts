@@ -31,7 +31,6 @@ if [ "${PMX_RM:-0}" = "1" ]; then
     exec podman run --rm -it \
       -v "$PWD":/work -w /work \
       -e HF_HOME=/work/.cache/huggingface \
-      -e UV_CACHE_DIR=/work/.uv-cache \
       $PMX_OPTS \
       "$image" \
       "$@"
@@ -40,7 +39,6 @@ if [ "${PMX_RM:-0}" = "1" ]; then
   exec podman run --rm -it \
     -v "$PWD":/work -w /work \
     -e HF_HOME=/work/.cache/huggingface \
-    -e UV_CACHE_DIR=/work/.uv-cache \
     "$image" \
     "$@"
 fi
@@ -55,7 +53,6 @@ if ! podman container exists "$container" >/dev/null 2>&1; then
     podman run -d --name "$container" \
       -v "$PWD":/work -w /work \
       -e HF_HOME=/work/.cache/huggingface \
-      -e UV_CACHE_DIR=/work/.uv-cache \
       $PMX_OPTS \
       "$image" \
       sleep infinity
@@ -63,7 +60,6 @@ if ! podman container exists "$container" >/dev/null 2>&1; then
     podman run -d --name "$container" \
       -v "$PWD":/work -w /work \
       -e HF_HOME=/work/.cache/huggingface \
-      -e UV_CACHE_DIR=/work/.uv-cache \
       "$image" \
       sleep infinity
   fi
@@ -81,6 +77,5 @@ fi
 exec podman exec -it \
   -w /work \
   -e HF_HOME=/work/.cache/huggingface \
-  -e UV_CACHE_DIR=/work/.uv-cache \
   "$container" \
   "$@"
