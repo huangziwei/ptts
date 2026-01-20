@@ -5,6 +5,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 from ebooklib import ITEM_DOCUMENT, ITEM_IMAGE, epub
@@ -178,7 +179,9 @@ def normalize_href(href: str) -> str:
     href = (href or "").strip()
     if not href:
         return ""
-    return href.split("#", 1)[0]
+    href = href.split("#", 1)[0]
+    # Some EPUBs percent-encode filenames in TOC entries.
+    return unquote(href)
 
 
 def flatten_toc(toc: Iterable) -> List[TocEntry]:
@@ -192,6 +195,9 @@ def flatten_toc(toc: Iterable) -> List[TocEntry]:
             elif isinstance(node, epub.Section):
                 if node.href:
                     entries.append(TocEntry(title=node.title or "", href=node.href))
+                subitems = getattr(node, "subitems", None)
+                if subitems:
+                    walk(subitems)
             elif isinstance(node, (list, tuple)):
                 walk(node)
 
@@ -317,11 +323,9 @@ def slugify(text: str) -> str:
     return text[:60] or "chapter"
 
 
-def extract_chapters(book: epub.EpubBook, prefer_toc: bool = True) -> List[Chapter]:
-    entries = build_toc_entries(book) if prefer_toc else []
-    if not entries:
-        entries = build_spine_entries(book)
-
+def _chapters_from_entries(
+    book: epub.EpubBook, entries: Iterable[TocEntry]
+) -> List[Chapter]:
     seen: set[str] = set()
     chapters: List[Chapter] = []
 
@@ -346,4 +350,12 @@ def extract_chapters(book: epub.EpubBook, prefer_toc: bool = True) -> List[Chapt
             Chapter(title=title, href=entry.href, source=base_href, text=text)
         )
 
+    return chapters
+
+
+def extract_chapters(book: epub.EpubBook, prefer_toc: bool = True) -> List[Chapter]:
+    entries = build_toc_entries(book) if prefer_toc else []
+    chapters = _chapters_from_entries(book, entries) if entries else []
+    if not chapters:
+        chapters = _chapters_from_entries(book, build_spine_entries(book))
     return chapters

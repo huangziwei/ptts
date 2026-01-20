@@ -795,7 +795,7 @@ def create_app(root_dir: Path) -> FastAPI:
         return _no_store(cleaned)
 
     @app.post("/api/ingest")
-    def ingest_epub(file: UploadFile = File(...)) -> JSONResponse:
+    def ingest_epub(file: UploadFile = File(...), override: bool = False) -> JSONResponse:
         filename = file.filename or ""
         if not filename.lower().endswith(".epub"):
             raise HTTPException(status_code=400, detail="Only .epub files are supported.")
@@ -818,10 +818,45 @@ def create_app(root_dir: Path) -> FastAPI:
             slug = _slug_from_epub(title, Path(filename).stem)
             out_dir = root_dir / slug
             if out_dir.exists():
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Book already exists: {slug}",
-                )
+                if not override:
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "detail": f"Book already exists: {slug}",
+                            "book_id": slug,
+                        },
+                    )
+                synth_job = jobs.get(slug)
+                if synth_job and synth_job.process.poll() is None:
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "detail": "Stop TTS before overwriting.",
+                            "book_id": slug,
+                        },
+                    )
+                merge_job = merge_jobs.get(slug)
+                if merge_job and merge_job.process.poll() is None:
+                    return JSONResponse(
+                        status_code=409,
+                        content={
+                            "detail": "Stop merge before overwriting.",
+                            "book_id": slug,
+                        },
+                    )
+                resolved = out_dir.resolve()
+                if root_dir not in resolved.parents and resolved != root_dir:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid book path.",
+                    )
+                m4b_path = _merge_output_path(resolved)
+                if m4b_path.exists():
+                    m4b_path.unlink()
+                if resolved.is_dir():
+                    shutil.rmtree(resolved)
+                else:
+                    resolved.unlink()
             out_dir.mkdir(parents=True, exist_ok=True)
             log_path = out_dir / "ingest.log"
             stage = "ingest"

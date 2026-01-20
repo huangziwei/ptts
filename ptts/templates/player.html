@@ -2014,20 +2014,29 @@
         const res = await fetch(url, opts);
         if (!res.ok) {
           let detail = `Request failed: ${res.status}`;
+          let payload = null;
           try {
-            const payload = await res.json();
+            payload = await res.json();
             if (payload && payload.detail) {
-              detail = payload.detail;
+              detail =
+                typeof payload.detail === "string"
+                  ? payload.detail
+                  : JSON.stringify(payload.detail);
             }
           } catch (err) {
             // ignore parse errors
           }
-          throw new Error(detail);
+          const error = new Error(detail);
+          error.status = res.status;
+          if (payload) {
+            error.payload = payload;
+          }
+          throw error;
         }
         return res.json();
       }
 
-      async function ingestFile(file) {
+      async function ingestFile(file, options = {}) {
         if (!file) {
           return;
         }
@@ -2039,27 +2048,60 @@
         if (state.ingestRunning) {
           return;
         }
+        let override = options.override === true;
         setIngestRunning(true);
-        setUploadStatus(`Ingesting and sanitizing ${name}...`);
-        const body = new FormData();
-        body.append("file", file);
-        try {
-          const data = await fetchJson("/api/ingest", {
-            method: "POST",
-            body,
-          });
-          const title = data.title || data.book_id || "Book";
-          setUploadStatus(`Ingested and sanitized ${title}.`);
-          await loadBooks();
-          if (data.book_id) {
-            await selectBook(data.book_id);
+        const makeBody = () => {
+          const body = new FormData();
+          body.append("file", file);
+          return body;
+        };
+        while (true) {
+          const verb = override
+            ? "Overwriting and ingesting"
+            : "Ingesting and sanitizing";
+          setUploadStatus(`${verb} ${name}...`);
+          try {
+            const data = await fetchJson(
+              override ? "/api/ingest?override=1" : "/api/ingest",
+              {
+                method: "POST",
+                body: makeBody(),
+              }
+            );
+            const title = data.title || data.book_id || "Book";
+            setUploadStatus(`Ingested and sanitized ${title}.`);
+            await loadBooks();
+            if (data.book_id) {
+              await selectBook(data.book_id);
+            }
+            break;
+          } catch (err) {
+            const detail =
+              err && typeof err.message === "string" ? err.message : "";
+            if (
+              !override &&
+              err &&
+              err.status === 409 &&
+              detail.startsWith("Book already exists")
+            ) {
+              const existing = err.payload ? err.payload.book_id : "";
+              const label = existing ? `"${existing}"` : "this book";
+              const confirmed = window.confirm(
+                `Book ${label} already exists. Overwrite it? This will delete the existing book folder.`
+              );
+              if (confirmed) {
+                override = true;
+                continue;
+              }
+              setUploadStatus("Ingest canceled.", "error");
+              break;
+            }
+            setUploadStatus(detail || "Ingest failed.", "error");
+            break;
           }
-        } catch (err) {
-          setUploadStatus(err.message || "Ingest failed.", "error");
-        } finally {
-          setIngestRunning(false);
-          uploadInput.value = "";
         }
+        setIngestRunning(false);
+        uploadInput.value = "";
       }
 
       function setSelectedVoice(value, persist = true) {
