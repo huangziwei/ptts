@@ -98,3 +98,27 @@ def test_sanitize_book_adds_title_chapter(tmp_path: Path) -> None:
     clean_toc = json.loads((book_dir / "clean" / "toc.json").read_text())
     assert len(clean_toc["chapters"]) == 3
     assert clean_toc["chapters"][0]["kind"] == "title"
+
+
+def test_normalize_small_caps_opening_words() -> None:
+    text = "IN MY FIRST year I learned a lot.\n\nSecond paragraph."
+    expected = "In my first year I learned a lot.\n\nSecond paragraph."
+    assert sanitize.normalize_small_caps(text) == expected
+
+
+def test_normalize_small_caps_uses_case_map_for_names() -> None:
+    text = (
+        "EDGAR ALLAN POE AS A young man wrote a letter.\n\n"
+        "Edgar Allan Poe is mentioned later."
+    )
+    expected = (
+        "Edgar Allan Poe as a young man wrote a letter.\n\n"
+        "Edgar Allan Poe is mentioned later."
+    )
+    assert sanitize.normalize_small_caps(text) == expected
+
+
+def test_normalize_small_caps_preserves_acronyms() -> None:
+    text = "USA TODAY REPORTS that this is fine. Today reports continue."
+    expected = "USA Today reports that this is fine. Today reports continue."
+    assert sanitize.normalize_small_caps(text) == expected
