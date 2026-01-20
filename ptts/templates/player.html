@@ -3953,6 +3953,21 @@
         nextAudio.load();
       }
 
+      function pauseInactiveAudio() {
+        const inactive = currentAudio === audio ? audioNext : audio;
+        if (!inactive.paused) {
+          inactive.pause();
+        }
+      }
+
+      function guardUnexpectedPlay(target) {
+        if (target !== currentAudio) {
+          target.pause();
+          return;
+        }
+        pauseInactiveAudio();
+      }
+
       function usePreloadedAudio(index) {
         if (state.preloadedIndex !== index || !nextAudio.src) {
           return false;
@@ -4313,6 +4328,13 @@
       }
       audio.addEventListener("ended", handleEnded);
       audioNext.addEventListener("ended", handleEnded);
+      audio.addEventListener("play", () => guardUnexpectedPlay(audio));
+      audioNext.addEventListener("play", () => guardUnexpectedPlay(audioNext));
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          pauseInactiveAudio();
+        }
+      });
 
       speedBtn.addEventListener("click", () => {
         const steps = [0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
