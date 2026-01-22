@@ -220,7 +220,6 @@ def _book_summary(book_dir: Path) -> dict:
         "title": metadata.get("title") or book_dir.name,
         "authors": metadata.get("authors") or [],
         "year": metadata.get("year") or "",
-        "language": metadata.get("language") or "",
         "cover_url": cover_url,
         "has_audio": has_audio,
         "chapter_count": len(chapters) if isinstance(chapters, list) else 0,
@@ -348,7 +347,6 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             "title": metadata.get("title") or book_dir.name,
             "authors": metadata.get("authors") or [],
             "year": metadata.get("year") or "",
-            "language": metadata.get("language") or "",
             "cover_url": cover_url,
             "has_audio": bool(chapters),
             "pad_ms": pad_ms,
@@ -696,7 +694,6 @@ class MetadataPayload(BaseModel):
     title: Optional[str] = None
     authors: Union[str, List[str], None] = None
     year: Optional[str] = None
-    language: Optional[str] = None
 
 
 def create_app(root_dir: Path) -> FastAPI:
@@ -789,8 +786,6 @@ def create_app(root_dir: Path) -> FastAPI:
             updates["authors"] = _normalize_authors(payload.authors)
         if payload.year is not None:
             updates["year"] = _normalize_metadata_text(payload.year)
-        if payload.language is not None:
-            updates["language"] = _normalize_metadata_text(payload.language)
 
         for path in (book_dir / "toc.json", book_dir / "clean" / "toc.json"):
             if not path.exists():

@@ -1758,8 +1758,6 @@
               <input id="metaAuthors" type="text" placeholder="Comma-separated" autocomplete="off" />
               <label for="metaYear">Year</label>
               <input id="metaYear" type="text" inputmode="numeric" autocomplete="off" />
-              <label for="metaLanguage">Language</label>
-              <input id="metaLanguage" type="text" placeholder="e.g. en" autocomplete="off" />
             </div>
             <div class="meta-actions">
               <span class="meta-status" id="metaStatus"></span>
@@ -1956,7 +1954,6 @@
       const metaTitle = document.getElementById("metaTitle");
       const metaAuthors = document.getElementById("metaAuthors");
       const metaYear = document.getElementById("metaYear");
-      const metaLanguage = document.getElementById("metaLanguage");
       const rulesDrop = document.getElementById("rulesDrop");
       const rulesCutoff = document.getElementById("rulesCutoff");
       const rulesRemove = document.getElementById("rulesRemove");
@@ -3462,7 +3459,6 @@
         metaTitle.value = state.book.title || "";
         metaAuthors.value = (state.book.authors || []).join(", ");
         metaYear.value = state.book.year || "";
-        metaLanguage.value = state.book.language || "";
         setMetaStatus("");
         metaSave.disabled = false;
         metaModal.hidden = false;
@@ -3499,15 +3495,11 @@
         if (metadata.year !== undefined) {
           state.book.year = metadata.year || "";
         }
-        if (metadata.language !== undefined) {
-          state.book.language = metadata.language || "";
-        }
         const entry = state.books.find((book) => book.id === state.book.id);
         if (entry) {
           entry.title = state.book.title;
           entry.authors = state.book.authors || [];
           entry.year = state.book.year || "";
-          entry.language = state.book.language || "";
         }
       }
 
@@ -3520,7 +3512,6 @@
           title: metaTitle.value.trim(),
           authors: metaAuthors.value.trim(),
           year: metaYear.value.trim(),
-          language: metaLanguage.value.trim(),
         };
         setMetaStatus("Saving...");
         metaSave.disabled = true;
