@@ -1819,6 +1819,7 @@
       const uploadInput = document.getElementById("uploadInput");
       const uploadStatus = document.getElementById("uploadStatus");
       const libraryTabs = document.querySelectorAll(".library-tab");
+      const libraryTabsWrap = document.querySelector(".library-tabs");
       const chapterList = document.getElementById("chapterList");
       const chapterTitle = document.getElementById("chapterTitle");
       const chapterText = document.getElementById("chapterText");
@@ -1926,10 +1927,15 @@
       }
 
       function updateBookTabs() {
-        if (!libraryTabs.length) {
+        if (!libraryTabsWrap || !libraryTabs.length) {
           return;
         }
         const counts = countBookSources();
+        const showTabs = counts.epub > 0 && counts.txt > 0;
+        libraryTabsWrap.hidden = !showTabs;
+        if (!showTabs) {
+          return;
+        }
         libraryTabs.forEach((tab) => {
           const filter = normalizeBookFilter(tab.dataset.filter);
           const baseLabel = tab.dataset.label || tab.textContent.trim();
@@ -2721,6 +2727,12 @@
 
       function renderBooks() {
         bookList.innerHTML = "";
+        const counts = countBookSources();
+        if (counts.epub > 0 && counts.txt === 0) {
+          state.bookFilter = "epub";
+        } else if (counts.txt > 0 && counts.epub === 0) {
+          state.bookFilter = "txt";
+        }
         updateBookTabs();
         if (!state.books.length) {
           bookList.innerHTML = "<p class=\"empty-state\">No books found.</p>";
