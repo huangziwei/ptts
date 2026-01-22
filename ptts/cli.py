@@ -16,28 +16,60 @@ from . import epub as epub_util
 from . import merge as merge_util
 from . import player as player_util
 from . import sanitize as sanitize_util
+from . import text as text_util
 from . import tts as tts_util
 
 
-def _ingest(args: argparse.Namespace) -> int:
-    input_path = Path(args.input)
-    if not input_path.exists():
-        sys.stderr.write(f"Input EPUB not found: {input_path}\n")
+def _ingest_text(input_path: Path, out_dir: Path, raw_dir: Path) -> int:
+    title = text_util.guess_title_from_path(input_path)
+    book_title = title or input_path.stem or "Text"
+    chapter_title = title or "Chapter 1"
+    slug = epub_util.slugify(chapter_title or "chapter")
+    filename = f"{1:04d}-{slug}.txt"
+    out_path = raw_dir / filename
+
+    try:
+        raw_text = input_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        sys.stderr.write(f"Failed to read text file: {exc}\n")
         return 2
 
-    out_dir = Path(args.out)
-    raw_dir = out_dir / "raw" / "chapters"
+    out_path.write_text(raw_text.rstrip() + "\n", encoding="utf-8")
+    toc_items = [
+        {
+            "index": 1,
+            "title": chapter_title or "Chapter 1",
+            "href": "",
+            "source": "",
+            "path": out_path.relative_to(out_dir).as_posix(),
+        }
+    ]
+    metadata = {
+        "title": book_title,
+        "authors": [],
+        "language": "",
+        "dates": [],
+        "year": "",
+        "cover": None,
+    }
+    toc_data = {
+        "created_unix": int(time.time()),
+        "source_epub": str(input_path),
+        "metadata": metadata,
+        "chapters": toc_items,
+    }
 
-    if raw_dir.exists():
-        existing = [p for p in raw_dir.iterdir() if p.is_file()]
-        if existing and not args.overwrite:
-            sys.stderr.write(
-                "Raw chapters already exist. Use --overwrite to regenerate.\n"
-            )
-            return 2
+    toc_path = out_dir / "toc.json"
+    toc_path.write_text(
+        json.dumps(toc_data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Wrote {len(toc_items)} chapters to {raw_dir}")
+    print(f"TOC metadata saved to {toc_path}")
+    return 0
 
-    raw_dir.mkdir(parents=True, exist_ok=True)
 
+def _ingest_epub(input_path: Path, out_dir: Path, raw_dir: Path) -> int:
     book = epub_util.read_epub(input_path)
     metadata = epub_util.extract_metadata(book)
     cover = epub_util.extract_cover_image(book)
@@ -92,6 +124,36 @@ def _ingest(args: argparse.Namespace) -> int:
     print(f"Wrote {len(toc_items)} chapters to {raw_dir}")
     print(f"TOC metadata saved to {toc_path}")
     return 0
+
+
+def _ingest(args: argparse.Namespace) -> int:
+    input_path = Path(args.input)
+    if not input_path.exists():
+        sys.stderr.write(f"Input file not found: {input_path}\n")
+        return 2
+
+    suffix = input_path.suffix.lower()
+    if suffix not in {".epub", ".txt"}:
+        sys.stderr.write("Only .epub or .txt files are supported.\n")
+        return 2
+
+    out_dir = Path(args.out)
+    raw_dir = out_dir / "raw" / "chapters"
+
+    if raw_dir.exists():
+        existing = [p for p in raw_dir.iterdir() if p.is_file()]
+        if existing and not args.overwrite:
+            sys.stderr.write(
+                "Raw chapters already exist. Use --overwrite to regenerate.\n"
+            )
+            return 2
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    if suffix == ".txt":
+        return _ingest_text(input_path, out_dir, raw_dir)
+
+    return _ingest_epub(input_path, out_dir, raw_dir)
 
 
 def _cover_extension(media_type: str, href: str) -> str:
@@ -345,8 +407,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ptts")
     subparsers = parser.add_subparsers(dest="command")
 
-    ingest = subparsers.add_parser("ingest", help="Extract chapters from an EPUB")
-    ingest.add_argument("--input", required=True, help="Path to input .epub")
+    ingest = subparsers.add_parser(
+        "ingest", help="Extract chapters from an EPUB or TXT"
+    )
+    ingest.add_argument(
+        "--input", required=True, help="Path to input .epub or .txt"
+    )
     ingest.add_argument(
         "--out",
         "--output",

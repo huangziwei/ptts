@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from . import epub as epub_util
 from . import sanitize
-from .text import read_clean_text
+from .text import guess_title_from_path, read_clean_text
 from .voice import BUILTIN_VOICES, DEFAULT_VOICE, resolve_voice_prompt
 
 def _load_json(path: Path) -> dict:
@@ -160,10 +160,20 @@ def _resolve_raw_path(book_dir: Path, raw_toc: dict, clean_entry: dict) -> Optio
     return None
 
 
-def _slug_from_epub(title: str, fallback: str) -> str:
+def _slug_from_title(title: str, fallback: str) -> str:
     base = title.strip() if title else fallback
     slug = epub_util.slugify(base)
     return slug or "book"
+
+
+def _source_type_from_toc(toc: dict) -> str:
+    source = str(toc.get("source_epub") or "")
+    suffix = Path(source).suffix.lower()
+    if suffix == ".txt":
+        return "txt"
+    if suffix == ".epub":
+        return "epub"
+    return "unknown"
 
 
 def _resolve_book_dir(root_dir: Path, book_id: str) -> Path:
@@ -203,6 +213,7 @@ def _book_summary(book_dir: Path) -> dict:
     cover_path = cover.get("path") or ""
     cover_url = f"/audio/{book_dir.name}/{cover_path}" if cover_path else ""
     chapters = toc.get("chapters", []) if isinstance(toc, dict) else []
+    source_type = _source_type_from_toc(toc) if isinstance(toc, dict) else "unknown"
     has_audio = (book_dir / "tts" / "manifest.json").exists()
     return {
         "id": book_dir.name,
@@ -212,6 +223,7 @@ def _book_summary(book_dir: Path) -> dict:
         "cover_url": cover_url,
         "has_audio": has_audio,
         "chapter_count": len(chapters) if isinstance(chapters, list) else 0,
+        "source_type": source_type,
     }
 
 
@@ -278,6 +290,7 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
     cover = metadata.get("cover") or {}
     cover_path = cover.get("path") or ""
     cover_url = f"/audio/{book_dir.name}/{cover_path}" if cover_path else ""
+    source_type = _source_type_from_toc(toc) if isinstance(toc, dict) else "unknown"
 
     manifest = _load_json(book_dir / "tts" / "manifest.json")
     chapters: List[dict] = []
@@ -319,6 +332,7 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             "has_audio": bool(chapters),
             "pad_ms": pad_ms,
             "last_voice": last_voice,
+            "source_type": source_type,
         },
         "chapters": chapters,
         "audio_base": f"/audio/{book_dir.name}/tts/segments",
@@ -795,27 +809,34 @@ def create_app(root_dir: Path) -> FastAPI:
         return _no_store(cleaned)
 
     @app.post("/api/ingest")
-    def ingest_epub(file: UploadFile = File(...), override: bool = False) -> JSONResponse:
+    def ingest_file(file: UploadFile = File(...), override: bool = False) -> JSONResponse:
         filename = file.filename or ""
-        if not filename.lower().endswith(".epub"):
-            raise HTTPException(status_code=400, detail="Only .epub files are supported.")
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".epub", ".txt"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Only .epub or .txt files are supported.",
+            )
 
         tmp_path = None
         title = Path(filename).stem
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as handle:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
                 shutil.copyfileobj(file.file, handle)
                 tmp_path = Path(handle.name)
 
-            try:
-                book = epub_util.read_epub(tmp_path)
-                metadata = epub_util.extract_metadata(book)
-                if metadata.get("title"):
-                    title = str(metadata.get("title") or "").strip() or title
-            except Exception:
-                metadata = {}
+            if suffix == ".epub":
+                try:
+                    book = epub_util.read_epub(tmp_path)
+                    metadata = epub_util.extract_metadata(book)
+                    if metadata.get("title"):
+                        title = str(metadata.get("title") or "").strip() or title
+                except Exception:
+                    metadata = {}
+            else:
+                title = guess_title_from_path(tmp_path) or title
 
-            slug = _slug_from_epub(title, Path(filename).stem)
+            slug = _slug_from_title(title, Path(filename).stem)
             out_dir = root_dir / slug
             if out_dir.exists():
                 if not override:

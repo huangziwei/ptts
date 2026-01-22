@@ -33,10 +33,17 @@ PMX_OPTS="-p 1912:1912" ./bin/pmx uv sync
 
 End-to-end workflow with podman:
 
-### 1) Ingest EPUB into raw chapters
+### 1) Ingest EPUB or TXT into raw chapters
 ```bash
 ./bin/pmx uv run ptts ingest \
   --input books/Some-Book.epub \
+  --out out/some-book
+```
+
+Plain text input works the same way:
+```bash
+./bin/pmx uv run ptts ingest \
+  --input books/Some-Book.txt \
   --out out/some-book
 ```
 
