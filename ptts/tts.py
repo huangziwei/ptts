@@ -39,6 +39,51 @@ _ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.$", re.IGNORECASE
 _SINGLE_INITIAL_RE = re.compile(r"\b[A-Z]\.$")
 _NAME_INITIAL_RE = re.compile(r"\b([A-Z][a-z]+)\s+[A-Z]\.$")
 _MULTI_INITIAL_RE = re.compile(r"(?:\b[A-Z]\.){2,}$")
+_ABBREV_WHITELIST = {
+    "a.k.a.",
+    "a.m.",
+    "b.a.",
+    "b.f.a.",
+    "b.s.",
+    "b.s.n.",
+    "c.e.o.",
+    "c.f.o.",
+    "c.i.a.",
+    "c.o.o.",
+    "c.p.a.",
+    "cf.",
+    "d.c.",
+    "d.d.s.",
+    "d.o.",
+    "d.v.m.",
+    "e.g.",
+    "et al.",
+    "etc.",
+    "f.b.i.",
+    "i.e.",
+    "j.d.",
+    "l.p.n.",
+    "m.a.",
+    "m.b.a.",
+    "m.d.",
+    "m.f.a.",
+    "m.p.h.",
+    "m.s.",
+    "m.s.w.",
+    "p.e.",
+    "p.m.",
+    "ph.d.",
+    "r.n.",
+    "u.k.",
+    "u.n.",
+    "u.s.",
+    "u.s.a.",
+    "viz.",
+    "vs.",
+}
+_DOT_SPACE_DOT_RE = re.compile(r"(?<=\.)\s+(?=[A-Za-z]\.)")
+_LAST_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)\s*$")
+_NEXT_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)")
 _SENTENCE_STARTERS = {
     "the",
     "a",
@@ -184,10 +229,41 @@ def _next_word(text: str, start: int) -> str:
     return match.group(0)
 
 
+def _ends_with_whitelisted_abbrev(text: str) -> bool:
+    text = text.lower()
+    for abbr in _ABBREV_WHITELIST:
+        if text.endswith(abbr):
+            return True
+    return False
+
+
+def _is_whitelisted_abbrev_boundary(tail: str, paragraph: str, next_pos: int) -> bool:
+    if _ends_with_whitelisted_abbrev(tail):
+        return True
+    if _DOT_SPACE_DOT_RE.search(tail):
+        joined = _DOT_SPACE_DOT_RE.sub("", tail)
+        if _ends_with_whitelisted_abbrev(joined):
+            return True
+    last_token = _LAST_DOT_TOKEN_RE.search(tail)
+    if not last_token:
+        return False
+    next_token = _NEXT_DOT_TOKEN_RE.match(paragraph[next_pos:])
+    if not next_token:
+        return False
+    combined = (last_token.group(1) + next_token.group(1)).lower()
+    for abbr in _ABBREV_WHITELIST:
+        if abbr.startswith(combined):
+            return True
+    return False
+
+
 def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool:
     tail = paragraph[:end]
     next_word = _next_word(paragraph, next_pos)
     next_lower = next_word.lower()
+
+    if _is_whitelisted_abbrev_boundary(tail, paragraph, next_pos):
+        return True
 
     if _ABBREV_SENT_RE.search(tail):
         if next_lower and next_lower in _SENTENCE_STARTERS:

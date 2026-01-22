@@ -36,6 +36,24 @@ def test_make_chunks_skips_us_initial_split() -> None:
     assert chunks == [text]
 
 
+def test_make_chunks_skips_common_abbrev_split() -> None:
+    text = "This is e.g. a test."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
+def test_make_chunks_skips_phd_split() -> None:
+    text = "She entered the Ph.D. program."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
+def test_make_chunks_skips_spaced_phd_split() -> None:
+    text = "She entered the Ph. D. program."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
     chunk_dir = tmp_path / "chunks"
     chunks = ["One.", "Two."]
