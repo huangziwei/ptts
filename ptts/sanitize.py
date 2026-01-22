@@ -569,7 +569,10 @@ def sanitize_book(
     dropped = 0
     clean_entries: List[dict] = []
 
-    title_text = format_title_chapter(metadata)
+    source_epub = str(toc.get("source_epub", "")) if isinstance(toc, dict) else ""
+    source_suffix = Path(source_epub).suffix.lower()
+    include_title = source_suffix != ".txt"
+    title_text = format_title_chapter(metadata) if include_title else ""
     if title_text:
         title_path = clean_dir / "0000-title.txt"
         title_path.write_text(title_text + "\n", encoding="utf-8")

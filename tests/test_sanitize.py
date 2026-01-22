@@ -100,6 +100,50 @@ def test_sanitize_book_adds_title_chapter(tmp_path: Path) -> None:
     assert clean_toc["chapters"][0]["kind"] == "title"
 
 
+def test_sanitize_book_skips_title_for_txt(tmp_path: Path) -> None:
+    book_dir = tmp_path / "book"
+    raw_dir = book_dir / "raw" / "chapters"
+    raw_dir.mkdir(parents=True)
+
+    (raw_dir / "0001-preface.txt").write_text("Preface text", encoding="utf-8")
+    (raw_dir / "0002-main.txt").write_text("Main text", encoding="utf-8")
+
+    toc = {
+        "source_epub": "notes.txt",
+        "metadata": {
+            "title": "Notes",
+            "authors": ["Someone"],
+            "year": "2024",
+        },
+        "chapters": [
+            {
+                "index": 1,
+                "title": "Preface",
+                "path": "raw/chapters/0001-preface.txt",
+            },
+            {
+                "index": 2,
+                "title": "Main",
+                "path": "raw/chapters/0002-main.txt",
+            },
+        ],
+    }
+    (book_dir / "toc.json").write_text(
+        json.dumps(toc, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    written = sanitize.sanitize_book(book_dir, overwrite=True, base_dir=book_dir)
+    clean_dir = book_dir / "clean" / "chapters"
+
+    assert written == 2
+    assert (clean_dir / "0000-title.txt").exists() is False
+
+    clean_toc = json.loads((book_dir / "clean" / "toc.json").read_text())
+    assert len(clean_toc["chapters"]) == 2
+    assert all(entry.get("kind") != "title" for entry in clean_toc["chapters"])
+
+
 def test_normalize_small_caps_opening_words() -> None:
     text = "IN MY FIRST year I learned a lot.\n\nSecond paragraph."
     expected = "In my first year I learned a lot.\n\nSecond paragraph."

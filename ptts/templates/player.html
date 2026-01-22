@@ -1518,7 +1518,7 @@
           <input type="file" id="uploadInput" accept=".epub,.txt" hidden />
           <div class="upload-status" id="uploadStatus"></div>
         </div>
-        <div class="library-tabs" role="tablist" aria-label="Bookshelf filters">
+        <div class="library-tabs" role="tablist" aria-label="Bookshelf filters" hidden>
           <button class="library-tab active" data-filter="epub" data-label="EPUB" type="button" role="tab" aria-selected="true">EPUB</button>
           <button class="library-tab" data-filter="txt" data-label="TXT" type="button" role="tab" aria-selected="false">TXT</button>
         </div>
@@ -1933,6 +1933,7 @@
         const counts = countBookSources();
         const showTabs = counts.epub > 0 && counts.txt > 0;
         libraryTabsWrap.hidden = !showTabs;
+        libraryTabsWrap.style.display = showTabs ? "" : "none";
         if (!showTabs) {
           return;
         }
