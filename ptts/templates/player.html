@@ -398,6 +398,85 @@
         object-fit: cover;
       }
 
+      .cover-fallback {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: inherit;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        gap: var(--cover-gap, 4px);
+        padding: var(--cover-pad, 6px);
+        background: linear-gradient(
+          140deg,
+          var(--cover-bg),
+          var(--cover-bg-2)
+        );
+        color: var(--cover-ink);
+      }
+
+      .cover-fallback::before {
+        content: "";
+        position: absolute;
+        inset: -30% -40% auto -40%;
+        height: 45%;
+        background: linear-gradient(
+          120deg,
+          transparent,
+          var(--cover-accent),
+          transparent
+        );
+        opacity: 0.35;
+        transform: rotate(var(--cover-tilt));
+      }
+
+      .cover-fallback::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0 0;
+        height: var(--cover-band);
+        background: var(--cover-accent);
+        opacity: 0.25;
+      }
+
+      .cover-text {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 3px;
+        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+      }
+
+      .cover-title {
+        font-family: var(--title);
+        font-size: var(--cover-title-size, 11px);
+        line-height: var(--cover-title-leading, 1.1);
+        word-break: break-word;
+        hyphens: auto;
+      }
+
+      .cover-meta {
+        font-size: var(--cover-meta-size, 8px);
+        line-height: var(--cover-meta-leading, 1.15);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        word-break: break-word;
+        hyphens: auto;
+      }
+
+      .cover-fallback.small {
+        --cover-title-size: 9px;
+        --cover-meta-size: 7px;
+        --cover-pad: 5px;
+      }
+
+      .cover-fallback.large {
+        --cover-title-size: 14px;
+        --cover-meta-size: 10px;
+        --cover-pad: 12px;
+      }
+
       .book-meta h4 {
         margin: 0 0 4px;
         font-size: 14px;
@@ -2016,6 +2095,206 @@
         return value === "txt" ? "txt" : "epub";
       }
 
+      function escapeHtml(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function hashString(value) {
+        let hash = 2166136261;
+        const text = String(value || "");
+        for (let i = 0; i < text.length; i += 1) {
+          hash ^= text.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+      }
+
+      const COVER_THEMES = [
+        { bg1: "#f3d7c0", bg2: "#e9b7a0", accent: "#5a8f7d", ink: "#2b211a" },
+        { bg1: "#d7e6d2", bg2: "#b7d0c4", accent: "#b26b4b", ink: "#20332b" },
+        { bg1: "#f1e1b6", bg2: "#e5c98c", accent: "#58759b", ink: "#2b2417" },
+        { bg1: "#d7dbe5", bg2: "#bfc7d6", accent: "#8a5a32", ink: "#2a2f3a" },
+        { bg1: "#f0d9de", bg2: "#d7b7c0", accent: "#3c7a6b", ink: "#2c2023" },
+        { bg1: "#e6e1d8", bg2: "#cfc7ba", accent: "#7b5742", ink: "#2a241c" },
+        { bg1: "#d6e5ea", bg2: "#b7ccd6", accent: "#b15d3f", ink: "#1f2e35" },
+        { bg1: "#f2e6da", bg2: "#d7c2ae", accent: "#2c5a6b", ink: "#2b221b" },
+      ];
+
+      function coverTheme(book) {
+        const seed = hashString(book && (book.id || book.title || ""));
+        const theme = COVER_THEMES[seed % COVER_THEMES.length];
+        const tilt = (seed % 18) - 9;
+        const band = 18 + (seed % 12);
+        return {
+          ...theme,
+          tilt: `${tilt}deg`,
+          band: `${band}%`,
+        };
+      }
+
+      function normalizeCoverText(book) {
+        const title = String(book.title || book.id || "Untitled").trim();
+        let authors = [];
+        if (Array.isArray(book.authors)) {
+          authors = book.authors;
+        } else if (typeof book.authors === "string") {
+          authors = book.authors
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean);
+        }
+        const authorText = authors.length ? authors.join(", ") : "Unknown";
+        const yearText = String(book.year || "n.d.").trim();
+        return {
+          titleText: title,
+          authorText,
+          yearText,
+          metaText: `${authorText} ${yearText}`,
+        };
+      }
+
+      function coverText(book) {
+        const normalized = normalizeCoverText(book);
+        return {
+          title: escapeHtml(normalized.titleText),
+          meta: `${escapeHtml(normalized.authorText)}<br>${escapeHtml(normalized.yearText)}`,
+        };
+      }
+
+      function coverDimensions(size) {
+        return size === "large"
+          ? { width: 120, height: 160 }
+          : { width: 52, height: 70 };
+      }
+
+      function coverSizing(book, size) {
+        const normalized = normalizeCoverText(book);
+        const titleLen = normalized.titleText.length;
+        const metaLen = normalized.authorText.length + normalized.yearText.length;
+        const isLarge = size === "large";
+        let titleSize = isLarge ? 16 : 10;
+        let metaSize = isLarge ? 11 : 8;
+        let pad = isLarge ? 12 : 6;
+        let gap = isLarge ? 6 : 4;
+        let titleLeading = 1.1;
+        let metaLeading = 1.1;
+
+        if (titleLen > 45) {
+          titleSize -= isLarge ? 2 : 1;
+        }
+        if (titleLen > 70) {
+          titleSize -= isLarge ? 3 : 2;
+        }
+        if (titleLen > 95) {
+          titleSize -= isLarge ? 3 : 2;
+        }
+        if (metaLen > 40) {
+          metaSize -= isLarge ? 2 : 1;
+        }
+        if (metaLen > 70) {
+          metaSize -= isLarge ? 2 : 1;
+        }
+        const totalLen = titleLen + metaLen;
+        if (totalLen > 120) {
+          titleSize -= isLarge ? 2 : 1;
+          metaSize -= isLarge ? 1 : 1;
+          pad -= isLarge ? 2 : 1;
+          titleLeading = 1.05;
+          metaLeading = 1.05;
+        }
+
+        const minTitle = isLarge ? 8 : 6;
+        const minMeta = isLarge ? 6 : 5;
+        const minPad = isLarge ? 8 : 4;
+        const minGap = isLarge ? 4 : 2;
+        const dims = coverDimensions(size);
+
+        const estimateLines = (text, fontSize, width) => {
+          if (!text) {
+            return 0;
+          }
+          const avgChar = Math.max(fontSize * 0.56, 1);
+          const charsPerLine = Math.max(Math.floor(width / avgChar), 1);
+          return Math.ceil(text.length / charsPerLine);
+        };
+
+        for (let step = 0; step < 10; step += 1) {
+          const availWidth = Math.max(dims.width - pad * 2, 1);
+          const availHeight = Math.max(dims.height - pad * 2, 1);
+          const titleLines = estimateLines(
+            normalized.titleText,
+            titleSize,
+            availWidth
+          );
+          const metaLines =
+            estimateLines(normalized.authorText, metaSize, availWidth) +
+            estimateLines(normalized.yearText, metaSize, availWidth);
+          const heightNeeded =
+            titleLines * titleSize * titleLeading +
+            metaLines * metaSize * metaLeading +
+            gap;
+          if (heightNeeded <= availHeight) {
+            break;
+          }
+          titleSize = Math.max(titleSize - (isLarge ? 1.4 : 1), minTitle);
+          metaSize = Math.max(metaSize - (isLarge ? 1 : 0.8), minMeta);
+          if (step % 2 === 0) {
+            pad = Math.max(pad - 1, minPad);
+            gap = Math.max(gap - 1, minGap);
+          }
+          titleLeading = 1.05;
+          metaLeading = 1.05;
+          if (titleSize === minTitle && metaSize === minMeta && pad === minPad) {
+            break;
+          }
+        }
+
+        titleSize = Math.max(titleSize, minTitle);
+        metaSize = Math.max(metaSize, minMeta);
+        pad = Math.max(pad, minPad);
+        gap = Math.max(gap, minGap);
+
+        return {
+          titleSize,
+          metaSize,
+          pad,
+          gap,
+          titleLeading,
+          metaLeading,
+        };
+      }
+
+      function renderFallbackCover(book, size) {
+        const theme = coverTheme(book);
+        const text = coverText(book);
+        const sizing = coverSizing(book, size);
+        const sizeClass = size === "large" ? "large" : "small";
+        return `
+          <div
+            class="cover-fallback ${sizeClass}"
+            style="--cover-bg:${theme.bg1};--cover-bg-2:${theme.bg2};--cover-accent:${theme.accent};--cover-ink:${theme.ink};--cover-tilt:${theme.tilt};--cover-band:${theme.band};--cover-title-size:${sizing.titleSize}px;--cover-meta-size:${sizing.metaSize}px;--cover-pad:${sizing.pad}px;--cover-gap:${sizing.gap}px;--cover-title-leading:${sizing.titleLeading};--cover-meta-leading:${sizing.metaLeading};"
+          >
+            <div class="cover-text">
+              <div class="cover-title">${text.title}</div>
+              <div class="cover-meta">${text.meta}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderCover(book, size) {
+        if (book.cover_url) {
+          const src = escapeHtml(book.cover_url);
+          return `<img src="${src}" alt="Cover" />`;
+        }
+        return renderFallbackCover(book, size);
+      }
+
       function bookSourceType(book) {
         const value = String(book && book.source_type ? book.source_type : "").toLowerCase();
         if (value === "txt") {
@@ -2860,10 +3139,10 @@
             card.classList.add("active");
           }
           card.innerHTML = `
-            <div class="book-cover">${book.cover_url ? `<img src="${book.cover_url}" alt="Cover" />` : ""}</div>
+            <div class="book-cover">${renderCover(book, "small")}</div>
             <div class="book-meta">
-              <h4>${book.title}</h4>
-              <p>${(book.authors || []).join(", ")}</p>
+              <h4>${escapeHtml(book.title || book.id || "Untitled")}</h4>
+              <p>${escapeHtml((book.authors || []).join(", "))}</p>
               <p>${book.has_audio ? "Audio ready" : "No audio yet"}</p>
             </div>
           `;
@@ -2964,11 +3243,7 @@
         bookStatus.textContent = state.book.has_audio
           ? "Audio manifest loaded."
           : "Waiting for audio.";
-        if (state.book.cover_url) {
-          coverLarge.innerHTML = `<img src="${state.book.cover_url}" alt="Cover" />`;
-        } else {
-          coverLarge.innerHTML = "";
-        }
+        coverLarge.innerHTML = renderCover(state.book, "large");
       }
 
       function snippet(text, length) {
