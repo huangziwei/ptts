@@ -12,7 +12,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, List, Optional
+from typing import IO, List, Optional, Union
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -220,6 +220,7 @@ def _book_summary(book_dir: Path) -> dict:
         "title": metadata.get("title") or book_dir.name,
         "authors": metadata.get("authors") or [],
         "year": metadata.get("year") or "",
+        "language": metadata.get("language") or "",
         "cover_url": cover_url,
         "has_audio": has_audio,
         "chapter_count": len(chapters) if isinstance(chapters, list) else 0,
@@ -244,6 +245,25 @@ def _normalize_voice_value(value: object, repo_root: Path) -> str:
         except ValueError:
             return cleaned
         return rel.as_posix()
+    return cleaned
+
+
+def _normalize_metadata_text(value: Optional[str]) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_authors(raw: Union[str, List[str], None]) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        items = raw
+    else:
+        items = re.split(r"[,\n]+", str(raw))
+    cleaned: List[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text:
+            cleaned.append(text)
     return cleaned
 
 
@@ -328,6 +348,7 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             "title": metadata.get("title") or book_dir.name,
             "authors": metadata.get("authors") or [],
             "year": metadata.get("year") or "",
+            "language": metadata.get("language") or "",
             "cover_url": cover_url,
             "has_audio": bool(chapters),
             "pad_ms": pad_ms,
@@ -670,6 +691,14 @@ class DeleteBookRequest(BaseModel):
     book_id: str
 
 
+class MetadataPayload(BaseModel):
+    book_id: str
+    title: Optional[str] = None
+    authors: Union[str, List[str], None] = None
+    year: Optional[str] = None
+    language: Optional[str] = None
+
+
 def create_app(root_dir: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app = FastAPI()
@@ -749,6 +778,54 @@ def create_app(root_dir: Path) -> FastAPI:
         if book_dir.exists():
             shutil.rmtree(book_dir)
         return _no_store({"status": "deleted", "book_id": payload.book_id})
+
+    @app.post("/api/books/metadata")
+    def update_metadata(payload: MetadataPayload) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        updates: dict[str, object] = {}
+        if payload.title is not None:
+            updates["title"] = _normalize_metadata_text(payload.title)
+        if payload.authors is not None:
+            updates["authors"] = _normalize_authors(payload.authors)
+        if payload.year is not None:
+            updates["year"] = _normalize_metadata_text(payload.year)
+        if payload.language is not None:
+            updates["language"] = _normalize_metadata_text(payload.language)
+
+        for path in (book_dir / "toc.json", book_dir / "clean" / "toc.json"):
+            if not path.exists():
+                continue
+            data = _load_json(path)
+            if not isinstance(data, dict):
+                continue
+            metadata = data.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            for key, value in updates.items():
+                metadata[key] = value
+            data["metadata"] = metadata
+            _atomic_write_json(path, data)
+
+        metadata_payload: dict = {}
+        clean_toc = _load_json(book_dir / "clean" / "toc.json")
+        if isinstance(clean_toc, dict):
+            meta = clean_toc.get("metadata")
+            if isinstance(meta, dict):
+                metadata_payload = meta
+        if not metadata_payload:
+            raw_toc = _load_json(book_dir / "toc.json")
+            if isinstance(raw_toc, dict):
+                meta = raw_toc.get("metadata")
+                if isinstance(meta, dict):
+                    metadata_payload = meta
+
+        return _no_store(
+            {
+                "status": "ok",
+                "metadata": metadata_payload,
+                "book": _book_summary(book_dir),
+            }
+        )
 
     @app.get("/api/voices")
     def list_voices() -> JSONResponse:

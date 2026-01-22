@@ -794,6 +794,82 @@
         text-align: left;
       }
 
+      .meta-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(18, 14, 10, 0.45);
+        display: grid;
+        place-items: center;
+        z-index: 40;
+      }
+
+      .meta-modal[hidden] {
+        display: none;
+      }
+
+      .meta-card {
+        width: min(420px, calc(100vw - 32px));
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: var(--shadow-pop);
+      }
+
+      .meta-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .meta-header h3 {
+        margin: 0;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--muted);
+      }
+
+      .meta-form {
+        display: grid;
+        gap: 10px;
+      }
+
+      .meta-form label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .meta-form input {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line-strong);
+        background: var(--surface-2);
+        color: var(--ink);
+        font-family: var(--ui);
+      }
+
+      .meta-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .meta-status {
+        margin-right: auto;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .meta-status[data-tone="error"] {
+        color: var(--danger);
+      }
+
       .reader-body {
         display: grid;
         grid-template-columns: 230px 1fr;
@@ -1535,6 +1611,7 @@
               <div class="book-menu">
                 <button class="btn circle" id="bookMenuBtn" type="button" aria-haspopup="true" aria-expanded="false" disabled aria-label="More">⋯</button>
                 <div class="menu-panel" id="bookMenuPanel">
+                  <button class="btn" id="editMetaBtn" type="button" disabled>Edit metadata</button>
                   <button class="btn danger" id="deleteBookBtn" type="button" disabled>Delete book</button>
                 </div>
               </div>
@@ -1668,6 +1745,29 @@
             </div>
           </div>
         </section>
+        <div class="meta-modal" id="metaModal" hidden>
+          <div class="meta-card" role="dialog" aria-modal="true" aria-labelledby="metaTitleLabel">
+            <div class="meta-header">
+              <h3 id="metaTitleLabel">Edit metadata</h3>
+              <button class="btn circle" id="metaClose" type="button" aria-label="Close">x</button>
+            </div>
+            <div class="meta-form">
+              <label for="metaTitle">Title</label>
+              <input id="metaTitle" type="text" autocomplete="off" />
+              <label for="metaAuthors">Authors</label>
+              <input id="metaAuthors" type="text" placeholder="Comma-separated" autocomplete="off" />
+              <label for="metaYear">Year</label>
+              <input id="metaYear" type="text" inputmode="numeric" autocomplete="off" />
+              <label for="metaLanguage">Language</label>
+              <input id="metaLanguage" type="text" placeholder="e.g. en" autocomplete="off" />
+            </div>
+            <div class="meta-actions">
+              <span class="meta-status" id="metaStatus"></span>
+              <button class="btn" id="metaCancel" type="button">Cancel</button>
+              <button class="btn primary" id="metaSave" type="button">Save</button>
+            </div>
+          </div>
+        </div>
       </main>
     </div>
 
@@ -1846,7 +1946,17 @@
       const cancelCleanBtn = document.getElementById("cancelCleanBtn");
       const bookMenuBtn = document.getElementById("bookMenuBtn");
       const bookMenuPanel = document.getElementById("bookMenuPanel");
+      const editMetaBtn = document.getElementById("editMetaBtn");
       const deleteBookBtn = document.getElementById("deleteBookBtn");
+      const metaModal = document.getElementById("metaModal");
+      const metaClose = document.getElementById("metaClose");
+      const metaCancel = document.getElementById("metaCancel");
+      const metaSave = document.getElementById("metaSave");
+      const metaStatus = document.getElementById("metaStatus");
+      const metaTitle = document.getElementById("metaTitle");
+      const metaAuthors = document.getElementById("metaAuthors");
+      const metaYear = document.getElementById("metaYear");
+      const metaLanguage = document.getElementById("metaLanguage");
       const rulesDrop = document.getElementById("rulesDrop");
       const rulesCutoff = document.getElementById("rulesCutoff");
       const rulesRemove = document.getElementById("rulesRemove");
@@ -2643,6 +2753,7 @@
         updateClearButtonState();
         renderAdvancedPanel();
         updateMarks();
+        closeMetaModal();
       }
 
       async function loadPlayback() {
@@ -3324,10 +3435,112 @@
       function updateDeleteButtonState() {
         const disabled = !state.book || state.synthRunning || state.mergeRunning;
         deleteBookBtn.disabled = disabled;
+        editMetaBtn.disabled = disabled;
         bookMenuBtn.disabled = disabled;
         if (disabled) {
           bookMenuPanel.classList.remove("open");
           bookMenuBtn.setAttribute("aria-expanded", "false");
+        }
+      }
+
+      function setMetaStatus(message, tone = "") {
+        if (!metaStatus) {
+          return;
+        }
+        metaStatus.textContent = message || "";
+        if (tone) {
+          metaStatus.dataset.tone = tone;
+        } else {
+          delete metaStatus.dataset.tone;
+        }
+      }
+
+      function openMetaModal() {
+        if (!state.book || !metaModal) {
+          return;
+        }
+        metaTitle.value = state.book.title || "";
+        metaAuthors.value = (state.book.authors || []).join(", ");
+        metaYear.value = state.book.year || "";
+        metaLanguage.value = state.book.language || "";
+        setMetaStatus("");
+        metaSave.disabled = false;
+        metaModal.hidden = false;
+        metaTitle.focus();
+      }
+
+      function closeMetaModal() {
+        if (!metaModal) {
+          return;
+        }
+        metaModal.hidden = true;
+        setMetaStatus("");
+      }
+
+      function updateBookMetadata(metadata) {
+        if (!state.book || !metadata) {
+          return;
+        }
+        if (metadata.title !== undefined) {
+          state.book.title = metadata.title || "";
+        }
+        if (metadata.authors !== undefined) {
+          if (Array.isArray(metadata.authors)) {
+            state.book.authors = metadata.authors;
+          } else if (typeof metadata.authors === "string") {
+            state.book.authors = metadata.authors
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
+          } else {
+            state.book.authors = [];
+          }
+        }
+        if (metadata.year !== undefined) {
+          state.book.year = metadata.year || "";
+        }
+        if (metadata.language !== undefined) {
+          state.book.language = metadata.language || "";
+        }
+        const entry = state.books.find((book) => book.id === state.book.id);
+        if (entry) {
+          entry.title = state.book.title;
+          entry.authors = state.book.authors || [];
+          entry.year = state.book.year || "";
+          entry.language = state.book.language || "";
+        }
+      }
+
+      async function saveMetadata() {
+        if (!state.book) {
+          return;
+        }
+        const payload = {
+          book_id: state.book.id,
+          title: metaTitle.value.trim(),
+          authors: metaAuthors.value.trim(),
+          year: metaYear.value.trim(),
+          language: metaLanguage.value.trim(),
+        };
+        setMetaStatus("Saving...");
+        metaSave.disabled = true;
+        try {
+          const data = await fetchJson("/api/books/metadata", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          updateBookMetadata(data.metadata || {});
+          renderBookHeader();
+          renderBooks();
+          setStatus("Metadata updated.");
+          closeMetaModal();
+        } catch (err) {
+          const detail =
+            err && typeof err.message === "string" ? err.message : "";
+          setMetaStatus(detail || "Failed to update metadata.", "error");
+        } finally {
+          metaSave.disabled = false;
         }
       }
 
@@ -4335,6 +4548,10 @@
       });
       clearTtsBtn.addEventListener("click", clearTtsCache);
       bookMenuBtn.addEventListener("click", toggleBookMenu);
+      editMetaBtn.addEventListener("click", () => {
+        closeBookMenu();
+        openMetaModal();
+      });
       document.addEventListener("click", (event) => {
         if (!bookMenuPanel.classList.contains("open")) {
           return;
@@ -4349,6 +4566,19 @@
         closeBookMenu();
       });
       deleteBookBtn.addEventListener("click", deleteBook);
+      metaClose.addEventListener("click", closeMetaModal);
+      metaCancel.addEventListener("click", closeMetaModal);
+      metaSave.addEventListener("click", saveMetadata);
+      metaModal.addEventListener("click", (event) => {
+        if (event.target === metaModal) {
+          closeMetaModal();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && metaModal && !metaModal.hidden) {
+          closeMetaModal();
+        }
+      });
       editToggle.addEventListener("click", toggleEditPanel);
       sanitizeBtn.addEventListener("click", runSanitize);
       editReload.addEventListener("click", () => loadPreview(state.previewChapterIndex));
