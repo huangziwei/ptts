@@ -14,6 +14,72 @@ def _require_ffmpeg() -> None:
         raise RuntimeError("ffmpeg not found on PATH.")
 
 
+def _cover_average_rgb(cover_path: Path) -> tuple[int, int, int] | None:
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(cover_path),
+        "-vf",
+        "scale=1:1:flags=area",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    data = proc.stdout
+    if len(data) < 3:
+        return None
+    r, g, b = data[0], data[1], data[2]
+    return int(r), int(g), int(b)
+
+
+def _clamp_channel(value: float) -> int:
+    return max(0, min(255, int(round(value))))
+
+
+def _mix_channel(base: int, target: int, amount: float) -> int:
+    return _clamp_channel(base + (target - base) * amount)
+
+
+def _mix_color(
+    base: tuple[int, int, int],
+    target: tuple[int, int, int],
+    amount: float,
+) -> tuple[int, int, int]:
+    return (
+        _mix_channel(base[0], target[0], amount),
+        _mix_channel(base[1], target[1], amount),
+        _mix_channel(base[2], target[2], amount),
+    )
+
+
+def _cover_gradient_colors(
+    cover_path: Path,
+) -> tuple[tuple[int, int, int], tuple[int, int, int]] | None:
+    avg = _cover_average_rgb(cover_path)
+    if not avg:
+        return None
+    light = _mix_color(avg, (255, 255, 255), 0.22)
+    dark = _mix_color(avg, (0, 0, 0), 0.18)
+    return light, dark
+
+
 def _build_ffmpeg_cmd(
     concat_path: Path,
     chapters_path: Path,
@@ -21,6 +87,7 @@ def _build_ffmpeg_cmd(
     bitrate: str,
     overwrite: bool,
     cover_path: Path | None = None,
+    cover_gradient: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None,
     progress: bool = False,
 ) -> list[str]:
     cmd = ["ffmpeg"]
@@ -31,14 +98,33 @@ def _build_ffmpeg_cmd(
         cmd += ["-i", str(cover_path)]
     cmd += ["-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1"]
     if cover_path is not None:
-        filter_graph = (
-            "[2:v]split=2[cover][bg0];"
-            "[bg0]scale=if(gt(iw\\,ih)\\,iw\\,ih):if(gt(iw\\,ih)\\,iw\\,ih),"
-            "boxblur=20:1[bg];"
-            "[cover]scale=if(gt(iw\\,ih)\\,iw\\,ih):if(gt(iw\\,ih)\\,iw\\,ih):"
-            "force_original_aspect_ratio=decrease[fg];"
-            "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
-        )
+        if cover_gradient:
+            light, dark = cover_gradient
+            r_expr = f"{light[0]}+({dark[0]}-{light[0]})*(X+Y)/(W+H)"
+            g_expr = f"{light[1]}+({dark[1]}-{light[1]})*(X+Y)/(W+H)"
+            b_expr = f"{light[2]}+({dark[2]}-{light[2]})*(X+Y)/(W+H)"
+            filter_graph = (
+                "[2:v]split=2[cover][bg0];"
+                "[bg0]scale=if(gt(iw\\,ih)\\,iw\\,ih):"
+                "if(gt(iw\\,ih)\\,iw\\,ih),"
+                "format=rgb24,"
+                f"geq=r={r_expr}:g={g_expr}:b={b_expr}[bg];"
+                "[cover]scale=if(gt(iw\\,ih)\\,iw\\,ih):"
+                "if(gt(iw\\,ih)\\,iw\\,ih):"
+                "force_original_aspect_ratio=decrease[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
+            )
+        else:
+            filter_graph = (
+                "[2:v]split=2[cover][bg0];"
+                "[bg0]scale=if(gt(iw\\,ih)\\,iw\\,ih):"
+                "if(gt(iw\\,ih)\\,iw\\,ih),"
+                "boxblur=20:1[bg];"
+                "[cover]scale=if(gt(iw\\,ih)\\,iw\\,ih):"
+                "if(gt(iw\\,ih)\\,iw\\,ih):"
+                "force_original_aspect_ratio=decrease[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
+            )
         cmd += [
             "-filter_complex",
             filter_graph,
@@ -333,6 +419,7 @@ def merge_book(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _require_ffmpeg()
+    cover_gradient = _cover_gradient_colors(cover_path) if cover_path else None
 
     cmd = _build_ffmpeg_cmd(
         concat_path=concat_path,
@@ -341,6 +428,7 @@ def merge_book(
         bitrate=bitrate,
         overwrite=overwrite,
         cover_path=cover_path,
+        cover_gradient=cover_gradient,
         progress=progress_path is not None,
     )
     if progress_path is not None:
