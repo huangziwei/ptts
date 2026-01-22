@@ -786,7 +786,7 @@
         width: 120px;
         height: 160px;
         border-radius: 16px;
-        background: var(--cover-gradient-large);
+        background: var(--cover-image-bg, var(--cover-gradient-large));
         overflow: hidden;
         box-shadow: var(--shadow);
       }
@@ -794,7 +794,7 @@
       .cover-large img {
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
       }
 
       .book-title {
@@ -2295,6 +2295,82 @@
         return renderFallbackCover(book, size);
       }
 
+      function clampColor(value) {
+        return Math.max(0, Math.min(255, Math.round(value)));
+      }
+
+      function mixColor(base, target, amount) {
+        return {
+          r: base.r + (target.r - base.r) * amount,
+          g: base.g + (target.g - base.g) * amount,
+          b: base.b + (target.b - base.b) * amount,
+        };
+      }
+
+      function rgbCss(color) {
+        return `rgb(${clampColor(color.r)}, ${clampColor(color.g)}, ${clampColor(
+          color.b
+        )})`;
+      }
+
+      function computeAverageColor(img) {
+        const width = img.naturalWidth;
+        const height = img.naturalHeight;
+        if (!width || !height) {
+          return null;
+        }
+        const canvas = document.createElement("canvas");
+        const size = 24;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+          return null;
+        }
+        ctx.drawImage(img, 0, 0, size, size);
+        let data;
+        try {
+          data = ctx.getImageData(0, 0, size, size).data;
+        } catch (err) {
+          return null;
+        }
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let count = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const alpha = data[i + 3];
+          if (alpha < 8) {
+            continue;
+          }
+          r += data[i];
+          g += data[i + 1];
+          b += data[i + 2];
+          count += 1;
+        }
+        if (!count) {
+          return null;
+        }
+        return { r: r / count, g: g / count, b: b / count };
+      }
+
+      function setCoverBackgroundFromImage(container, img) {
+        if (!container || !img || !container.contains(img)) {
+          return;
+        }
+        const avg = computeAverageColor(img);
+        if (!avg) {
+          container.style.removeProperty("--cover-image-bg");
+          return;
+        }
+        const light = mixColor(avg, { r: 255, g: 255, b: 255 }, 0.22);
+        const dark = mixColor(avg, { r: 0, g: 0, b: 0 }, 0.18);
+        const gradient = `linear-gradient(160deg, ${rgbCss(light)}, ${rgbCss(
+          dark
+        )})`;
+        container.style.setProperty("--cover-image-bg", gradient);
+      }
+
       function bookSourceType(book) {
         const value = String(book && book.source_type ? book.source_type : "").toLowerCase();
         if (value === "txt") {
@@ -3013,6 +3089,7 @@
         bookMeta.textContent = "No book loaded.";
         bookStatus.textContent = "";
         coverLarge.innerHTML = "";
+        coverLarge.style.removeProperty("--cover-image-bg");
         chapterTitle.textContent = "Waiting for a book...";
         chapterText.innerHTML =
           "<p class=\"empty-state\">Pick a book on the left to start.</p>";
@@ -3243,7 +3320,20 @@
         bookStatus.textContent = state.book.has_audio
           ? "Audio manifest loaded."
           : "Waiting for audio.";
+        coverLarge.style.removeProperty("--cover-image-bg");
         coverLarge.innerHTML = renderCover(state.book, "large");
+        const coverImg = coverLarge.querySelector("img");
+        if (coverImg) {
+          if (coverImg.complete) {
+            setCoverBackgroundFromImage(coverLarge, coverImg);
+          } else {
+            coverImg.addEventListener(
+              "load",
+              () => setCoverBackgroundFromImage(coverLarge, coverImg),
+              { once: true }
+            );
+          }
+        }
       }
 
       function snippet(text, length) {
