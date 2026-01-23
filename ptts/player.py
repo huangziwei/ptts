@@ -630,7 +630,7 @@ class FfmpegJob:
 class SynthRequest(BaseModel):
     book_id: str
     voice: Optional[str] = None
-    max_chars: int = 800
+    max_chars: int = 600
     pad_ms: int = 150
     chunk_mode: str = "sentence"
     rechunk: bool = False

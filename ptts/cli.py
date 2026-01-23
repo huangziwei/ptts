@@ -467,7 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--voice-map",
         help="Path to voice map JSON for per-chapter voices",
     )
-    synth.add_argument("--max-chars", type=int, default=800)
+    synth.add_argument("--max-chars", type=int, default=600)
     synth.add_argument("--pad-ms", type=int, default=150)
     synth.add_argument(
         "--chunk-mode",
@@ -494,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--voice-map",
         help="Path to voice map JSON for per-chapter voices",
     )
-    sample.add_argument("--max-chars", type=int, default=800)
+    sample.add_argument("--max-chars", type=int, default=600)
     sample.add_argument("--pad-ms", type=int, default=150)
     sample.add_argument(
         "--chunk-mode",

@@ -736,7 +736,7 @@ def sanitize_book(
 
 def refresh_chunks(
     book_dir: Path,
-    max_chars: int = 800,
+    max_chars: int = 600,
     pad_ms: int = 150,
     chunk_mode: str = "sentence",
 ) -> bool:

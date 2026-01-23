@@ -54,6 +54,12 @@ def test_make_chunks_skips_spaced_phd_split() -> None:
     assert chunks == [text]
 
 
+def test_make_chunks_prefers_clause_punctuation_for_long_sentences() -> None:
+    text = "Alice Johnson, Bob Smith, Carol Jones, Dave Brown."
+    chunks = tts.make_chunks(text, max_chars=35)
+    assert chunks == ["Alice Johnson, Bob Smith,", "Carol Jones, Dave Brown."]
+
+
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
     chunk_dir = tmp_path / "chunks"
     chunks = ["One.", "Two."]

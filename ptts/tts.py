@@ -144,6 +144,8 @@ _INITIAL_STOPWORDS = {
     "book",
     "act",
 }
+_CLAUSE_PUNCT = {",", ";", ":"}
+_CLOSING_PUNCT = "\"')]}"+ "\u201d\u2019"
 
 
 @dataclass
@@ -296,6 +298,15 @@ def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool
     return False
 
 
+def _ends_with_clause_punct(token: str) -> bool:
+    if not token:
+        return False
+    stripped = token.rstrip(_CLOSING_PUNCT)
+    if not stripped:
+        return False
+    return stripped[-1] in _CLAUSE_PUNCT
+
+
 def split_span_by_words(
     text: str, start: int, end: int, max_chars: int
 ) -> List[Tuple[int, int]]:
@@ -304,17 +315,35 @@ def split_span_by_words(
     if not words:
         return []
     spans: List[Tuple[int, int]] = []
+    idx = 0
     chunk_start = start + words[0].start()
     chunk_end = start + words[0].end()
-    for word in words[1:]:
+    last_fit_idx = 0
+    last_punct_idx = 0 if _ends_with_clause_punct(words[0].group()) else None
+    idx = 1
+    while idx < len(words):
+        word = words[idx]
         word_start = start + word.start()
         word_end = start + word.end()
         if word_end - chunk_start > max_chars and chunk_end > chunk_start:
-            spans.append((chunk_start, chunk_end))
-            chunk_start = word_start
-            chunk_end = word_end
-        else:
-            chunk_end = word_end
+            split_idx = last_punct_idx if last_punct_idx is not None else last_fit_idx
+            split_end = start + words[split_idx].end()
+            if split_end > chunk_start:
+                spans.append((chunk_start, split_end))
+                idx = split_idx + 1
+                if idx >= len(words):
+                    return spans
+                chunk_start = start + words[idx].start()
+                chunk_end = start + words[idx].end()
+                last_fit_idx = idx
+                last_punct_idx = idx if _ends_with_clause_punct(words[idx].group()) else None
+                idx += 1
+                continue
+        chunk_end = word_end
+        last_fit_idx = idx
+        if _ends_with_clause_punct(word.group()):
+            last_punct_idx = idx
+        idx += 1
     spans.append((chunk_start, chunk_end))
     return spans
 
