@@ -166,3 +166,9 @@ def test_normalize_small_caps_preserves_acronyms() -> None:
     text = "USA TODAY REPORTS that this is fine. Today reports continue."
     expected = "USA Today reports that this is fine. Today reports continue."
     assert sanitize.normalize_small_caps(text) == expected
+
+
+def test_normalize_small_caps_preserves_short_acronyms() -> None:
+    text = "THE SQL QUERY is fast."
+    expected = "The SQL query is fast."
+    assert sanitize.normalize_small_caps(text) == expected

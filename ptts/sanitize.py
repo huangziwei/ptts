@@ -353,7 +353,9 @@ def _should_preserve_caps_word(word: str, lower: str) -> bool:
         return True
     if _ROMAN_NUMERAL_RE.fullmatch(word):
         return True
-    if len(word) <= 2:
+    if len(word) <= 3:
+        return True
+    if len(word) <= 4 and not any(ch in "aeiouy" for ch in lower):
         return True
     return False
 
