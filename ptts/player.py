@@ -325,19 +325,12 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             chunk_spans = entry.get("chunk_spans", [])
             if not isinstance(chunk_spans, list):
                 chunk_spans = []
-            clean_text = ""
-            rel_path = entry.get("path")
-            if rel_path:
-                clean_path = book_dir / rel_path
-                if clean_path.exists():
-                    clean_text = read_clean_text(clean_path)
             chapters.append(
                 {
                     "id": entry.get("id") or "",
                     "title": entry.get("title") or entry.get("id") or "Chapter",
                     "chunk_spans": chunk_spans,
                     "chunk_count": len(chunk_spans),
-                    "clean_text": clean_text,
                 }
             )
 
@@ -741,6 +734,41 @@ def create_app(root_dir: Path) -> FastAPI:
     def get_book(book_id: str) -> JSONResponse:
         book_dir = _resolve_book_dir(root_dir, book_id)
         return _no_store(_book_details(book_dir, repo_root))
+
+    @app.get("/api/books/{book_id}/chapter-text")
+    def get_chapter_text(book_id: str, chapter_id: str) -> JSONResponse:
+        if not chapter_id:
+            raise HTTPException(status_code=400, detail="Missing chapter_id.")
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        manifest = _load_json(book_dir / "tts" / "manifest.json")
+        chapters = manifest.get("chapters") if isinstance(manifest, dict) else []
+        if not isinstance(chapters, list):
+            chapters = []
+        target = None
+        for entry in chapters:
+            if not isinstance(entry, dict):
+                continue
+            if (entry.get("id") or "") == chapter_id:
+                target = entry
+                break
+        if not target:
+            raise HTTPException(status_code=404, detail="Chapter not found.")
+        rel_path = target.get("path")
+        if not rel_path:
+            raise HTTPException(status_code=404, detail="Chapter text not found.")
+        clean_path = (book_dir / rel_path).resolve()
+        if book_dir not in clean_path.parents and clean_path != book_dir:
+            raise HTTPException(status_code=404, detail="Chapter not found.")
+        if not clean_path.exists():
+            raise HTTPException(status_code=404, detail="Chapter text not found.")
+        clean_text = read_clean_text(clean_path)
+        return _no_store(
+            {
+                "book_id": book_id,
+                "chapter_id": chapter_id,
+                "clean_text": clean_text,
+            }
+        )
 
     @app.get("/api/books/{book_id}/voices")
     def get_book_voices(book_id: str) -> JSONResponse:

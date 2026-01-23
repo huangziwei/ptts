@@ -1936,6 +1936,8 @@
         book: null,
         chapters: [],
         chapterMap: {},
+        chapterTextRequests: {},
+        chapterRenderToken: 0,
         queue: [],
         chapterOffsets: {},
         currentChapterId: null,
@@ -3063,6 +3065,8 @@
         state.book = null;
         state.chapters = [];
         state.chapterMap = {};
+        state.chapterTextRequests = {};
+        state.chapterRenderToken = 0;
         state.queue = [];
         state.chapterOffsets = {};
         state.currentChapterId = null;
@@ -3248,6 +3252,8 @@
           state.synthMode = "tts";
           mergeStatus.textContent = "";
           state.chapterMap = {};
+          state.chapterTextRequests = {};
+          state.chapterRenderToken = 0;
           state.chapters.forEach((chapter) => {
             if (chapter && chapter.id) {
               state.chapterMap[chapter.id] = chapter;
@@ -3262,6 +3268,30 @@
           }
           await loadPlayback();
           buildQueue();
+          const desiredChapter = state.chapters.length
+            ? chapterId || state.chapters[0].id
+            : null;
+          const prefetchIds = new Set();
+          if (desiredChapter) {
+            prefetchIds.add(desiredChapter);
+          }
+          const lastIndex = getLastPlayed();
+          if (lastIndex !== null) {
+            const lastChapterId = chapterIdForQueueIndex(lastIndex);
+            if (lastChapterId) {
+              prefetchIds.add(lastChapterId);
+            }
+          }
+          const furthestIndex = getFurthestPlayed();
+          if (furthestIndex !== null) {
+            const furthestChapterId = chapterIdForQueueIndex(furthestIndex);
+            if (furthestChapterId) {
+              prefetchIds.add(furthestChapterId);
+            }
+          }
+          prefetchIds.forEach((id) => {
+            void ensureChapterText(id);
+          });
           const hasSpanData = state.chapters.some(
             (chapter) => (chapter.chunk_spans || []).length > 0
           );
@@ -3273,7 +3303,7 @@
           updateDeleteButtonState();
           renderChapters();
           if (state.chapters.length) {
-            const desired = chapterId || state.chapters[0].id;
+            const desired = desiredChapter || state.chapters[0].id;
             renderChapter(desired);
             const offset = state.chapterOffsets[desired];
             let anchorIndex =
@@ -3346,6 +3376,42 @@
 
       function getChapterById(chapterId) {
         return state.chapterMap[chapterId] || null;
+      }
+
+      function chapterIdForQueueIndex(index) {
+        const item = state.queue[index];
+        return item ? item.chapterId : null;
+      }
+
+      async function ensureChapterText(chapterId) {
+        if (!state.book) {
+          return "";
+        }
+        const chapter = getChapterById(chapterId);
+        if (!chapter) {
+          return "";
+        }
+        if (chapter.clean_text) {
+          return chapter.clean_text;
+        }
+        if (!state.chapterTextRequests[chapterId]) {
+          const url = `/api/books/${encodeURIComponent(
+            state.book.id
+          )}/chapter-text?chapter_id=${encodeURIComponent(chapterId)}`;
+          state.chapterTextRequests[chapterId] = fetchJson(url)
+            .then((data) => {
+              chapter.clean_text = data.clean_text || "";
+              return chapter.clean_text;
+            })
+            .catch((err) => {
+              console.warn("Failed to load chapter text.", err);
+              return "";
+            })
+            .finally(() => {
+              delete state.chapterTextRequests[chapterId];
+            });
+        }
+        return state.chapterTextRequests[chapterId];
       }
 
       function getChapterChunkTotal(item) {
@@ -4187,15 +4253,30 @@
         });
       }
 
-      function renderChapter(chapterId) {
+      async function renderChapter(chapterId) {
         const chapter = getChapterById(chapterId);
         if (!chapter) {
           return;
         }
+        const renderToken = (state.chapterRenderToken += 1);
         state.currentChapterId = chapter.id;
         chapterTitle.textContent = chapter.title;
         chapterText.innerHTML = "";
-        const cleanText = chapter.clean_text || "";
+        renderChapters();
+        updateUrl(state.book ? state.book.id : null, chapter.id);
+
+        let cleanText = chapter.clean_text || "";
+        if (!cleanText) {
+          chapterText.innerHTML = "<p class=\"empty-state\">Loading text...</p>";
+          cleanText = await ensureChapterText(chapter.id);
+        }
+        if (
+          renderToken !== state.chapterRenderToken ||
+          state.currentChapterId !== chapter.id
+        ) {
+          return;
+        }
+
         const spans = chapter.chunk_spans || [];
         const startIndex = state.chapterOffsets[chapter.id] || 0;
         const paragraphs = splitParagraphSpans(cleanText);
@@ -4204,6 +4285,7 @@
         if (!paragraphs.length) {
           chapterText.innerHTML = "<p class=\"empty-state\">No text available.</p>";
         } else {
+          chapterText.innerHTML = "";
           paragraphs.forEach(([paraStart, paraEnd]) => {
             const p = document.createElement("p");
             let cursor = paraStart;
@@ -4238,7 +4320,6 @@
             chapterText.appendChild(p);
           });
         }
-        renderChapters();
         applyLastPlayedHighlight();
         if (state.activeQueueIndex !== null) {
           const activeItem = state.queue[state.activeQueueIndex];
@@ -4246,7 +4327,6 @@
             setActiveChunk(state.activeQueueIndex, false);
           }
         }
-        updateUrl(state.book ? state.book.id : null, chapter.id);
         updateMarks();
       }
 
