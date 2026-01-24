@@ -206,6 +206,26 @@ def _sample_chapter_info(book_dir: Path) -> tuple[str, str]:
 
     return "", ""
 
+
+def _total_chunks_from_manifest(manifest: dict) -> int:
+    if not isinstance(manifest, dict):
+        return 0
+    chapters = manifest.get("chapters", [])
+    total = 0
+    if not isinstance(chapters, list):
+        return total
+    for entry in chapters:
+        if not isinstance(entry, dict):
+            continue
+        chunks = entry.get("chunks")
+        spans = entry.get("chunk_spans")
+        if isinstance(chunks, list):
+            total += len(chunks)
+        elif isinstance(spans, list):
+            total += len(spans)
+    return total
+
+
 def _book_summary(book_dir: Path) -> dict:
     toc = _load_json(book_dir / "clean" / "toc.json")
     metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
@@ -214,7 +234,23 @@ def _book_summary(book_dir: Path) -> dict:
     cover_url = f"/audio/{book_dir.name}/{cover_path}" if cover_path else ""
     chapters = toc.get("chapters", []) if isinstance(toc, dict) else []
     source_type = _source_type_from_toc(toc) if isinstance(toc, dict) else "unknown"
-    has_audio = (book_dir / "tts" / "manifest.json").exists()
+    manifest_path = book_dir / "tts" / "manifest.json"
+    has_audio = manifest_path.exists()
+    manifest = _load_json(manifest_path)
+    total_chunks = _total_chunks_from_manifest(manifest) if has_audio else 0
+    raw_playback = _load_json(_playback_path(book_dir))
+    if not isinstance(raw_playback, dict):
+        raw_playback = {}
+    playback = _sanitize_playback(raw_playback)
+    furthest = playback.get("furthest_played")
+    if furthest is None:
+        furthest = playback.get("last_played")
+    playback_complete = (
+        has_audio
+        and total_chunks > 0
+        and isinstance(furthest, int)
+        and furthest >= total_chunks - 1
+    )
     return {
         "id": book_dir.name,
         "title": metadata.get("title") or book_dir.name,
@@ -222,6 +258,7 @@ def _book_summary(book_dir: Path) -> dict:
         "year": metadata.get("year") or "",
         "cover_url": cover_url,
         "has_audio": has_audio,
+        "playback_complete": playback_complete,
         "chapter_count": len(chapters) if isinstance(chapters, list) else 0,
         "source_type": source_type,
     }
