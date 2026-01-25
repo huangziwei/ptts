@@ -65,6 +65,7 @@ _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'\u2019\-]*")
 _ROMAN_NUMERAL_RE = re.compile(r"^[IVXLCDM]+$")
 _SMALL_CAPS_MIN_WORDS = 2
 _SMALL_CAPS_MAX_WORDS = 6
+_ALL_CAPS_HEADING_MAX_WORDS = 8
 _SMALL_CAPS_ACRONYMS = {
     "abc",
     "bbc",
@@ -437,6 +438,124 @@ def normalize_small_caps(
     return "\n\n".join(normalized)
 
 
+def _is_all_caps_block(text: str) -> bool:
+    has_letter = False
+    for ch in text:
+        if ch.islower():
+            return False
+        if ch.isupper():
+            has_letter = True
+    return has_letter
+
+
+def _normalize_all_caps_title_word(
+    word: str, case_map: Dict[str, str], is_first: bool
+) -> str:
+    lower = word.lower()
+    mapped = case_map.get(lower)
+    if mapped:
+        return _capitalize_mapped(mapped, is_first=is_first)
+    if lower in _SMALL_CAPS_STOPWORDS:
+        return _titlecase_token(word) if is_first else lower
+    if _should_preserve_caps_word(word, lower):
+        return word
+    return _titlecase_token(word)
+
+
+def _normalize_all_caps_sentence_word(
+    word: str, case_map: Dict[str, str], is_first: bool
+) -> str:
+    lower = word.lower()
+    mapped = case_map.get(lower)
+    if mapped:
+        return _capitalize_mapped(mapped, is_first=is_first)
+    if lower in _SMALL_CAPS_STOPWORDS:
+        return _titlecase_token(word) if is_first else lower
+    if _should_preserve_caps_word(word, lower):
+        return word
+    if is_first:
+        return _titlecase_token(word)
+    return lower
+
+
+def _should_titlecase_all_caps_line(
+    line: str, matches: List[re.Match]
+) -> bool:
+    if re.search(r"[.!?]", line):
+        return False
+    return len(matches) <= _ALL_CAPS_HEADING_MAX_WORDS
+
+
+def _normalize_all_caps_title_line(
+    line: str, matches: List[re.Match], case_map: Dict[str, str]
+) -> str:
+    pieces: List[str] = []
+    last = 0
+    for idx, match in enumerate(matches):
+        pieces.append(line[last:match.start()])
+        replacement = _normalize_all_caps_title_word(
+            match.group(0), case_map=case_map, is_first=idx == 0
+        )
+        pieces.append(replacement)
+        last = match.end()
+    pieces.append(line[last:])
+    return "".join(pieces)
+
+
+def _normalize_all_caps_sentence_line(
+    line: str, matches: List[re.Match], case_map: Dict[str, str]
+) -> str:
+    pieces: List[str] = []
+    last = 0
+    sentence_start = True
+    for idx, match in enumerate(matches):
+        pieces.append(line[last:match.start()])
+        replacement = _normalize_all_caps_sentence_word(
+            match.group(0), case_map=case_map, is_first=sentence_start
+        )
+        pieces.append(replacement)
+        last = match.end()
+        if idx + 1 < len(matches):
+            gap = line[last : matches[idx + 1].start()]
+            sentence_start = bool(re.search(r"[.!?]", gap))
+    pieces.append(line[last:])
+    return "".join(pieces)
+
+
+def _normalize_all_caps_line(line: str, case_map: Dict[str, str]) -> str:
+    if not _is_all_caps_block(line):
+        return line
+    matches = list(_WORD_RE.finditer(line))
+    if not matches:
+        return line
+    if _should_titlecase_all_caps_line(line, matches):
+        return _normalize_all_caps_title_line(line, matches, case_map)
+    return _normalize_all_caps_sentence_line(line, matches, case_map)
+
+
+def normalize_all_caps(
+    text: str, extra_words: Optional[Iterable[str]] = None
+) -> str:
+    if not text:
+        return text
+    case_map = _build_case_map(text, extra_words or [])
+    blocks = re.split(r"\n\s*\n", text)
+    normalized: List[str] = []
+    for block in blocks:
+        if "\n" in block:
+            lines = block.split("\n")
+            normalized_lines = [
+                _normalize_all_caps_line(line, case_map=case_map)
+                for line in lines
+            ]
+            normalized.append("\n".join(normalized_lines))
+        else:
+            normalized.append(
+                _normalize_all_caps_line(block, case_map=case_map)
+            )
+    return "\n\n".join(normalized)
+
+
 def _case_context_words(metadata: dict, chapter_title: str) -> List[str]:
     extra: List[str] = []
     title = str(metadata.get("title") or "").strip() if isinstance(metadata, dict) else ""
@@ -648,6 +767,7 @@ def sanitize_book(
         )
         case_words = _case_context_words(metadata, title)
         cleaned = normalize_small_caps(cleaned, extra_words=case_words)
+        cleaned = normalize_all_caps(cleaned, extra_words=case_words)
 
         clean_path.write_text(cleaned + "\n", encoding="utf-8")
 
@@ -976,6 +1096,7 @@ def restore_chapter(
     metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
     case_words = _case_context_words(metadata, raw_title)
     cleaned = normalize_small_caps(cleaned, extra_words=case_words)
+    cleaned = normalize_all_caps(cleaned, extra_words=case_words)
 
     clean_dir = book_dir / "clean" / "chapters"
     clean_dir.mkdir(parents=True, exist_ok=True)

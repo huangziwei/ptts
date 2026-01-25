@@ -172,3 +172,27 @@ def test_normalize_small_caps_preserves_short_acronyms() -> None:
     text = "THE SQL QUERY is fast."
     expected = "The SQL query is fast."
     assert sanitize.normalize_small_caps(text) == expected
+
+
+def test_normalize_all_caps_headings_title_case() -> None:
+    text = "THE LAST KINGDOM\n\nSome paragraph."
+    expected = "The Last Kingdom\n\nSome paragraph."
+    assert sanitize.normalize_all_caps(text) == expected
+
+
+def test_normalize_all_caps_long_block_sentence_case() -> None:
+    text = (
+        "THIS IS A LONG PARAGRAPH WITH MANY WORDS AND A SECOND SENTENCE. "
+        "HERE IS MORE TEXT TO READ."
+    )
+    expected = (
+        "This is a long paragraph with many words and a second sentence. "
+        "Here is more text to read."
+    )
+    assert sanitize.normalize_all_caps(text) == expected
+
+
+def test_normalize_all_caps_preserves_acronyms() -> None:
+    text = "NASA AND THE USA LAUNCHED A SATELLITE."
+    expected = "NASA and the USA launched a satellite."
+    assert sanitize.normalize_all_caps(text) == expected
