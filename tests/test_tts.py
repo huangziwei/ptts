@@ -16,6 +16,15 @@ def test_prepare_tts_text_normalizes_abbreviations() -> None:
     assert tts.prepare_tts_text("Mr. Poe went home.") == "Mr Poe went home."
 
 
+def test_prepare_tts_text_normalizes_roman_heading() -> None:
+    assert tts.prepare_tts_text("Chapter I") == "Chapter one."
+    assert tts.prepare_tts_text("Part IV.") == "Part four."
+
+
+def test_prepare_tts_text_normalizes_roman_title() -> None:
+    assert tts.prepare_tts_text("I") == "one."
+
+
 def test_make_chunks_keeps_name_initials_together() -> None:
     text = (
         "We are grateful to Irwin Z. Hoffman for his help."

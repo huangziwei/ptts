@@ -146,6 +146,50 @@ _INITIAL_STOPWORDS = {
 }
 _CLAUSE_PUNCT = {",", ";", ":"}
 _CLOSING_PUNCT = "\"')]}"+ "\u201d\u2019"
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+_ROMAN_CANONICAL_RE = re.compile(
+    r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$"
+)
+_ROMAN_HEADING_RE = re.compile(
+    r"\b(?P<label>(?:chapter|book|part|volume|vol|section|act|appendix)\.?)"
+    r"\s+(?P<num>[IVXLCDM]+)\b",
+    re.IGNORECASE,
+)
+_ROMAN_STANDALONE_RE = re.compile(r"^(?P<num>[IVXLCDM]+)(?P<trail>[^A-Za-z0-9]*)$", re.IGNORECASE)
+_WORD_ONES = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+)
+_WORD_TENS = (
+    "",
+    "",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+)
 
 
 @dataclass
@@ -401,8 +445,65 @@ def normalize_abbreviations(text: str) -> str:
     return _ABBREV_DOT_RE.sub(r"\1", text)
 
 
+def _roman_to_int(value: str) -> Optional[int]:
+    roman = value.upper()
+    if not roman or not _ROMAN_CANONICAL_RE.fullmatch(roman):
+        return None
+    total = 0
+    prev = 0
+    for ch in reversed(roman):
+        number = _ROMAN_VALUES.get(ch)
+        if number is None:
+            return None
+        if number < prev:
+            total -= number
+        else:
+            total += number
+            prev = number
+    return total or None
+
+
+def _int_to_words(value: int) -> str:
+    if value < 20:
+        return _WORD_ONES[value]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        if ones == 0:
+            return _WORD_TENS[tens]
+        return f"{_WORD_TENS[tens]} {_WORD_ONES[ones]}"
+    if value < 1000:
+        hundreds, rest = divmod(value, 100)
+        if rest == 0:
+            return f"{_WORD_ONES[hundreds]} hundred"
+        return f"{_WORD_ONES[hundreds]} hundred {_int_to_words(rest)}"
+    thousands, rest = divmod(value, 1000)
+    if rest == 0:
+        return f"{_WORD_ONES[thousands]} thousand"
+    return f"{_WORD_ONES[thousands]} thousand {_int_to_words(rest)}"
+
+
+def _normalize_roman_numerals(text: str) -> str:
+    def replace_heading(match: re.Match[str]) -> str:
+        number = _roman_to_int(match.group("num"))
+        if number is None:
+            return match.group(0)
+        return f"{match.group('label')} {_int_to_words(number)}"
+
+    text = _ROMAN_HEADING_RE.sub(replace_heading, text)
+    stripped = text.strip()
+    match = _ROMAN_STANDALONE_RE.fullmatch(stripped)
+    if not match:
+        return text
+    number = _roman_to_int(match.group("num"))
+    if number is None:
+        return text
+    suffix = match.group("trail") or ""
+    return f"{_int_to_words(number)}{suffix}"
+
+
 def prepare_tts_text(text: str) -> str:
     text = normalize_abbreviations(text)
+    text = _normalize_roman_numerals(text)
     text = re.sub(r"\s+", " ", text).strip()
     if text and text[-1] not in ".!?":
         text += "."
