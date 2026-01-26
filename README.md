@@ -31,9 +31,20 @@ PMX_OPTS="-p 1912:1912" ./bin/pmx uv sync
 
 ## TTS a book
 
-End-to-end workflow with podman:
+### via the local web app
 
-### 1) Ingest EPUB or TXT into raw chapters
+```bash
+./bin/pmx uv run ptts play \
+  --root out \
+  --host 0.0.0.0 \
+  --port 1912
+```
+
+Open `http://localhost:1912`.
+
+### via CLI
+
+#### 1) Ingest EPUB or TXT into raw chapters
 ```bash
 ./bin/pmx uv run ptts ingest \
   --input books/Some-Book.epub \
@@ -47,14 +58,14 @@ Plain text input works the same way:
   --out out/some-book
 ```
 
-### 2) Sanitize (clean) chapters
+#### 2) Sanitize (clean) chapters
 ```bash
 ./bin/pmx uv run ptts sanitize \
   --book out/some-book \
   --overwrite
 ```
 
-### 3) Synthesize audio (TTS)
+#### 3) Synthesize audio (TTS)
 ```bash
 ./bin/pmx uv run --with pocket-tts ptts synth \
   --book out/some-book \
@@ -69,7 +80,7 @@ explicitly (or use a cloned wav), pass `--voice`:
 ./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --voice voices/ray.wav
 ```
 
-### 4) Merge to M4B
+#### 4) Merge to M4B
 ```bash
 ./bin/pmx uv run ptts merge \
   --book out/some-book \
@@ -81,16 +92,3 @@ explicitly (or use a cloned wav), pass `--voice`:
 ```bash
 ./bin/pmx bash -lc 'apt-get update && apt-get install -y ffmpeg && uv run ptts merge --book out/some-book --output out/some-book/some-book.m4b'
 ```
-
-### 5) Play in the web player
-
-**Everything above can be done within the local Player web app**.
-
-```bash
-./bin/pmx uv run ptts play \
-  --root out \
-  --host 0.0.0.0 \
-  --port 1912
-```
-
-Open `http://localhost:1912` to browse books, use the “Edit” panel to adjust sanitize rules, re-sanitize chapters (this clears TTS cache), start/stop TTS, and play audio.
