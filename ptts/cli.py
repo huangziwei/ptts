@@ -321,7 +321,6 @@ def _sanitize(args: argparse.Namespace) -> int:
             book_dir=book_dir,
             rules_path=rules_path,
             overwrite=args.overwrite,
-            base_dir=Path.cwd(),
         )
         tts_cleared = sanitize_util.refresh_chunks(book_dir=book_dir)
     except Exception as exc:
@@ -440,7 +439,10 @@ def build_parser() -> argparse.ArgumentParser:
     sanitize.add_argument("--book", required=True, help="Book output directory")
     sanitize.add_argument(
         "--rules",
-        help="Path to JSON rules file (defaults to .codex/ptts-rules.json if present)",
+        help=(
+            "Path to JSON rules file (defaults to sanitize-rules.json in the book "
+            "directory if present, otherwise ptts/templates/sanitize-rules.json)"
+        ),
     )
     sanitize.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing cleaned output"

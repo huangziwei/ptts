@@ -47,30 +47,41 @@ def _find_repo_root(start: Path) -> Path:
     return start
 
 
-def _rules_path(base_dir: Path) -> Path:
-    return base_dir / ".codex" / "ptts-rules.json"
+def _template_rules_path() -> Path:
+    return sanitize.template_rules_path()
 
 
-def _load_rules_payload(base_dir: Path) -> dict:
-    rules_path = _rules_path(base_dir)
-    if not rules_path.exists():
-        return {
-            "replace_defaults": False,
-            "drop_chapter_title_patterns": [],
-            "section_cutoff_patterns": [],
-            "remove_patterns": [],
-            "paragraph_breaks": "double",
-        }
-    data = json.loads(rules_path.read_text(encoding="utf-8"))
-    data.setdefault("replace_defaults", False)
-    data.setdefault("drop_chapter_title_patterns", [])
-    data.setdefault("section_cutoff_patterns", [])
-    data.setdefault("remove_patterns", [])
-    data.setdefault("paragraph_breaks", "double")
-    return data
+def _book_rules_path(book_dir: Path) -> Path:
+    return sanitize.book_rules_path(book_dir)
 
 
-def _write_rules_payload(base_dir: Path, payload: dict) -> None:
+def _select_rules_path(book_dir: Path) -> Optional[Path]:
+    book_rules = _book_rules_path(book_dir)
+    if book_rules.exists():
+        return book_rules
+    template_rules = _template_rules_path()
+    if template_rules.exists():
+        return template_rules
+    return None
+
+
+def _rules_payload_from_ruleset(rules: sanitize.Ruleset) -> dict:
+    return {
+        "replace_defaults": rules.replace_defaults,
+        "drop_chapter_title_patterns": list(rules.drop_chapter_title_patterns),
+        "section_cutoff_patterns": list(rules.section_cutoff_patterns),
+        "remove_patterns": list(rules.remove_patterns),
+        "paragraph_breaks": rules.paragraph_breaks,
+    }
+
+
+def _effective_rules_payload(book_dir: Path) -> dict:
+    rules_path = _select_rules_path(book_dir)
+    rules = sanitize.load_rules(rules_path)
+    return _rules_payload_from_ruleset(rules)
+
+
+def _write_rules_payload(rules_path: Path, payload: dict) -> None:
     paragraph_breaks = str(payload.get("paragraph_breaks", "double") or "double").strip().lower()
     if paragraph_breaks not in sanitize.PARAGRAPH_BREAK_OPTIONS:
         paragraph_breaks = "double"
@@ -86,7 +97,6 @@ def _write_rules_payload(base_dir: Path, payload: dict) -> None:
     if not data["replace_defaults"]:
         for key, defaults in sanitize.DEFAULT_RULES.items():
             data[key] = [entry for entry in data[key] if entry not in defaults]
-    rules_path = _rules_path(base_dir)
     rules_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(rules_path, data)
 
@@ -681,6 +691,7 @@ class ClearRequest(BaseModel):
 
 
 class RulesPayload(BaseModel):
+    book_id: Optional[str] = None
     drop_chapter_title_patterns: List[str] = []
     section_cutoff_patterns: List[str] = []
     remove_patterns: List[str] = []
@@ -1085,7 +1096,8 @@ def create_app(root_dir: Path) -> FastAPI:
         report = _load_json(book_dir / "clean" / "report.json")
         if not clean_toc:
             raise HTTPException(status_code=404, detail="Missing clean/toc.json.")
-        rules = sanitize.load_rules(None, repo_root)
+        rules_path = _select_rules_path(book_dir)
+        rules = sanitize.load_rules(rules_path)
         selected = _pick_preview_chapter(clean_toc, chapter)
 
         clean_path = None
@@ -1117,18 +1129,24 @@ def create_app(root_dir: Path) -> FastAPI:
             "clean_text": clean_text,
             "dropped": dropped,
             "rules": {
-            "replace_defaults": rules.replace_defaults,
-            "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
-            "section_cutoff_patterns": rules.section_cutoff_patterns,
-            "remove_patterns": rules.remove_patterns,
-            "paragraph_breaks": rules.paragraph_breaks,
-        },
-    }
+                "replace_defaults": rules.replace_defaults,
+                "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
+                "section_cutoff_patterns": rules.section_cutoff_patterns,
+                "remove_patterns": rules.remove_patterns,
+                "paragraph_breaks": rules.paragraph_breaks,
+            },
+        }
         return _no_store(payload)
 
     @app.post("/api/sanitize/rules")
     def sanitize_rules(payload: RulesPayload) -> JSONResponse:
-        _write_rules_payload(repo_root, payload.dict())
+        data = payload.dict()
+        book_id = data.pop("book_id", None)
+        if book_id:
+            book_dir = _resolve_book_dir(root_dir, book_id)
+            _write_rules_payload(_book_rules_path(book_dir), data)
+        else:
+            _write_rules_payload(_template_rules_path(), data)
         return _no_store(payload.dict())
 
     @app.post("/api/sanitize/drop")
@@ -1140,13 +1158,13 @@ def create_app(root_dir: Path) -> FastAPI:
         merge_job = merge_jobs.get(payload.book_id)
         if merge_job and merge_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="Stop merge before editing.")
-        rules = _load_rules_payload(repo_root)
+        rules = _effective_rules_payload(book_dir)
         pattern = f"^{re.escape(payload.title)}$"
         patterns = list(rules.get("drop_chapter_title_patterns", []))
         if pattern not in patterns:
             patterns.append(pattern)
         rules["drop_chapter_title_patterns"] = patterns
-        _write_rules_payload(repo_root, rules)
+        _write_rules_payload(_book_rules_path(book_dir), rules)
         try:
             dropped = sanitize.drop_chapter(
                 book_dir=book_dir,
@@ -1166,19 +1184,20 @@ def create_app(root_dir: Path) -> FastAPI:
         merge_job = merge_jobs.get(payload.book_id)
         if merge_job and merge_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="Stop merge before editing.")
-        rules = _load_rules_payload(repo_root)
+        rules = _effective_rules_payload(book_dir)
         pattern = f"^{re.escape(payload.title)}$"
         patterns = list(rules.get("drop_chapter_title_patterns", []))
         if pattern in patterns:
             patterns = [p for p in patterns if p != pattern]
         rules["drop_chapter_title_patterns"] = patterns
-        _write_rules_payload(repo_root, rules)
+        _write_rules_payload(_book_rules_path(book_dir), rules)
         try:
+            rules_path = _select_rules_path(book_dir)
             restored = sanitize.restore_chapter(
                 book_dir=book_dir,
                 title=payload.title,
                 chapter_index=payload.chapter_index,
-                base_dir=repo_root,
+                rules_path=rules_path,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1194,7 +1213,12 @@ def create_app(root_dir: Path) -> FastAPI:
         if merge_job and merge_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="Stop merge before sanitizing.")
         try:
-            sanitize.sanitize_book(book_dir=book_dir, overwrite=True, base_dir=repo_root)
+            rules_path = _select_rules_path(book_dir)
+            sanitize.sanitize_book(
+                book_dir=book_dir,
+                rules_path=rules_path,
+                overwrite=True,
+            )
             tts_cleared = sanitize.refresh_chunks(book_dir=book_dir)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -20,6 +20,7 @@ RULE_KEYS = (
 )
 PARAGRAPH_BREAK_OPTIONS = ("double", "single")
 DEFAULT_PARAGRAPH_BREAKS = "double"
+RULES_FILENAME = "sanitize-rules.json"
 
 DEFAULT_RULES: Dict[str, List[str]] = {
     "drop_chapter_title_patterns": [
@@ -60,6 +61,14 @@ DEFAULT_RULES: Dict[str, List[str]] = {
         r"(?<=\w)\((\d+)\)",
     ],
 }
+
+
+def template_rules_path() -> Path:
+    return Path(__file__).parent / "templates" / RULES_FILENAME
+
+
+def book_rules_path(book_dir: Path) -> Path:
+    return book_dir / RULES_FILENAME
 
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'\u2019\-]*")
 _ROMAN_NUMERAL_RE = re.compile(r"^[IVXLCDM]+$")
@@ -188,7 +197,7 @@ class ChapterResult:
 
 
 def load_rules(
-    rules_path: Optional[Path], base_dir: Path
+    rules_path: Optional[Path] = None,
 ) -> Ruleset:
     rules = deepcopy(DEFAULT_RULES)
     source_path = None
@@ -196,7 +205,7 @@ def load_rules(
     paragraph_breaks = DEFAULT_PARAGRAPH_BREAKS
 
     if rules_path is None:
-        candidate = base_dir / ".codex" / "ptts-rules.json"
+        candidate = template_rules_path()
         if candidate.exists():
             rules_path = candidate
 
@@ -649,7 +658,6 @@ def sanitize_book(
     book_dir: Path,
     rules_path: Optional[Path] = None,
     overwrite: bool = False,
-    base_dir: Optional[Path] = None,
 ) -> int:
     toc_path = book_dir / "toc.json"
     raw_dir = book_dir / "raw" / "chapters"
@@ -671,9 +679,11 @@ def sanitize_book(
             for path in existing:
                 path.unlink()
 
-    if base_dir is None:
-        base_dir = Path.cwd()
-    rules = load_rules(rules_path, base_dir)
+    if rules_path is None:
+        candidate = book_rules_path(book_dir)
+        if candidate.exists():
+            rules_path = candidate
+    rules = load_rules(rules_path)
     drop_patterns = compile_patterns(rules.drop_chapter_title_patterns)
     cutoff_patterns = compile_patterns(rules.section_cutoff_patterns)
     remove_patterns = compile_patterns(rules.remove_patterns)
@@ -1037,7 +1047,7 @@ def restore_chapter(
     book_dir: Path,
     title: str,
     chapter_index: Optional[int] = None,
-    base_dir: Optional[Path] = None,
+    rules_path: Optional[Path] = None,
 ) -> bool:
     toc_path = book_dir / "toc.json"
     if not toc_path.exists():
@@ -1068,9 +1078,11 @@ def restore_chapter(
     if not raw_path.exists():
         raise FileNotFoundError(f"Missing raw chapter at {raw_path}")
 
-    if base_dir is None:
-        base_dir = Path.cwd()
-    rules = load_rules(None, base_dir)
+    if rules_path is None:
+        candidate = book_rules_path(book_dir)
+        if candidate.exists():
+            rules_path = candidate
+    rules = load_rules(rules_path)
     drop_patterns = compile_patterns(rules.drop_chapter_title_patterns)
     cutoff_patterns = compile_patterns(rules.section_cutoff_patterns)
     remove_patterns = compile_patterns(rules.remove_patterns)
