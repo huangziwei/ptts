@@ -81,7 +81,7 @@ def test_sanitize_book_adds_title_chapter(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    written = sanitize.sanitize_book(book_dir, overwrite=True, base_dir=book_dir)
+    written = sanitize.sanitize_book(book_dir, overwrite=True)
     clean_dir = book_dir / "clean" / "chapters"
     title_path = clean_dir / "0000-title.txt"
 
@@ -133,7 +133,7 @@ def test_sanitize_book_skips_title_for_txt(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    written = sanitize.sanitize_book(book_dir, overwrite=True, base_dir=book_dir)
+    written = sanitize.sanitize_book(book_dir, overwrite=True)
     clean_dir = book_dir / "clean" / "chapters"
 
     assert written == 2

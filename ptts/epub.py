@@ -391,6 +391,14 @@ def _chapters_from_toc_entries(
     spine_index = {href: idx for idx, (href, _item) in enumerate(spine_items)}
     chapters: List[Chapter] = []
     seen: set[str] = set()
+    split_series_counts: dict[tuple[str, str], int] = {}
+    for entry in entries:
+        base_href = normalize_href(entry.href)
+        if not base_href:
+            continue
+        key = _split_series_key(base_href)
+        if key:
+            split_series_counts[key] = split_series_counts.get(key, 0) + 1
 
     for entry in entries:
         base_href = normalize_href(entry.href)
@@ -407,7 +415,11 @@ def _chapters_from_toc_entries(
                 if start_idx > 0
                 else None
             )
-            if key and key != prev_key:
+            if (
+                key
+                and key != prev_key
+                and split_series_counts.get(key, 0) == 1
+            ):
                 idx = start_idx
                 while idx < len(spine_items):
                     href, item = spine_items[idx]
