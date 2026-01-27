@@ -619,6 +619,8 @@ def normalize_text(
     else:
         text = re.sub(r"[ \t]{2,}", " ", text)
 
+    text = re.sub(r"\.[ \t]*\.[ \t]*\.", "...", text)
+
     if paragraph_breaks == "single":
         text = re.sub(r"(?<!\n)\n(?!\n)", "\n\n", text)
 

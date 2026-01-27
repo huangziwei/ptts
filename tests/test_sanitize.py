@@ -33,6 +33,18 @@ def test_normalize_text_preserves_attribution_lines() -> None:
     )
 
 
+def test_normalize_text_collapses_ellipsis_spacing() -> None:
+    text = (
+        '"I wasn\'t criticizing, I just . . ." Her voice trailed off. '
+        'He waited. "Guthrie? I\'m not interrupting anything?"'
+    )
+    assert (
+        sanitize.normalize_text(text)
+        == '"I wasn\'t criticizing, I just ..." Her voice trailed off. '
+        'He waited. "Guthrie? I\'m not interrupting anything?"'
+    )
+
+
 def test_apply_remove_patterns_citation() -> None:
     text = "Some text (Smith, 2010, p. 5) continues."
     patterns = sanitize.compile_patterns(sanitize.DEFAULT_RULES["remove_patterns"])
