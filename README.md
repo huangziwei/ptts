@@ -69,7 +69,7 @@ Plain text input works the same way:
 ```bash
 ./bin/pmx uv run --with pocket-tts ptts synth \
   --book out/some-book \
-  --max-chars 800 \
+  --max-chars 400 \
   --pad-ms 150
 ```
 
