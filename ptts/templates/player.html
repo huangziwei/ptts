@@ -4441,6 +4441,8 @@
         if (enabled) {
           const text = editClean.textContent || "";
           editCleanInput.value = text;
+          editCleanInput.scrollTop = 0;
+          editCleanInput.setSelectionRange(0, 0);
           state.cleanEditOriginal = text;
           state.cleanEditChapter = state.previewChapterIndex;
           editStatus.textContent = "Editing clean text...";
