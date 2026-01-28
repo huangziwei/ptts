@@ -186,6 +186,19 @@ def _source_type_from_toc(toc: dict) -> str:
     return "unknown"
 
 
+def _source_origin_from_metadata(metadata: dict) -> str:
+    if not isinstance(metadata, dict):
+        return "books"
+    authors = metadata.get("authors") or []
+    if isinstance(authors, str):
+        authors = [authors]
+    if isinstance(authors, list):
+        for author in authors:
+            if str(author or "").strip().lower() == "tsundoku":
+                return "tsundoku"
+    return "books"
+
+
 def _resolve_book_dir(root_dir: Path, book_id: str) -> Path:
     candidate = (root_dir / book_id).resolve()
     if root_dir not in candidate.parents and candidate != root_dir:
@@ -244,6 +257,7 @@ def _book_summary(book_dir: Path) -> dict:
     cover_url = f"/audio/{book_dir.name}/{cover_path}" if cover_path else ""
     chapters = toc.get("chapters", []) if isinstance(toc, dict) else []
     source_type = _source_type_from_toc(toc) if isinstance(toc, dict) else "unknown"
+    source_origin = _source_origin_from_metadata(metadata)
     manifest_path = book_dir / "tts" / "manifest.json"
     has_audio = manifest_path.exists()
     manifest = _load_json(manifest_path)
@@ -271,6 +285,7 @@ def _book_summary(book_dir: Path) -> dict:
         "playback_complete": playback_complete,
         "chapter_count": len(chapters) if isinstance(chapters, list) else 0,
         "source_type": source_type,
+        "source_origin": source_origin,
     }
 
 
@@ -357,6 +372,7 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
     cover_path = cover.get("path") or ""
     cover_url = f"/audio/{book_dir.name}/{cover_path}" if cover_path else ""
     source_type = _source_type_from_toc(toc) if isinstance(toc, dict) else "unknown"
+    source_origin = _source_origin_from_metadata(metadata)
 
     manifest = _load_json(book_dir / "tts" / "manifest.json")
     chapters: List[dict] = []
@@ -392,6 +408,7 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             "pad_ms": pad_ms,
             "last_voice": last_voice,
             "source_type": source_type,
+            "source_origin": source_origin,
         },
         "chapters": chapters,
         "audio_base": f"/audio/{book_dir.name}/tts/segments",

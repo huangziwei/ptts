@@ -336,6 +336,10 @@
         background: var(--surface-2);
       }
 
+      .library-shelf-tabs {
+        margin-bottom: 8px;
+      }
+
       .library-tab {
         border: none;
         background: transparent;
@@ -1706,7 +1710,11 @@
           <input type="file" id="uploadInput" accept=".epub,.txt" hidden />
           <div class="upload-status" id="uploadStatus"></div>
         </div>
-        <div class="library-tabs" role="tablist" aria-label="Bookshelf filters" hidden>
+        <div class="library-tabs library-shelf-tabs" role="tablist" aria-label="Bookshelf sections" hidden>
+          <button class="library-tab active" data-shelf="books" data-label="Books" type="button" role="tab" aria-selected="true">Books</button>
+          <button class="library-tab" data-shelf="tsundoku" data-label="Tsundoku" type="button" role="tab" aria-selected="false">Tsundoku</button>
+        </div>
+        <div class="library-tabs library-type-tabs" role="tablist" aria-label="Bookshelf formats" hidden>
           <button class="library-tab active" data-filter="epub" data-label="EPUB" type="button" role="tab" aria-selected="true">EPUB</button>
           <button class="library-tab" data-filter="txt" data-label="TXT" type="button" role="tab" aria-selected="false">TXT</button>
         </div>
@@ -1965,6 +1973,7 @@
     <script>
       const state = {
         books: [],
+        libraryShelf: "books",
         bookFilter: "epub",
         book: null,
         chapters: [],
@@ -2030,8 +2039,14 @@
       const uploadZone = document.getElementById("uploadZone");
       const uploadInput = document.getElementById("uploadInput");
       const uploadStatus = document.getElementById("uploadStatus");
-      const libraryTabs = document.querySelectorAll(".library-tab");
-      const libraryTabsWrap = document.querySelector(".library-tabs");
+      const libraryShelfTabs = document.querySelectorAll(
+        ".library-shelf-tabs .library-tab"
+      );
+      const libraryShelfTabsWrap = document.querySelector(".library-shelf-tabs");
+      const libraryTypeTabs = document.querySelectorAll(
+        ".library-type-tabs .library-tab"
+      );
+      const libraryTypeTabsWrap = document.querySelector(".library-type-tabs");
       const chapterList = document.getElementById("chapterList");
       const chapterTitle = document.getElementById("chapterTitle");
       const chapterText = document.getElementById("chapterText");
@@ -2128,6 +2143,10 @@
 
       function normalizeBookFilter(value) {
         return value === "txt" ? "txt" : "epub";
+      }
+
+      function normalizeShelf(value) {
+        return value === "tsundoku" ? "tsundoku" : "books";
       }
 
       function escapeHtml(value) {
@@ -2417,24 +2436,85 @@
       function countBookSources() {
         const counts = { epub: 0, txt: 0 };
         state.books.forEach((book) => {
+          if (bookOriginType(book) !== "books") {
+            return;
+          }
           const kind = bookSourceType(book);
           counts[kind] += 1;
         });
         return counts;
       }
 
+      function bookOriginType(book) {
+        const explicit = String(
+          book && book.source_origin ? book.source_origin : ""
+        ).toLowerCase();
+        if (explicit === "tsundoku") {
+          return "tsundoku";
+        }
+        const authors = book && book.authors;
+        if (Array.isArray(authors)) {
+          for (const author of authors) {
+            if (String(author || "").trim().toLowerCase() === "tsundoku") {
+              return "tsundoku";
+            }
+          }
+        } else if (typeof authors === "string") {
+          if (authors.trim().toLowerCase() === "tsundoku") {
+            return "tsundoku";
+          }
+        }
+        return "books";
+      }
+
+      function countBookOrigins() {
+        const counts = { books: 0, tsundoku: 0 };
+        state.books.forEach((book) => {
+          const shelf = bookOriginType(book);
+          counts[shelf] += 1;
+        });
+        return counts;
+      }
+
+      function updateShelfTabs() {
+        if (!libraryShelfTabsWrap || !libraryShelfTabs.length) {
+          return;
+        }
+        const counts = countBookOrigins();
+        const showTabs = counts.books > 0 && counts.tsundoku > 0;
+        libraryShelfTabsWrap.hidden = !showTabs;
+        libraryShelfTabsWrap.style.display = showTabs ? "" : "none";
+        if (!showTabs) {
+          return;
+        }
+        libraryShelfTabs.forEach((tab) => {
+          const shelf = normalizeShelf(tab.dataset.shelf);
+          const baseLabel = tab.dataset.label || tab.textContent.trim();
+          const count = shelf === "tsundoku" ? counts.tsundoku : counts.books;
+          tab.textContent = `${baseLabel} (${count})`;
+          const active = state.libraryShelf === shelf;
+          tab.classList.toggle("active", active);
+          tab.setAttribute("aria-selected", active ? "true" : "false");
+        });
+      }
+
       function updateBookTabs() {
-        if (!libraryTabsWrap || !libraryTabs.length) {
+        if (!libraryTypeTabsWrap || !libraryTypeTabs.length) {
+          return;
+        }
+        if (normalizeShelf(state.libraryShelf) !== "books") {
+          libraryTypeTabsWrap.hidden = true;
+          libraryTypeTabsWrap.style.display = "none";
           return;
         }
         const counts = countBookSources();
         const showTabs = counts.epub > 0 && counts.txt > 0;
-        libraryTabsWrap.hidden = !showTabs;
-        libraryTabsWrap.style.display = showTabs ? "" : "none";
+        libraryTypeTabsWrap.hidden = !showTabs;
+        libraryTypeTabsWrap.style.display = showTabs ? "" : "none";
         if (!showTabs) {
           return;
         }
-        libraryTabs.forEach((tab) => {
+        libraryTypeTabs.forEach((tab) => {
           const filter = normalizeBookFilter(tab.dataset.filter);
           const baseLabel = tab.dataset.label || tab.textContent.trim();
           const count = filter === "txt" ? counts.txt : counts.epub;
@@ -2450,6 +2530,15 @@
         state.bookFilter = normalized;
         if (persist) {
           localStorage.setItem("ptts.bookFilter", normalized);
+        }
+        renderBooks();
+      }
+
+      function setShelfFilter(shelf, persist = true) {
+        const normalized = normalizeShelf(shelf);
+        state.libraryShelf = normalized;
+        if (persist) {
+          localStorage.setItem("ptts.libraryShelf", normalized);
         }
         renderBooks();
       }
@@ -3195,6 +3284,9 @@
       function loadSettings() {
         state.voicePreference = localStorage.getItem("ptts.voice");
         state.advancedMode = localStorage.getItem("ptts.advancedMode") === "1";
+        state.libraryShelf = normalizeShelf(
+          localStorage.getItem("ptts.libraryShelf")
+        );
         state.bookFilter = normalizeBookFilter(
           localStorage.getItem("ptts.bookFilter")
         );
@@ -3220,20 +3312,39 @@
       }
 
       function filterBooksForShelf() {
+        const shelf = normalizeShelf(state.libraryShelf);
+        if (shelf === "tsundoku") {
+          return state.books.filter((book) => bookOriginType(book) === "tsundoku");
+        }
         const filter = normalizeBookFilter(state.bookFilter);
         if (filter === "txt") {
-          return state.books.filter((book) => bookSourceType(book) === "txt");
+          return state.books.filter(
+            (book) =>
+              bookOriginType(book) === "books" && bookSourceType(book) === "txt"
+          );
         }
-        return state.books.filter((book) => bookSourceType(book) !== "txt");
+        return state.books.filter(
+          (book) =>
+            bookOriginType(book) === "books" && bookSourceType(book) !== "txt"
+        );
       }
 
       function renderBooks() {
         bookList.innerHTML = "";
-        const counts = countBookSources();
-        if (counts.epub > 0 && counts.txt === 0) {
-          state.bookFilter = "epub";
-        } else if (counts.txt > 0 && counts.epub === 0) {
-          state.bookFilter = "txt";
+        const originCounts = countBookOrigins();
+        if (originCounts.books === 0 && originCounts.tsundoku > 0) {
+          state.libraryShelf = "tsundoku";
+        } else if (originCounts.tsundoku === 0 && originCounts.books > 0) {
+          state.libraryShelf = "books";
+        }
+        updateShelfTabs();
+        if (normalizeShelf(state.libraryShelf) === "books") {
+          const counts = countBookSources();
+          if (counts.epub > 0 && counts.txt === 0) {
+            state.bookFilter = "epub";
+          } else if (counts.txt > 0 && counts.epub === 0) {
+            state.bookFilter = "txt";
+          }
         }
         updateBookTabs();
         if (!state.books.length) {
@@ -3242,8 +3353,13 @@
         }
         const visible = filterBooksForShelf();
         if (!visible.length) {
-          const label = state.bookFilter === "txt" ? "TXT" : "EPUB";
-          bookList.innerHTML = `<p class="empty-state">No ${label} books found.</p>`;
+          if (normalizeShelf(state.libraryShelf) === "tsundoku") {
+            bookList.innerHTML =
+              "<p class=\"empty-state\">No Tsundoku items found.</p>";
+          } else {
+            const label = state.bookFilter === "txt" ? "TXT" : "EPUB";
+            bookList.innerHTML = `<p class="empty-state">No ${label} books found.</p>`;
+          }
           return;
         }
         visible.forEach((book) => {
@@ -5208,13 +5324,22 @@
         setSpeedRate(next);
       });
       jumpShelf.addEventListener("click", scrollToBookSection);
-      libraryTabs.forEach((tab) => {
+      libraryTypeTabs.forEach((tab) => {
         tab.addEventListener("click", () => {
           const filter = tab.dataset.filter || "epub";
           if (normalizeBookFilter(filter) === state.bookFilter) {
             return;
           }
           setBookFilter(filter);
+        });
+      });
+      libraryShelfTabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const shelf = tab.dataset.shelf || "books";
+          if (normalizeShelf(shelf) === state.libraryShelf) {
+            return;
+          }
+          setShelfFilter(shelf);
         });
       });
 
