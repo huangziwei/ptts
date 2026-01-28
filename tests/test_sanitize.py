@@ -52,6 +52,23 @@ def test_apply_remove_patterns_citation() -> None:
     assert "(Smith, 2010, p. 5)" not in cleaned
 
 
+def test_apply_remove_patterns_extended_citations() -> None:
+    patterns = sanitize.compile_patterns(sanitize.DEFAULT_RULES["remove_patterns"])
+    samples = [
+        "Author (1966)",
+        "(1951a:395)",
+        "(Albert 1956, 1968, Kluckhohn 1951a, 1961)",
+        "(cf. Kapferer 1976)",
+        "[Polanyi, Arensberg and Pearson 1957]",
+        "(1925 [1965:67])",
+        "(ibid:156)",
+    ]
+    for snippet in samples:
+        text = f"Some text {snippet} continues."
+        cleaned, _stats = sanitize.apply_remove_patterns(text, patterns)
+        assert snippet not in cleaned
+
+
 def test_sanitize_book_adds_title_chapter(tmp_path: Path) -> None:
     book_dir = tmp_path / "book"
     raw_dir = book_dir / "raw" / "chapters"
