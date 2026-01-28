@@ -3375,7 +3375,18 @@
           if (book.playback_complete) {
             card.classList.add("finished");
           }
-          const statusText = book.has_audio ? "Audio ready" : "No audio yet";
+          const audioTotal = Number(book.audio_total || 0);
+          const audioDone = Number(book.audio_done || 0);
+          let statusText = "No audio yet";
+          if (book.has_audio) {
+            if (audioTotal && audioDone >= audioTotal) {
+              statusText = "Audio complete";
+            } else if (audioTotal && audioDone > 0) {
+              statusText = `Audio ${audioDone}/${audioTotal}`;
+            } else {
+              statusText = "Audio preparing";
+            }
+          }
           const finishedBadge = book.playback_complete
             ? "<span class=\"book-tag finished\">Finished</span>"
             : "";

@@ -261,6 +261,7 @@ def _book_summary(book_dir: Path) -> dict:
     manifest_path = book_dir / "tts" / "manifest.json"
     has_audio = manifest_path.exists()
     manifest = _load_json(manifest_path)
+    audio_total, audio_done = _audio_progress_summary(book_dir, manifest)
     total_chunks = _total_chunks_from_manifest(manifest) if has_audio else 0
     raw_playback = _load_json(_playback_path(book_dir))
     if not isinstance(raw_playback, dict):
@@ -282,6 +283,8 @@ def _book_summary(book_dir: Path) -> dict:
         "year": metadata.get("year") or "",
         "cover_url": cover_url,
         "has_audio": has_audio,
+        "audio_total": audio_total,
+        "audio_done": audio_done,
         "playback_complete": playback_complete,
         "chapter_count": len(chapters) if isinstance(chapters, list) else 0,
         "source_type": source_type,
@@ -378,6 +381,7 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
     chapters: List[dict] = []
     pad_ms = 0
     last_voice = ""
+    audio_total, audio_done = _audio_progress_summary(book_dir, manifest)
     if manifest and isinstance(manifest.get("chapters"), list):
         try:
             pad_ms = int(manifest.get("pad_ms") or 0)
@@ -405,6 +409,8 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             "year": metadata.get("year") or "",
             "cover_url": cover_url,
             "has_audio": bool(chapters),
+            "audio_total": audio_total,
+            "audio_done": audio_done,
             "pad_ms": pad_ms,
             "last_voice": last_voice,
             "source_type": source_type,
@@ -555,6 +561,71 @@ def _compute_progress(manifest: dict) -> dict:
         "percent": round(percent, 2),
         "current": current,
     }
+
+
+def _audio_total_from_manifest(manifest: dict) -> int:
+    if not isinstance(manifest, dict):
+        return 0
+    total = _total_chunks_from_manifest(manifest)
+    if total:
+        return total
+    chapters = manifest.get("chapters", [])
+    if not isinstance(chapters, list):
+        return 0
+    total = 0
+    for entry in chapters:
+        durations = entry.get("durations_ms", [])
+        if isinstance(durations, list):
+            total += len(durations)
+    return total
+
+
+def _audio_done_from_manifest(manifest: dict) -> int:
+    if not isinstance(manifest, dict):
+        return 0
+    chapters = manifest.get("chapters", [])
+    if not isinstance(chapters, list):
+        return 0
+    done = 0
+    for entry in chapters:
+        durations = entry.get("durations_ms", [])
+        if not isinstance(durations, list):
+            continue
+        done += sum(1 for value in durations if value is not None)
+    return done
+
+
+def _count_segment_wavs(book_dir: Path) -> int:
+    segments_dir = book_dir / "tts" / "segments"
+    if not segments_dir.exists():
+        return 0
+    total = 0
+    for chapter_dir in segments_dir.iterdir():
+        if not chapter_dir.is_dir():
+            continue
+        for wav in chapter_dir.glob("*.wav"):
+            try:
+                if wav.is_file() and wav.stat().st_size > 0:
+                    total += 1
+            except OSError:
+                continue
+    return total
+
+
+def _audio_progress_summary(book_dir: Path, manifest: dict) -> tuple[int, int]:
+    total = _audio_total_from_manifest(manifest)
+    done = _audio_done_from_manifest(manifest)
+    if total:
+        done = min(done, total)
+    if total and done < total:
+        m4b_path = _merge_output_path(book_dir)
+        if m4b_path.exists():
+            done = total
+        elif done == 0:
+            wav_done = _count_segment_wavs(book_dir)
+            if wav_done:
+                done = min(wav_done, total)
+    return total, done
 
 
 def _compute_chapter_progress(manifest: dict, chapter_id: str) -> dict:
