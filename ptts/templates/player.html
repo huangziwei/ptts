@@ -4026,6 +4026,11 @@
       }
 
       function updateMergeButtonState() {
+        const hasM4b = state.mergeOutputExists;
+        mergeBtn.hidden = hasM4b;
+        if (downloadM4bBtn) {
+          downloadM4bBtn.hidden = !hasM4b || state.mergeRunning;
+        }
         if (state.mergeRunning && state.mergeStage === "installing") {
           mergeBtn.textContent = "Installing ffmpeg...";
           mergeBtn.disabled = true;
@@ -4052,13 +4057,11 @@
         if (!downloadM4bBtn) {
           return;
         }
-        const available = state.mergeOutputExists;
+        const available = state.mergeOutputExists && !state.mergeRunning;
         downloadM4bBtn.hidden = !available;
-        downloadM4bBtn.disabled = !available || state.mergeRunning;
+        downloadM4bBtn.disabled = !available;
         if (!available) {
           downloadM4bBtn.title = "No merged M4B available.";
-        } else if (state.mergeRunning) {
-          downloadM4bBtn.title = "Wait for merge to finish.";
         } else {
           downloadM4bBtn.title = "Download M4B";
         }
