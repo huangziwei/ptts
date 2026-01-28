@@ -818,6 +818,10 @@ class DeleteBookRequest(BaseModel):
     book_id: str
 
 
+class DeleteM4bRequest(BaseModel):
+    book_id: str
+
+
 class MetadataPayload(BaseModel):
     book_id: str
     title: Optional[str] = None
@@ -939,6 +943,24 @@ def create_app(root_dir: Path) -> FastAPI:
         if book_dir.exists():
             shutil.rmtree(book_dir)
         return _no_store({"status": "deleted", "book_id": payload.book_id})
+
+    @app.post("/api/m4b/delete")
+    def delete_m4b(payload: DeleteM4bRequest) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Stop merge before deleting.")
+        m4b_path = _merge_output_path(book_dir)
+        removed = False
+        if m4b_path.exists():
+            m4b_path.unlink()
+            removed = True
+        return _no_store(
+            {
+                "status": "deleted" if removed else "missing",
+                "book_id": payload.book_id,
+            }
+        )
 
     @app.post("/api/books/metadata")
     def update_metadata(payload: MetadataPayload) -> JSONResponse:

@@ -906,11 +906,15 @@
       }
 
       .menu-panel.open {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
 
-      .menu-panel button {
+      .menu-panel .btn {
         width: 100%;
+        border-radius: 10px;
+        padding: 8px 12px;
         text-align: left;
       }
 
@@ -1736,6 +1740,7 @@
                 <button class="btn circle" id="bookMenuBtn" type="button" aria-haspopup="true" aria-expanded="false" disabled aria-label="More">⋯</button>
                 <div class="menu-panel" id="bookMenuPanel">
                   <button class="btn" id="editMetaBtn" type="button" disabled>Edit metadata</button>
+                  <button class="btn" id="deleteM4bBtn" type="button" disabled hidden>Delete M4B</button>
                   <button class="btn danger" id="deleteBookBtn" type="button" disabled>Delete book</button>
                 </div>
               </div>
@@ -1778,6 +1783,7 @@
             <button class="btn" id="sampleTts" type="button">Sample</button>
             <span class="tts-divider" aria-hidden="true"></span>
             <button class="btn" id="mergeBtn" type="button">Merge M4B</button>
+            <button class="btn" id="downloadM4bBtn" type="button" hidden>Download M4B</button>
             <button class="btn subtle tts-delete" id="clearTtsBtn" type="button" title="Delete TTS segments for this book.">Delete TTS cache</button>
           </div>
           <div class="progress-track">
@@ -2078,6 +2084,7 @@
       const bookMenuBtn = document.getElementById("bookMenuBtn");
       const bookMenuPanel = document.getElementById("bookMenuPanel");
       const editMetaBtn = document.getElementById("editMetaBtn");
+      const deleteM4bBtn = document.getElementById("deleteM4bBtn");
       const deleteBookBtn = document.getElementById("deleteBookBtn");
       const metaModal = document.getElementById("metaModal");
       const metaClose = document.getElementById("metaClose");
@@ -2111,6 +2118,7 @@
       const startTts = document.getElementById("startTts");
       const sampleTts = document.getElementById("sampleTts");
       const mergeBtn = document.getElementById("mergeBtn");
+      const downloadM4bBtn = document.getElementById("downloadM4bBtn");
       const clearTtsBtn = document.getElementById("clearTtsBtn");
       const progressFill = document.getElementById("progressFill");
       const progressText = document.getElementById("progressText");
@@ -4021,15 +4029,38 @@
         if (state.mergeRunning && state.mergeStage === "installing") {
           mergeBtn.textContent = "Installing ffmpeg...";
           mergeBtn.disabled = true;
+          mergeBtn.title = "Installing ffmpeg...";
         } else if (state.mergeRunning) {
           mergeBtn.textContent = "Merging...";
           mergeBtn.disabled = true;
-        } else if (state.mergeOutputExists) {
-          mergeBtn.textContent = "Download M4B";
-          mergeBtn.disabled = false;
+          mergeBtn.title = "Merging...";
         } else {
           mergeBtn.textContent = "Merge M4B";
-          mergeBtn.disabled = !state.mergeReady;
+          mergeBtn.disabled = !state.mergeReady || state.mergeOutputExists;
+          if (state.mergeOutputExists) {
+            mergeBtn.title = "Delete the merged M4B from the book menu to re-merge.";
+          } else if (!state.mergeReady) {
+            mergeBtn.title = "Finish TTS to enable merge.";
+          } else {
+            mergeBtn.title = "Merge M4B";
+          }
+        }
+        updateDownloadButtonState();
+      }
+
+      function updateDownloadButtonState() {
+        if (!downloadM4bBtn) {
+          return;
+        }
+        const available = state.mergeOutputExists;
+        downloadM4bBtn.hidden = !available;
+        downloadM4bBtn.disabled = !available || state.mergeRunning;
+        if (!available) {
+          downloadM4bBtn.title = "No merged M4B available.";
+        } else if (state.mergeRunning) {
+          downloadM4bBtn.title = "Wait for merge to finish.";
+        } else {
+          downloadM4bBtn.title = "Download M4B";
         }
       }
 
@@ -4056,7 +4087,20 @@
         const disabled = !state.book || state.synthRunning || state.mergeRunning;
         deleteBookBtn.disabled = disabled;
         editMetaBtn.disabled = disabled;
+        const hasM4b = state.mergeOutputExists;
+        deleteM4bBtn.hidden = !hasM4b;
+        deleteM4bBtn.disabled = disabled || !hasM4b;
         bookMenuBtn.disabled = disabled;
+        let m4bTitle = "Delete merged M4B.";
+        if (!hasM4b) {
+          m4bTitle = "No merged M4B available.";
+        }
+        if (state.mergeRunning) {
+          m4bTitle = "Stop merge before deleting.";
+        } else if (state.synthRunning) {
+          m4bTitle = "Stop TTS before deleting.";
+        }
+        deleteM4bBtn.title = m4bTitle;
         if (disabled) {
           bookMenuPanel.classList.remove("open");
           bookMenuBtn.setAttribute("aria-expanded", "false");
@@ -4259,7 +4303,8 @@
       }
 
       function downloadM4b() {
-        if (!state.book) {
+        if (!state.book || !state.mergeOutputExists) {
+          setStatus("No merged M4B available.");
           return;
         }
         const url = `/api/m4b/download?book_id=${encodeURIComponent(
@@ -4339,6 +4384,45 @@
           setStatus("Book deleted.");
         } catch (err) {
           setStatus(err.message || "Failed to delete book.");
+        }
+      }
+
+      async function deleteM4b() {
+        if (!state.book) {
+          return;
+        }
+        if (state.mergeRunning) {
+          setStatus("Stop merge before deleting.");
+          return;
+        }
+        if (!state.mergeOutputExists) {
+          setStatus("No merged M4B to delete.");
+          return;
+        }
+        const label = state.book.title || state.book.id;
+        const confirmed = window.confirm(
+          `Delete the merged M4B for \"${label}\"?`
+        );
+        if (!confirmed) {
+          return;
+        }
+        closeBookMenu();
+        setStatus("Deleting M4B...");
+        try {
+          await fetchJson("/api/m4b/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id: state.book.id }),
+          });
+          state.mergeOutputExists = false;
+          state.mergeExitCode = null;
+          state.mergeStage = "idle";
+          mergeStatus.textContent = "";
+          updateMergeButtonState();
+          updateClearButtonState();
+          setStatus("M4B deleted.");
+        } catch (err) {
+          setStatus(err.message || "Failed to delete M4B.");
         }
       }
 
@@ -5173,12 +5257,9 @@
       startTts.addEventListener("click", toggleSynth);
       sampleTts.addEventListener("click", toggleSample);
       mergeBtn.addEventListener("click", () => {
-        if (state.mergeOutputExists && !state.mergeRunning) {
-          downloadM4b();
-        } else {
-          startMerge();
-        }
+        startMerge();
       });
+      downloadM4bBtn.addEventListener("click", downloadM4b);
       clearTtsBtn.addEventListener("click", clearTtsCache);
       bookMenuBtn.addEventListener("click", toggleBookMenu);
       editMetaBtn.addEventListener("click", () => {
@@ -5199,6 +5280,7 @@
         closeBookMenu();
       });
       deleteBookBtn.addEventListener("click", deleteBook);
+      deleteM4bBtn.addEventListener("click", deleteM4b);
       metaClose.addEventListener("click", closeMetaModal);
       metaCancel.addEventListener("click", closeMetaModal);
       metaSave.addEventListener("click", saveMetadata);
