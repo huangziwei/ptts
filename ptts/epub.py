@@ -242,10 +242,16 @@ def _split_series_key(href: str) -> tuple[str, str] | None:
     return (match.group("prefix"), match.group("ext"))
 
 
-def _join_item_text(items: Iterable[object]) -> str:
+def _join_item_text(
+    items: Iterable[object], footnote_index: dict[str, set[str]] | None = None
+) -> str:
     parts: List[str] = []
     for item in items:
-        text = html_to_text(item.get_content())
+        text = html_to_text(
+            item.get_content(),
+            footnote_index=footnote_index,
+            source_href=_item_name(item),
+        )
         if text:
             parts.append(text)
     if not parts:
@@ -253,7 +259,94 @@ def _join_item_text(items: Iterable[object]) -> str:
     return normalize_text("\n\n".join(parts))
 
 
-def html_to_text(html: bytes) -> str:
+_NOTE_MARKER_RE = re.compile(r"^\d{1,4}[a-z]?[.)]?$", re.IGNORECASE)
+
+
+def _normalize_id(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def _href_fragment(href: str) -> str:
+    if not href:
+        return ""
+    parts = href.split("#", 1)
+    if len(parts) < 2:
+        return ""
+    return unquote(parts[1])
+
+
+def _looks_like_note_marker(text: str) -> bool:
+    if not text:
+        return False
+    return bool(_NOTE_MARKER_RE.match(text.strip()))
+
+
+def _collect_footnote_index(
+    book: epub.EpubBook,
+) -> dict[str, set[str]]:
+    note_ids: set[str] = set()
+    backref_ids: set[str] = set()
+
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        content = item.get_content()
+        if not content:
+            continue
+        head = content.lstrip()[:512].lower()
+        parser = (
+            "lxml-xml"
+            if (head.startswith(b"<?xml") or b"xmlns=" in head)
+            else "lxml"
+        )
+        soup = BeautifulSoup(content, parser)
+        for tag in soup.find_all(attrs={"epub:type": "footnote"}):
+            note_id = _normalize_id(str(tag.get("id") or ""))
+            if note_id:
+                note_ids.add(note_id)
+        for tag in soup.find_all(attrs={"role": "doc-footnote"}):
+            note_id = _normalize_id(str(tag.get("id") or ""))
+            if note_id:
+                note_ids.add(note_id)
+        for tag in soup.find_all(["p", "section", "div", "aside", "ol", "ul", "li", "td"]):
+            attrs = getattr(tag, "attrs", None)
+            if attrs is None:
+                continue
+            classes = attrs.get("class", [])
+            if isinstance(classes, str):
+                classes = [classes]
+            class_text = " ".join(classes).lower()
+            id_text = str(attrs.get("id") or "")
+            if "footnote" in class_text or "endnote" in class_text:
+                note_id = _normalize_id(id_text)
+                if note_id:
+                    note_ids.add(note_id)
+            if id_text.lower().startswith(("fn", "footnote", "endnote")):
+                note_id = _normalize_id(id_text)
+                if note_id:
+                    note_ids.add(note_id)
+
+        for anchor in soup.find_all("a"):
+            text = anchor.get_text(strip=True)
+            if not _looks_like_note_marker(text):
+                continue
+            fragment = _normalize_id(_href_fragment(str(anchor.get("href") or "")))
+            if fragment:
+                backref_ids.add(fragment)
+            parent = anchor.parent
+            if parent and getattr(parent, "attrs", None):
+                parent_id = _normalize_id(str(parent.get("id") or ""))
+                if parent_id:
+                    parent_text = parent.get_text(strip=True)
+                    if parent_text == text:
+                        note_ids.add(parent_id)
+
+    return {"note_ids": note_ids, "backref_ids": backref_ids}
+
+
+def html_to_text(
+    html: bytes,
+    footnote_index: dict[str, set[str]] | None = None,
+    source_href: str = "",
+) -> str:
     head = html.lstrip()[:512].lower()
     parser = "lxml-xml" if (head.startswith(b"<?xml") or b"xmlns=" in head) else "lxml"
     soup = BeautifulSoup(html, parser)
@@ -269,6 +362,26 @@ def html_to_text(html: bytes) -> str:
         tag.decompose()
     for tag in soup.find_all(attrs={"role": "doc-footnote"}):
         tag.decompose()
+    if footnote_index:
+        note_ids = footnote_index.get("note_ids", set())
+        backref_ids = footnote_index.get("backref_ids", set())
+        if note_ids or backref_ids:
+            for tag in soup.find_all(attrs={"id": True}):
+                attrs = getattr(tag, "attrs", None)
+                if not attrs:
+                    continue
+                tag_id = _normalize_id(str(attrs.get("id") or ""))
+                if tag_id and tag_id in backref_ids:
+                    tag.decompose()
+            for anchor in soup.find_all("a"):
+                text = anchor.get_text(strip=True)
+                if not _looks_like_note_marker(text):
+                    continue
+                fragment = _normalize_id(
+                    _href_fragment(str(anchor.get("href") or ""))
+                )
+                if fragment and (fragment in note_ids or fragment in backref_ids):
+                    anchor.decompose()
     for tag in soup.find_all(["p", "section", "div", "aside", "ol", "ul", "li"]):
         attrs = getattr(tag, "attrs", None)
         if attrs is None:
@@ -356,7 +469,9 @@ def slugify(text: str) -> str:
 
 
 def _chapters_from_entries(
-    book: epub.EpubBook, entries: Iterable[TocEntry]
+    book: epub.EpubBook,
+    entries: Iterable[TocEntry],
+    footnote_index: dict[str, set[str]] | None = None,
 ) -> List[Chapter]:
     seen: set[str] = set()
     chapters: List[Chapter] = []
@@ -373,7 +488,11 @@ def _chapters_from_entries(
         if not item or item.get_type() != ITEM_DOCUMENT:
             continue
 
-        text = html_to_text(item.get_content())
+        text = html_to_text(
+            item.get_content(),
+            footnote_index=footnote_index,
+            source_href=_item_name(item),
+        )
         if not text:
             continue
 
@@ -386,7 +505,9 @@ def _chapters_from_entries(
 
 
 def _chapters_from_toc_entries(
-    book: epub.EpubBook, entries: Iterable[TocEntry]
+    book: epub.EpubBook,
+    entries: Iterable[TocEntry],
+    footnote_index: dict[str, set[str]] | None = None,
 ) -> List[Chapter]:
     spine_items = _build_spine_items(book)
     spine_index = {href: idx for idx, (href, _item) in enumerate(spine_items)}
@@ -430,7 +551,7 @@ def _chapters_from_toc_entries(
                     idx += 1
 
         if merged_items:
-            text = _join_item_text(merged_items)
+            text = _join_item_text(merged_items, footnote_index=footnote_index)
             item_for_title = merged_items[0]
         else:
             item_for_title = None
@@ -442,7 +563,11 @@ def _chapters_from_toc_entries(
                 item_for_title = book.get_item_with_id(base_href)
             if not item_for_title or item_for_title.get_type() != ITEM_DOCUMENT:
                 continue
-            text = html_to_text(item_for_title.get_content())
+            text = html_to_text(
+                item_for_title.get_content(),
+                footnote_index=footnote_index,
+                source_href=_item_name(item_for_title),
+            )
 
         if not text:
             continue
@@ -456,10 +581,17 @@ def _chapters_from_toc_entries(
 
 
 def extract_chapters(book: epub.EpubBook, prefer_toc: bool = True) -> List[Chapter]:
+    footnote_index = _collect_footnote_index(book)
     entries = build_toc_entries(book) if prefer_toc else []
-    chapters = _chapters_from_toc_entries(book, entries) if entries else []
+    chapters = (
+        _chapters_from_toc_entries(book, entries, footnote_index)
+        if entries
+        else []
+    )
     if entries and not chapters:
-        chapters = _chapters_from_entries(book, entries)
+        chapters = _chapters_from_entries(book, entries, footnote_index)
     if not chapters:
-        chapters = _chapters_from_entries(book, build_spine_entries(book))
+        chapters = _chapters_from_entries(
+            book, build_spine_entries(book), footnote_index
+        )
     return chapters

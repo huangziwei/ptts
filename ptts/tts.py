@@ -33,7 +33,9 @@ except Exception:  # pragma: no cover - optional runtime dependency
     TTSModel = None
 
 
-_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENT_SPLIT_RE = re.compile(
+    r"(?<=[.!?][\"')\]\}\u201d\u2019»])\s+|(?<=[.!?])\s+"
+)
 _ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.", re.IGNORECASE)
 _ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.$", re.IGNORECASE)
 _SINGLE_INITIAL_RE = re.compile(r"\b[A-Z]\.$")

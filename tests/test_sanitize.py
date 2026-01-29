@@ -57,6 +57,9 @@ def test_apply_remove_patterns_extended_citations() -> None:
     samples = [
         "Author (1966)",
         "(1951a:395)",
+        "Nattier (2003a, 147)",
+        "Fronsdal (1998/2014, 131)",
+        "Har Dayal (1932/1970, 43)",
         "(Albert 1956, 1968, Kluckhohn 1951a, 1961)",
         "(cf. Kapferer 1976)",
         "[Polanyi, Arensberg and Pearson 1957]",

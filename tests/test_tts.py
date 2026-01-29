@@ -39,6 +39,12 @@ def test_make_chunks_skips_k_initial_split() -> None:
     assert chunks == ["K. said hello.", "Then left."]
 
 
+def test_make_chunks_splits_after_quoted_period() -> None:
+    text = 'She said "Hello." Then left.'
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == ['She said "Hello."', "Then left."]
+
+
 def test_make_chunks_skips_us_initial_split() -> None:
     text = "The U.S. Army is here."
     chunks = tts.make_chunks(text, max_chars=200)
