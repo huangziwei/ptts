@@ -85,7 +85,7 @@ def template_rules_path() -> Path:
 def book_rules_path(book_dir: Path) -> Path:
     return book_dir / RULES_FILENAME
 
-_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'\u2019\-]*")
+_WORD_RE = re.compile(r"[^\W\d_](?:[^\W\d_]|['\u2019\-]|\u0300-\u036F)*")
 _ROMAN_NUMERAL_RE = re.compile(r"^[IVXLCDM]+$")
 _SMALL_CAPS_MIN_WORDS = 2
 _SMALL_CAPS_MAX_WORDS = 6
@@ -186,6 +186,7 @@ _SMALL_CAPS_STOPWORDS = {
     "your",
     "yours",
 }
+_VOWELS = set("aeiouyāīūṛṝḷḹ")
 
 
 @dataclass(frozen=True)
@@ -380,7 +381,7 @@ def _should_preserve_caps_word(word: str, lower: str) -> bool:
         return True
     if len(word) <= 3:
         return True
-    if len(word) <= 4 and not any(ch in "aeiouy" for ch in lower):
+    if len(word) <= 4 and not any(ch in _VOWELS for ch in lower):
         return True
     return False
 

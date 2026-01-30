@@ -228,3 +228,9 @@ def test_normalize_all_caps_preserves_acronyms() -> None:
     text = "NASA AND THE USA LAUNCHED A SATELLITE."
     expected = "NASA and the USA launched a satellite."
     assert sanitize.normalize_all_caps(text) == expected
+
+
+def test_normalize_all_caps_pali_sanskrit_title_case() -> None:
+    text = "SATIPAṬṬHĀNA"
+    expected = "Satipaṭṭhāna"
+    assert sanitize.normalize_all_caps(text) == expected
