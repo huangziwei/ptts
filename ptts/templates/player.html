@@ -4764,7 +4764,7 @@
         if (!state.book) {
           return;
         }
-        const payload = rulesFromForm();
+        const payload = { ...rulesFromForm(), book_id: state.book.id };
         editStatus.textContent = "Saving rules...";
         try {
           await fetchJson("/api/sanitize/rules", {

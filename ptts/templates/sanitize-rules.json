@@ -24,5 +24,5 @@
   ],
   "section_cutoff_patterns": [],
   "remove_patterns": [],
-  "paragraph_breaks": "single"
+  "paragraph_breaks": "double"
 }

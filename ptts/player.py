@@ -1252,11 +1252,13 @@ def create_app(root_dir: Path) -> FastAPI:
     def sanitize_rules(payload: RulesPayload) -> JSONResponse:
         data = payload.dict()
         book_id = data.pop("book_id", None)
-        if book_id:
-            book_dir = _resolve_book_dir(root_dir, book_id)
-            _write_rules_payload(_book_rules_path(book_dir), data)
-        else:
-            _write_rules_payload(_template_rules_path(), data)
+        if not book_id:
+            raise HTTPException(
+                status_code=400,
+                detail="book_id is required to save per-book rules.",
+            )
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        _write_rules_payload(_book_rules_path(book_dir), data)
         return _no_store(payload.dict())
 
     @app.post("/api/sanitize/drop")
