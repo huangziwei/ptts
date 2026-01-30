@@ -63,6 +63,12 @@ def test_prepare_tts_text_normalizes_large_numbers() -> None:
     )
 
 
+def test_prepare_tts_text_transliterates_pali_sanskrit() -> None:
+    text = "Saṃyukta-āgama, Dīrgha-āgama, Saḷāyatanavibhaṅga-sutta, and Nibbāna."
+    expected = "Samyukta-aagama, Diirgha-aagama, Salaayatanavibhangga-sutta, and Nibbaana."
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_make_chunks_skips_us_initial_split() -> None:
     text = "The U.S. Army is here."
     chunks = tts.make_chunks(text, max_chars=200)

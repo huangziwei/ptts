@@ -504,6 +504,83 @@ def make_chunks(text: str, max_chars: int, chunk_mode: str = "sentence") -> List
     return [text[start:end] for start, end in spans]
 
 
+_PALI_SANSKRIT_ASCII_MAP = {
+    "ā": "aa",
+    "Ā": "Aa",
+    "ī": "ii",
+    "Ī": "Ii",
+    "ū": "uu",
+    "Ū": "Uu",
+    "ṛ": "ri",
+    "Ṛ": "Ri",
+    "ṝ": "rii",
+    "Ṝ": "Rii",
+    "ḷ": "l",
+    "Ḷ": "L",
+    "ḹ": "lii",
+    "Ḹ": "Lii",
+    "ṃ": "m",
+    "Ṃ": "M",
+    "ṁ": "m",
+    "Ṁ": "M",
+    "ṅ": "ng",
+    "Ṅ": "Ng",
+    "ñ": "ny",
+    "Ñ": "Ny",
+    "ṭ": "t",
+    "Ṭ": "T",
+    "ḍ": "d",
+    "Ḍ": "D",
+    "ṇ": "n",
+    "Ṇ": "N",
+    "ś": "sh",
+    "Ś": "Sh",
+    "ṣ": "sh",
+    "Ṣ": "Sh",
+    "ḥ": "h",
+    "Ḥ": "H",
+}
+_MACRON_VOWELS = set("aAiIuUeEoO")
+_COMBINING_MACRON = "\u0304"
+
+
+def _double_vowel(base: str) -> str:
+    if base.isupper():
+        return base + base.lower()
+    return base + base
+
+
+def _normalize_combining_diacritics(text: str) -> str:
+    decomposed = unicodedata.normalize("NFD", text)
+    out: List[str] = []
+    i = 0
+    while i < len(decomposed):
+        ch = decomposed[i]
+        if unicodedata.combining(ch):
+            i += 1
+            continue
+        j = i + 1
+        marks: List[str] = []
+        while j < len(decomposed) and unicodedata.combining(decomposed[j]):
+            marks.append(decomposed[j])
+            j += 1
+        if marks and _COMBINING_MACRON in marks and ch in _MACRON_VOWELS:
+            out.append(_double_vowel(ch))
+        else:
+            out.append(ch)
+        i = j
+    return "".join(out)
+
+
+def _transliterate_pali_sanskrit(text: str) -> str:
+    if not text or text.isascii():
+        return text
+    for src, dst in _PALI_SANSKRIT_ASCII_MAP.items():
+        if src in text:
+            text = text.replace(src, dst)
+    return _normalize_combining_diacritics(text)
+
+
 def normalize_abbreviations(text: str) -> str:
     return _ABBREV_DOT_RE.sub(r"\1", text)
 
@@ -662,6 +739,7 @@ def _normalize_roman_numerals(text: str) -> str:
 
 
 def prepare_tts_text(text: str) -> str:
+    text = _transliterate_pali_sanskrit(text)
     text = normalize_abbreviations(text)
     text = _normalize_roman_numerals(text)
     text = normalize_numbers_for_tts(text)
