@@ -45,6 +45,24 @@ def test_make_chunks_splits_after_quoted_period() -> None:
     assert chunks == ['She said "Hello."', "Then left."]
 
 
+def test_prepare_tts_text_normalizes_label_numbers() -> None:
+    assert (
+        tts.prepare_tts_text("Figure 2.1 shows")
+        == "Figure two point one shows."
+    )
+
+
+def test_prepare_tts_text_normalizes_large_numbers() -> None:
+    assert (
+        tts.prepare_tts_text("Population 1,000,000")
+        == "Population one million."
+    )
+    assert (
+        tts.prepare_tts_text("Population 1000000")
+        == "Population one million."
+    )
+
+
 def test_make_chunks_skips_us_initial_split() -> None:
     text = "The U.S. Army is here."
     chunks = tts.make_chunks(text, max_chars=200)
@@ -67,6 +85,18 @@ def test_make_chunks_skips_spaced_phd_split() -> None:
     text = "She entered the Ph. D. program."
     chunks = tts.make_chunks(text, max_chars=200)
     assert chunks == [text]
+
+
+def test_make_chunks_skips_vol_no_number_split() -> None:
+    text = "Vol. 3.7 contains details. No. 5.2 is missing."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == ["Vol. 3.7 contains details.", "No. 5.2 is missing."]
+
+
+def test_make_chunks_skips_vol_no_roman_letter_split() -> None:
+    text = "Vol. IV contains details. No. A is missing."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == ["Vol. IV contains details.", "No. A is missing."]
 
 
 def test_make_chunks_prefers_clause_punctuation_for_long_sentences() -> None:

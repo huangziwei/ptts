@@ -41,6 +41,11 @@ _ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.$", re.IGNORECASE
 _SINGLE_INITIAL_RE = re.compile(r"\b[A-Z]\.$")
 _NAME_INITIAL_RE = re.compile(r"\b([A-Z][a-z]+)\s+[A-Z]\.$")
 _MULTI_INITIAL_RE = re.compile(r"(?:\b[A-Z]\.\s*){2,}$")
+_VOL_NO_ABBREV_RE = re.compile(r"\b(?:vol|no|nos)\.$", re.IGNORECASE)
+_VOL_NO_FOLLOW_RE = re.compile(
+    r"""^[\"'(\[]*(?:\d|[IVXLCDM]+\b|[A-Za-z](?:\d+|[.-]\d+)?\b)""",
+    re.IGNORECASE,
+)
 _ABBREV_WHITELIST = {
     "a.a.",
     "a.e.",
@@ -174,6 +179,7 @@ _INITIAL_STOPWORDS = {
     "act",
 }
 _CLAUSE_PUNCT = {",", ";", ":"}
+_SENT_PUNCT = {".", "!", "?"}
 _CLOSING_PUNCT = "\"')]}"+ "\u201d\u2019"
 _ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
 _ROMAN_CANONICAL_RE = re.compile(
@@ -218,6 +224,21 @@ _WORD_TENS = (
     "seventy",
     "eighty",
     "ninety",
+)
+_NUMBER_LABEL_RE = re.compile(
+    r"\b(?P<label>(?:fig(?:ure)?|table|chapter|section|part|vol(?:ume)?|no|appendix|eq|equation))\.?"
+    r"\s+(?P<num>\d+(?:\.\d+)+)\b",
+    re.IGNORECASE,
+)
+_GROUPED_INT_COMMA_RE = re.compile(r"\b\d{1,3}(?:,\d{3})+\b")
+_GROUPED_INT_DOT_RE = re.compile(r"\b\d{1,3}(?:\.\d{3})+\b")
+_DECIMAL_RE = re.compile(r"\b\d+\.\d+\b")
+_PLAIN_INT_RE = re.compile(r"\b\d+\b")
+_SCALE_WORDS = (
+    (1_000_000_000_000, "trillion"),
+    (1_000_000_000, "billion"),
+    (1_000_000, "million"),
+    (1_000, "thousand"),
 )
 
 
@@ -337,6 +358,10 @@ def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool
     next_word = _next_word(paragraph, next_pos)
     next_lower = next_word.lower()
 
+    if _VOL_NO_ABBREV_RE.search(tail):
+        if _VOL_NO_FOLLOW_RE.match(paragraph[next_pos:]):
+            return True
+
     if _is_whitelisted_abbrev_boundary(tail, paragraph, next_pos):
         return True
 
@@ -378,6 +403,15 @@ def _ends_with_clause_punct(token: str) -> bool:
     if not stripped:
         return False
     return stripped[-1] in _CLAUSE_PUNCT
+
+
+def _ends_with_sentence_punct(text: str) -> bool:
+    if not text:
+        return False
+    stripped = text.rstrip(_CLOSING_PUNCT + "»")
+    if not stripped:
+        return False
+    return stripped[-1] in _SENT_PUNCT
 
 
 def split_span_by_words(
@@ -493,6 +527,8 @@ def _roman_to_int(value: str) -> Optional[int]:
 
 
 def _int_to_words(value: int) -> str:
+    if value < 0:
+        return f"minus {_int_to_words(abs(value))}"
     if value < 20:
         return _WORD_ONES[value]
     if value < 100:
@@ -505,10 +541,105 @@ def _int_to_words(value: int) -> str:
         if rest == 0:
             return f"{_WORD_ONES[hundreds]} hundred"
         return f"{_WORD_ONES[hundreds]} hundred {_int_to_words(rest)}"
-    thousands, rest = divmod(value, 1000)
-    if rest == 0:
-        return f"{_WORD_ONES[thousands]} thousand"
-    return f"{_WORD_ONES[thousands]} thousand {_int_to_words(rest)}"
+    for scale, label in _SCALE_WORDS:
+        if value >= scale:
+            major, rest = divmod(value, scale)
+            if rest == 0:
+                return f"{_int_to_words(major)} {label}"
+            return f"{_int_to_words(major)} {label} {_int_to_words(rest)}"
+    return str(value)
+
+
+def _digits_to_words(value: str) -> str:
+    parts: List[str] = []
+    for ch in value:
+        if ch.isdigit():
+            parts.append(_WORD_ONES[int(ch)])
+        else:
+            parts.append(ch)
+    return " ".join(parts)
+
+
+def _normalize_label_numbers(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        label = match.group("label")
+        num = match.group("num")
+        parts = []
+        for piece in num.split("."):
+            try:
+                value = int(piece)
+            except ValueError:
+                parts.append(piece)
+                continue
+            parts.append(_int_to_words(value))
+        return f"{label} {' point '.join(parts)}"
+
+    return _NUMBER_LABEL_RE.sub(replace, text)
+
+
+def _normalize_grouped_numbers(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        stripped = token.replace(",", "").replace(".", "")
+        try:
+            value = int(stripped)
+        except ValueError:
+            return token
+        return _int_to_words(value)
+
+    text = _GROUPED_INT_COMMA_RE.sub(replace, text)
+    text = _GROUPED_INT_DOT_RE.sub(replace, text)
+    return text
+
+
+def _normalize_decimal_numbers(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        left, right = token.split(".", 1)
+        try:
+            left_value = int(left)
+        except ValueError:
+            return token
+        left_words = _int_to_words(left_value)
+        right_words = _digits_to_words(right)
+        return f"{left_words} point {right_words}"
+
+    return _DECIMAL_RE.sub(replace, text)
+
+
+def _normalize_plain_large_numbers(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if len(token) < 7:
+            return token
+        if len(token) > 1 and token.startswith("0"):
+            return token
+        try:
+            value = int(token)
+        except ValueError:
+            return token
+        return _int_to_words(value)
+
+    return _PLAIN_INT_RE.sub(replace, text)
+
+
+def normalize_numbers_for_tts(text: str) -> str:
+    text = _normalize_label_numbers(text)
+    text = _normalize_grouped_numbers(text)
+    text = _normalize_decimal_numbers(text)
+    text = _normalize_plain_large_numbers(text)
+    return text
+
+
+def split_tts_text_for_synthesis(text: str, max_chars: int) -> List[str]:
+    if not text:
+        return []
+    if max_chars <= 0 or len(text) <= max_chars:
+        return [text]
+    spans = make_chunk_spans(text, max_chars=max_chars, chunk_mode="sentence")
+    if not spans:
+        return [text]
+    return [text[start:end] for start, end in spans]
 
 
 def _normalize_roman_numerals(text: str) -> str:
@@ -533,6 +664,7 @@ def _normalize_roman_numerals(text: str) -> str:
 def prepare_tts_text(text: str) -> str:
     text = normalize_abbreviations(text)
     text = _normalize_roman_numerals(text)
+    text = normalize_numbers_for_tts(text)
     text = re.sub(r"\s+", " ", text).strip()
     if text and text[-1] not in ".!?":
         text += "."
@@ -1094,7 +1226,24 @@ def synthesize(
                 tts_text = prepare_tts_text(chunk_text)
                 voice_id = chapter_voice_map.get(chapter_id, default_voice)
                 voice_state = voice_states[voice_id]
-                audio = tts_model.generate_audio(voice_state, tts_text)
+
+                sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
+                audio_parts: List["torch.Tensor"] = []
+                for sub_text in sub_texts:
+                    sub_text = sub_text.strip()
+                    if not sub_text:
+                        continue
+                    if not _ends_with_sentence_punct(sub_text):
+                        sub_text = f"{sub_text}."
+                    audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+
+                if not audio_parts:
+                    audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+
+                if len(audio_parts) == 1:
+                    audio = audio_parts[0]
+                else:
+                    audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
                 a16 = tensor_to_int16(audio)
 
                 if pad_tensor is not None and pad_tensor.numel() > 0:
