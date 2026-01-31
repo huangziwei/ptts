@@ -93,6 +93,15 @@ def test_make_chunks_skips_fig_split() -> None:
     assert chunks == [text]
 
 
+def test_make_chunks_skips_multi_initial_split_with_lowercase_following() -> None:
+    text = (
+        "Little of the present work would have come about without the generous support "
+        "that I received from my parents, K. R. and T. F. Steffens."
+    )
+    chunks = tts.make_chunks(text, max_chars=300)
+    assert chunks == [text]
+
+
 def test_make_chunks_skips_common_abbrev_split() -> None:
     text = "This is e.g. a test."
     chunks = tts.make_chunks(text, max_chars=200)

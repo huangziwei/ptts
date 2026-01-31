@@ -381,6 +381,8 @@ def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool
         return True
 
     if _MULTI_INITIAL_RE.search(tail):
+        if next_word and next_word[0].islower():
+            return True
         if next_lower and next_lower in _SENTENCE_STARTERS:
             return False
         return True
