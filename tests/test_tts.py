@@ -69,8 +69,26 @@ def test_prepare_tts_text_transliterates_pali_sanskrit() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_expands_abbreviations() -> None:
+    text = "Prof. Smith references Fig. 1.1."
+    expected = "Professor Smith references Figure one point one."
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_normalizes_roman_decimal() -> None:
+    text = "See I.1 and II.3 in the appendix."
+    expected = "See one point one and two point three in the appendix."
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_make_chunks_skips_us_initial_split() -> None:
     text = "The U.S. Army is here."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
+def test_make_chunks_skips_fig_split() -> None:
+    text = "In Fig. 1.1 (below) we see the pattern."
     chunks = tts.make_chunks(text, max_chars=200)
     assert chunks == [text]
 

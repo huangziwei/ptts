@@ -36,8 +36,8 @@ except Exception:  # pragma: no cover - optional runtime dependency
 _SENT_SPLIT_RE = re.compile(
     r"(?<=[.!?][\"')\]\}\u201d\u2019»])\s+|(?<=[.!?])\s+"
 )
-_ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.", re.IGNORECASE)
-_ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St)\.$", re.IGNORECASE)
+_ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Fig|Figs)\.", re.IGNORECASE)
+_ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Fig|Figs)\.$", re.IGNORECASE)
 _SINGLE_INITIAL_RE = re.compile(r"\b[A-Z]\.$")
 _NAME_INITIAL_RE = re.compile(r"\b([A-Z][a-z]+)\s+[A-Z]\.$")
 _MULTI_INITIAL_RE = re.compile(r"(?:\b[A-Z]\.\s*){2,}$")
@@ -118,6 +118,15 @@ _ABBREV_WHITELIST = {
 _DOT_SPACE_DOT_RE = re.compile(r"(?<=\.)\s+(?=[A-Za-z]\.)")
 _LAST_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)\s*$")
 _NEXT_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)")
+_ABBREV_EXPANSIONS = {
+    "prof": "professor",
+    "fig": "figure",
+    "figs": "figures",
+}
+_ABBREV_EXPANSION_RE = re.compile(
+    r"\b(" + "|".join(map(re.escape, _ABBREV_EXPANSIONS)) + r")\.",
+    re.IGNORECASE,
+)
 _SENTENCE_STARTERS = {
     "the",
     "a",
@@ -234,6 +243,7 @@ _GROUPED_INT_COMMA_RE = re.compile(r"\b\d{1,3}(?:,\d{3})+\b")
 _GROUPED_INT_DOT_RE = re.compile(r"\b\d{1,3}(?:\.\d{3})+\b")
 _DECIMAL_RE = re.compile(r"\b\d+\.\d+\b")
 _PLAIN_INT_RE = re.compile(r"\b\d+\b")
+_ROMAN_DECIMAL_RE = re.compile(r"\b(?P<roman>[IVXLCDM]+)\.(?P<num>\d+(?:\.\d+)*)\b")
 _SCALE_WORDS = (
     (1_000_000_000_000, "trillion"),
     (1_000_000_000, "billion"),
@@ -581,7 +591,26 @@ def _transliterate_pali_sanskrit(text: str) -> str:
     return _normalize_combining_diacritics(text)
 
 
+def _expand_abbreviations(text: str) -> str:
+    if not text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(1)
+        expansion = _ABBREV_EXPANSIONS.get(token.lower())
+        if not expansion:
+            return match.group(0)
+        if token.isupper():
+            return expansion.upper()
+        if token[0].isupper():
+            return expansion.capitalize()
+        return expansion
+
+    return _ABBREV_EXPANSION_RE.sub(replace, text)
+
+
 def normalize_abbreviations(text: str) -> str:
+    text = _expand_abbreviations(text)
     return _ABBREV_DOT_RE.sub(r"\1", text)
 
 
@@ -700,7 +729,27 @@ def _normalize_plain_large_numbers(text: str) -> str:
     return _PLAIN_INT_RE.sub(replace, text)
 
 
+def _normalize_roman_decimal_numbers(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        roman = match.group("roman")
+        number = _roman_to_int(roman)
+        if number is None:
+            return match.group(0)
+        parts = [_int_to_words(number)]
+        for piece in match.group("num").split("."):
+            try:
+                value = int(piece)
+            except ValueError:
+                parts.append(piece)
+                continue
+            parts.append(_int_to_words(value))
+        return " point ".join(parts)
+
+    return _ROMAN_DECIMAL_RE.sub(replace, text)
+
+
 def normalize_numbers_for_tts(text: str) -> str:
+    text = _normalize_roman_decimal_numbers(text)
     text = _normalize_label_numbers(text)
     text = _normalize_grouped_numbers(text)
     text = _normalize_decimal_numbers(text)
