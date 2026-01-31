@@ -147,6 +147,15 @@ def test_make_chunks_splits_after_etc_sentence() -> None:
     ]
 
 
+def test_make_chunks_skips_ellipsis_split_inside_sentence() -> None:
+    text = (
+        "It is, in my father's words, \"an inquiry ... and a lamentation,\" "
+        "yes, but it aspires to greater things."
+    )
+    chunks = tts.make_chunks(text, max_chars=300)
+    assert chunks == [text]
+
+
 def test_make_chunks_skips_common_abbrev_split() -> None:
     text = "This is e.g. a test."
     chunks = tts.make_chunks(text, max_chars=200)

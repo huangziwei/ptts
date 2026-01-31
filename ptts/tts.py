@@ -118,6 +118,7 @@ _ABBREV_WHITELIST = {
 _DOT_SPACE_DOT_RE = re.compile(r"(?<=\.)\s+(?=[A-Za-z]\.)")
 _LAST_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)\s*$")
 _NEXT_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)")
+_ELLIPSIS_RE = re.compile(r"(\.\.\.|…)\s*$")
 _ABBREV_EXPANSIONS = {
     "prof": "professor",
     "fig": "figure",
@@ -366,6 +367,11 @@ def _ends_with_etc(tail: str) -> bool:
     return stripped.lower().endswith("etc.")
 
 
+def _ends_with_ellipsis(tail: str) -> bool:
+    stripped = tail.rstrip(_CLOSING_PUNCT + "»")
+    return bool(_ELLIPSIS_RE.search(stripped))
+
+
 def _is_whitelisted_abbrev_boundary(tail: str, paragraph: str, next_pos: int) -> bool:
     if _ends_with_whitelisted_abbrev(tail):
         return True
@@ -390,6 +396,10 @@ def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool
     tail = paragraph[:end]
     next_word = _next_word(paragraph, next_pos)
     next_lower = next_word.lower()
+
+    if _ends_with_ellipsis(tail):
+        if next_word and next_word[0].islower():
+            return True
 
     if _VOL_NO_ABBREV_RE.search(tail):
         if _VOL_NO_FOLLOW_RE.match(paragraph[next_pos:]):
