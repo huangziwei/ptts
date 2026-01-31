@@ -75,6 +75,24 @@ def test_prepare_tts_text_expands_abbreviations() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_expands_etc() -> None:
+    text = "Lists and so on, etc."
+    expected = "Lists and so on, et cetera."
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_expands_latin_abbrev() -> None:
+    text = "This is, i.e., the key point; e.g. a sample."
+    expected = "This is, that is, the key point; for example a sample."
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_expands_vs_viz() -> None:
+    text = "Compare A vs. B; viz. the minimal case."
+    expected = "Compare A versus B; namely the minimal case."
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_prepare_tts_text_normalizes_roman_decimal() -> None:
     text = "See I.1 and II.3 in the appendix."
     expected = "See one point one and two point three in the appendix."
@@ -100,6 +118,15 @@ def test_make_chunks_skips_multi_initial_split_with_lowercase_following() -> Non
     )
     chunks = tts.make_chunks(text, max_chars=300)
     assert chunks == [text]
+
+
+def test_make_chunks_splits_after_etc_sentence() -> None:
+    text = "Literally translated, one \"contemplates body in body\", or \"feelings in feelings\", etc. This slightly peculiar expression requires further consideration."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [
+        "Literally translated, one \"contemplates body in body\", or \"feelings in feelings\", etc.",
+        "This slightly peculiar expression requires further consideration.",
+    ]
 
 
 def test_make_chunks_skips_common_abbrev_split() -> None:

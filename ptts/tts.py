@@ -122,6 +122,11 @@ _ABBREV_EXPANSIONS = {
     "prof": "professor",
     "fig": "figure",
     "figs": "figures",
+    "i.e": "that is",
+    "e.g": "for example",
+    "etc": "et cetera",
+    "vs": "versus",
+    "viz": "namely",
 }
 _ABBREV_EXPANSION_RE = re.compile(
     r"\b(" + "|".join(map(re.escape, _ABBREV_EXPANSIONS)) + r")\.",
@@ -343,6 +348,11 @@ def _ends_with_whitelisted_abbrev(text: str) -> bool:
     return False
 
 
+def _ends_with_etc(tail: str) -> bool:
+    stripped = tail.rstrip(_CLOSING_PUNCT + "»")
+    return stripped.lower().endswith("etc.")
+
+
 def _is_whitelisted_abbrev_boundary(tail: str, paragraph: str, next_pos: int) -> bool:
     if _ends_with_whitelisted_abbrev(tail):
         return True
@@ -373,6 +383,9 @@ def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool
             return True
 
     if _is_whitelisted_abbrev_boundary(tail, paragraph, next_pos):
+        if _ends_with_etc(tail) and next_word and next_word[0].isupper():
+            if next_lower in _SENTENCE_STARTERS:
+                return False
         return True
 
     if _ABBREV_SENT_RE.search(tail):
