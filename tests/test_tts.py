@@ -93,6 +93,24 @@ def test_prepare_tts_text_expands_vs_viz() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_strips_double_quotes() -> None:
+    text = 'He said "bible" should be read aloud.'
+    expected = "He said bible should be read aloud."
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_strips_single_quotes_but_keeps_apostrophes() -> None:
+    text = "He said 'bible' should not change don't."
+    expected = "He said bible should not change don't."
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_keeps_leading_elisions() -> None:
+    text = "'Tis the season."
+    expected = "'Tis the season."
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_prepare_tts_text_normalizes_roman_decimal() -> None:
     text = "See I.1 and II.3 in the appendix."
     expected = "See one point one and two point three in the appendix."

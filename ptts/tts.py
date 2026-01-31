@@ -132,6 +132,19 @@ _ABBREV_EXPANSION_RE = re.compile(
     r"\b(" + "|".join(map(re.escape, _ABBREV_EXPANSIONS)) + r")\.",
     re.IGNORECASE,
 )
+_DOUBLE_QUOTE_CHARS = {'"', "“", "”", "«", "»", "„", "‟", "❝", "❞"}
+_SINGLE_QUOTE_CHARS = {"'", "‘", "’", "‚", "‛"}
+_LEADING_ELISIONS = {
+    "tis",
+    "twas",
+    "twere",
+    "twill",
+    "til",
+    "em",
+    "cause",
+    "bout",
+    "round",
+}
 _SENTENCE_STARTERS = {
     "the",
     "a",
@@ -606,6 +619,37 @@ def _transliterate_pali_sanskrit(text: str) -> str:
     return _normalize_combining_diacritics(text)
 
 
+def _strip_double_quotes(text: str) -> str:
+    if not text:
+        return text
+    return "".join(ch for ch in text if ch not in _DOUBLE_QUOTE_CHARS)
+
+
+def _strip_single_quotes(text: str) -> str:
+    if not text:
+        return text
+    out: List[str] = []
+    for idx, ch in enumerate(text):
+        if ch not in _SINGLE_QUOTE_CHARS:
+            out.append(ch)
+            continue
+        prev = text[idx - 1] if idx > 0 else ""
+        next_ch = text[idx + 1] if idx + 1 < len(text) else ""
+        if prev and next_ch and prev.isalnum() and next_ch.isalnum():
+            out.append(ch)
+            continue
+        if (not prev or not prev.isalnum()) and next_ch and next_ch.isalpha():
+            end = idx + 1
+            while end < len(text) and text[end].isalpha():
+                end += 1
+            word = text[idx + 1 : end].lower()
+            if word in _LEADING_ELISIONS:
+                out.append(ch)
+                continue
+        continue
+    return "".join(out)
+
+
 def _expand_abbreviations(text: str) -> str:
     if not text:
         return text
@@ -803,6 +847,8 @@ def _normalize_roman_numerals(text: str) -> str:
 
 
 def prepare_tts_text(text: str) -> str:
+    text = _strip_double_quotes(text)
+    text = _strip_single_quotes(text)
     text = _transliterate_pali_sanskrit(text)
     text = normalize_abbreviations(text)
     text = _normalize_roman_numerals(text)
