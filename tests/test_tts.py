@@ -156,6 +156,12 @@ def test_make_chunks_skips_ellipsis_split_inside_sentence() -> None:
     assert chunks == [text]
 
 
+def test_make_chunks_skips_punct_only_paragraph() -> None:
+    text = "First sentence.\n\n'\"\n\nSecond sentence."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == ["First sentence.", "Second sentence."]
+
+
 def test_make_chunks_skips_common_abbrev_split() -> None:
     text = "This is e.g. a test."
     chunks = tts.make_chunks(text, max_chars=200)

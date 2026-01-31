@@ -462,6 +462,13 @@ def _ends_with_sentence_punct(text: str) -> bool:
     return stripped[-1] in _SENT_PUNCT
 
 
+def _span_has_speakable_text(text: str, start: int, end: int) -> bool:
+    for ch in text[start:end]:
+        if ch.isalnum():
+            return True
+    return False
+
+
 def split_span_by_words(
     text: str, start: int, end: int, max_chars: int
 ) -> List[Tuple[int, int]]:
@@ -506,45 +513,19 @@ def split_span_by_words(
 def make_chunk_spans(
     text: str, max_chars: int, chunk_mode: str = "sentence"
 ) -> List[Tuple[int, int]]:
-    if chunk_mode not in ("sentence", "packed"):
-        raise ValueError(f"Unsupported chunk_mode: {chunk_mode}")
+    if chunk_mode != "sentence":
+        chunk_mode = "sentence"
 
     spans: List[Tuple[int, int]] = []
     for para_start, para_end in split_paragraph_spans(text):
         paragraph = text[para_start:para_end]
         sentence_spans = split_sentence_spans(paragraph, para_start)
-        if chunk_mode == "sentence":
-            for sent_start, sent_end in sentence_spans:
-                if sent_end - sent_start > max_chars:
-                    spans.extend(
-                        split_span_by_words(text, sent_start, sent_end, max_chars)
-                    )
-                else:
-                    spans.append((sent_start, sent_end))
-        else:
-            buf_start: Optional[int] = None
-            buf_end: Optional[int] = None
-            for sent_start, sent_end in sentence_spans:
-                if sent_end - sent_start > max_chars:
-                    if buf_start is not None and buf_end is not None:
-                        spans.append((buf_start, buf_end))
-                        buf_start = None
-                        buf_end = None
-                    spans.extend(
-                        split_span_by_words(text, sent_start, sent_end, max_chars)
-                    )
-                    continue
-                if buf_start is None:
-                    buf_start, buf_end = sent_start, sent_end
-                    continue
-                if sent_end - buf_start > max_chars:
-                    spans.append((buf_start, buf_end))
-                    buf_start, buf_end = sent_start, sent_end
-                else:
-                    buf_end = sent_end
-            if buf_start is not None and buf_end is not None:
-                spans.append((buf_start, buf_end))
-    return spans
+        for sent_start, sent_end in sentence_spans:
+            if sent_end - sent_start > max_chars:
+                spans.extend(split_span_by_words(text, sent_start, sent_end, max_chars))
+            else:
+                spans.append((sent_start, sent_end))
+    return [span for span in spans if _span_has_speakable_text(text, *span)]
 
 
 def make_chunks(text: str, max_chars: int, chunk_mode: str = "sentence") -> List[str]:
@@ -1104,7 +1085,9 @@ def prepare_manifest(
         manifest_chapters = manifest.get("chapters", [])
         if not isinstance(manifest_chapters, list) or not manifest_chapters:
             raise ValueError("manifest.json contains no chapters.")
-        existing_mode = manifest.get("chunk_mode", "packed")
+        existing_mode = manifest.get("chunk_mode", "sentence")
+        if existing_mode == "packed" and chunk_mode == "sentence":
+            existing_mode = "sentence"
         if existing_mode != chunk_mode:
             raise ValueError(
                 "manifest.json chunk_mode differs from requested. "
@@ -1405,14 +1388,13 @@ def synthesize(
 
             for chunk_idx, chunk_text in enumerate(chunks, start=1):
                 seg_path = chapter_seg_dir / f"{chunk_idx:06d}.wav"
-                segment_paths.append(seg_path)
-
                 progress.update(
                     chapter_task,
                     description=f"{chapter_id}: {chapter_title} ({chunk_idx}/{chapter_total})",
                 )
 
                 if seg_path.exists() and is_valid_wav(seg_path):
+                    segment_paths.append(seg_path)
                     dms = wav_duration_ms(seg_path)
                     if ch_entry["durations_ms"][chunk_idx - 1] != dms:
                         ch_entry["durations_ms"][chunk_idx - 1] = dms
@@ -1422,6 +1404,15 @@ def synthesize(
                     continue
 
                 tts_text = prepare_tts_text(chunk_text)
+                if not tts_text.strip():
+                    sys.stderr.write(
+                        f"Skipping empty chunk {chapter_id} ({chunk_idx}/{chapter_total}).\n"
+                    )
+                    ch_entry["durations_ms"][chunk_idx - 1] = 0
+                    atomic_write_json(manifest_path, manifest)
+                    progress.advance(chapter_task, 1)
+                    progress.advance(overall_task, 1)
+                    continue
                 voice_id = chapter_voice_map.get(chapter_id, default_voice)
                 voice_state = voice_states[voice_id]
 
@@ -1448,6 +1439,7 @@ def synthesize(
                     a16 = torch.cat([a16, pad_tensor], dim=0)
 
                 write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
+                segment_paths.append(seg_path)
                 dms = int(round(a16.numel() * 1000.0 / sample_rate))
 
                 # Persist progress for restartability.
@@ -1628,7 +1620,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--chunk-mode",
-        choices=["sentence", "packed"],
+        choices=["sentence"],
         default="sentence",
         help="Chunking strategy (default: sentence)",
     )

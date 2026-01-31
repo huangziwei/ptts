@@ -1469,7 +1469,9 @@ def create_app(root_dir: Path) -> FastAPI:
     def synth_start(payload: SynthRequest) -> JSONResponse:
         nonlocal ffmpeg_job, ffmpeg_error
         book_dir = _resolve_book_dir(root_dir, payload.book_id)
-        if payload.chunk_mode not in ("sentence", "packed"):
+        if payload.chunk_mode == "packed":
+            payload.chunk_mode = "sentence"
+        if payload.chunk_mode != "sentence":
             raise HTTPException(status_code=400, detail="Invalid chunk_mode.")
 
         existing = jobs.get(payload.book_id)
@@ -1560,7 +1562,9 @@ def create_app(root_dir: Path) -> FastAPI:
     def synth_sample(payload: SynthRequest) -> JSONResponse:
         nonlocal ffmpeg_job, ffmpeg_error
         book_dir = _resolve_book_dir(root_dir, payload.book_id)
-        if payload.chunk_mode not in ("sentence", "packed"):
+        if payload.chunk_mode == "packed":
+            payload.chunk_mode = "sentence"
+        if payload.chunk_mode != "sentence":
             raise HTTPException(status_code=400, detail="Invalid chunk_mode.")
         if payload.use_voice_map:
             raise HTTPException(

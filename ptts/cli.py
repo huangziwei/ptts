@@ -473,7 +473,7 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--pad-ms", type=int, default=150)
     synth.add_argument(
         "--chunk-mode",
-        choices=["sentence", "packed"],
+        choices=["sentence"],
         default="sentence",
         help="Chunking strategy (default: sentence)",
     )
@@ -500,7 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--pad-ms", type=int, default=150)
     sample.add_argument(
         "--chunk-mode",
-        choices=["sentence", "packed"],
+        choices=["sentence"],
         default="sentence",
         help="Chunking strategy (default: sentence)",
     )
