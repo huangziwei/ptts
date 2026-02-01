@@ -5,6 +5,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var toggleItem: NSMenuItem!
     private var process: Process?
     private var logHandle: FileHandle?
+    private var startupTimer: DispatchSourceTimer?
+    private var startupAttempts = 0
+    private var isChecking = false
+    private var isStarting = false
+    private let maxStartupAttempts = 40
+    private let startupInterval: TimeInterval = 0.5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -96,8 +102,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             try process.run()
             self.process = process
+            isStarting = true
             updateMenuState()
-            openPlayerURL()
+            beginStartupChecks()
         } catch {
             cleanupProcessState()
             showAlert(title: "Failed to start pTTS", message: error.localizedDescription)
@@ -113,17 +120,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func cleanupProcessState() {
         process = nil
+        cancelStartupChecks()
         if let handle = logHandle {
             try? handle.close()
         }
         logHandle = nil
+        isStarting = false
         updateMenuState()
     }
 
     private func updateMenuState() {
         let running = process?.isRunning == true
-        toggleItem?.title = running ? "Stop Player Server" : "Start Player Server"
-        statusItem?.button?.title = running ? "pTTS (on)" : "pTTS"
+        if running && isStarting {
+            toggleItem?.title = "Starting..."
+            statusItem?.button?.title = "pTTS (starting)"
+        } else {
+            toggleItem?.title = running ? "Stop Player Server" : "Start Player Server"
+            statusItem?.button?.title = running ? "pTTS (on)" : "pTTS"
+        }
+    }
+
+    private func beginStartupChecks() {
+        cancelStartupChecks()
+        startupAttempts = 0
+        isChecking = false
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + startupInterval, repeating: startupInterval)
+        timer.setEventHandler { [weak self] in
+            self?.checkServerReady()
+        }
+        startupTimer = timer
+        timer.resume()
+    }
+
+    private func cancelStartupChecks() {
+        startupTimer?.cancel()
+        startupTimer = nil
+        isChecking = false
+    }
+
+    private func checkServerReady() {
+        guard process?.isRunning == true else {
+            cancelStartupChecks()
+            DispatchQueue.main.async { [weak self] in
+                self?.isStarting = false
+                self?.updateMenuState()
+            }
+            return
+        }
+
+        if startupAttempts >= maxStartupAttempts {
+            cancelStartupChecks()
+            DispatchQueue.main.async { [weak self] in
+                self?.isStarting = false
+                self?.updateMenuState()
+                self?.showAlert(
+                    title: "Server taking too long",
+                    message: "pTTS did not respond in time. Check the log for details."
+                )
+            }
+            return
+        }
+
+        if isChecking {
+            return
+        }
+
+        startupAttempts += 1
+        isChecking = true
+
+        guard let url = playerURL() else {
+            isChecking = false
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 0.8
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            guard let self else { return }
+            self.isChecking = false
+            if error == nil, response is HTTPURLResponse {
+                self.cancelStartupChecks()
+                DispatchQueue.main.async {
+                    self.isStarting = false
+                    self.updateMenuState()
+                    self.openPlayerURL()
+                }
+            }
+        }.resume()
     }
 
     private func maybePromptInstallSymlink() {
@@ -131,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.messageText = "Add to Spotlight?"
-        alert.informativeText = "Create a symlink in ~/Applications so you can open pTTS Menubar from Spotlight?"
+        alert.informativeText = "Create a symlink in /Applications so you can open pTTS Menubar from Spotlight?"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Create Symlink")
         alert.addButton(withTitle: "Not Now")
@@ -271,12 +355,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
-    private func openPlayerURL() {
+    private func playerURL() -> URL? {
         let urlString = ProcessInfo.processInfo.environment["PTTS_PLAYER_URL"] ?? "http://localhost:1912"
-        guard let url = URL(string: urlString) else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            NSWorkspace.shared.open(url)
-        }
+        return URL(string: urlString)
+    }
+
+    private func openPlayerURL() {
+        guard let url = playerURL() else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func showAlert(title: String, message: String) {

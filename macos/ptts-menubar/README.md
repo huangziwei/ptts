@@ -13,7 +13,7 @@ The app will be at `macos/ptts-menubar/build/pTTS Menubar.app`.
 
 ## Run
 
-- Click the menubar item to start/stop the server. When it starts, your default browser opens to the player UI.
+- Click the menubar item to start/stop the server. When the server responds, your default browser opens to the player UI.
 
 Logs are written to `~/Library/Logs/ptts-menubar.log`.
 
