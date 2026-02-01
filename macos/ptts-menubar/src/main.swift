@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem.menu = menu
         updateMenuState()
+        maybePromptInstallSymlink()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -123,6 +124,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let running = process?.isRunning == true
         toggleItem?.title = running ? "Stop Player Server" : "Start Player Server"
         statusItem?.button?.title = running ? "pTTS (on)" : "pTTS"
+    }
+
+    private func maybePromptInstallSymlink() {
+        guard shouldPromptInstall() else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Add to Spotlight?"
+        alert.informativeText = "Create a symlink in ~/Applications so you can open pTTS Menubar from Spotlight?"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Create Symlink")
+        alert.addButton(withTitle: "Not Now")
+
+        let response = alert.runModal()
+        defer { markInstallPrompted() }
+
+        guard response == .alertFirstButtonReturn else { return }
+        do {
+            try installSymlink()
+        } catch {
+            showAlert(title: "Symlink failed", message: error.localizedDescription)
+        }
+    }
+
+    private func shouldPromptInstall() -> Bool {
+        if hasPromptedInstall() {
+            return false
+        }
+
+        let systemApps = URL(fileURLWithPath: "/Applications", isDirectory: true)
+            .standardizedFileURL
+        let appURL = Bundle.main.bundleURL.standardizedFileURL
+        return !appURL.path.hasPrefix(systemApps.path + "/")
+    }
+
+    private func hasPromptedInstall() -> Bool {
+        return FileManager.default.fileExists(atPath: promptMarkerURL().path)
+    }
+
+    private func markInstallPrompted() {
+        let url = promptMarkerURL()
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+    }
+
+    private func promptMarkerURL() -> URL {
+        let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return supportDir
+            .appendingPathComponent("ptts-menubar", isDirectory: true)
+            .appendingPathComponent("install-prompted")
+    }
+
+    private func installSymlink() throws {
+        let fm = FileManager.default
+        let appsDir = URL(fileURLWithPath: "/Applications", isDirectory: true)
+
+        let appURL = Bundle.main.bundleURL.standardizedFileURL
+        let linkURL = appsDir.appendingPathComponent(appURL.lastPathComponent)
+
+        if fm.fileExists(atPath: linkURL.path) {
+            if let destinationPath = try? fm.destinationOfSymbolicLink(atPath: linkURL.path) {
+                let resolved = URL(fileURLWithPath: destinationPath).standardizedFileURL
+                if resolved == appURL {
+                    return
+                }
+            }
+            throw NSError(domain: "ptts-menubar", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "An item already exists at \(linkURL.path). Remove it first if you want to create a symlink."
+            ])
+        }
+
+        try fm.createSymbolicLink(at: linkURL, withDestinationURL: appURL)
     }
 
     private func resolveRepoPath() -> String? {

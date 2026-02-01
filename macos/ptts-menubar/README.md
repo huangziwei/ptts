@@ -20,3 +20,5 @@ Logs are written to `~/Library/Logs/ptts-menubar.log`.
 On Intel Macs the app runs `./bin/pmx uv run ptts play`. On Apple Silicon it runs `uv run ptts play`.
 
 The app auto-locates the repo by walking up from the app bundle; keep the app inside the repo. If you move the app elsewhere, set `PTTS_ROOT` to the repo root before launching.
+
+On first launch, the app offers to create a symlink in `/Applications` so you can open it from Spotlight.
