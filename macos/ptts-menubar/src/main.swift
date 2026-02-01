@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var startupAttempts = 0
     private var isChecking = false
     private var isStarting = false
+    private var activeRepoPath: String?
     private let maxStartupAttempts = 40
     private let startupInterval: TimeInterval = 0.5
 
@@ -60,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        activeRepoPath = repoPath
         let env = makeEnvironment()
         let process = Process()
         process.currentDirectoryURL = URL(fileURLWithPath: repoPath)
@@ -115,6 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let process = process, process.isRunning {
             process.terminate()
         }
+        #if !arch(arm64)
+        stopPodmanServerAsync()
+        #endif
         cleanupProcessState()
     }
 
@@ -126,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         logHandle = nil
         isStarting = false
+        activeRepoPath = nil
         updateMenuState()
     }
 
@@ -138,6 +144,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             toggleItem?.title = running ? "Stop Player Server" : "Start Player Server"
             statusItem?.button?.title = running ? "pTTS (on)" : "pTTS"
         }
+    }
+
+    private func stopPodmanServerAsync() {
+        guard let repoPath = activeRepoPath ?? resolveRepoPath() else { return }
+        let env = makeEnvironment()
+        guard let podmanPath = resolveExecutable("podman", env: env) else { return }
+        let container = pmxContainerName(repoPath: repoPath, env: env)
+        let script = """
+import os
+import signal
+
+killed = 0
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            cmd = handle.read().decode(errors="ignore").replace("\\x00", " ")
+    except (FileNotFoundError, PermissionError):
+        continue
+    if "ptts" in cmd and "play" in cmd:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+            killed += 1
+        except ProcessLookupError:
+            pass
+print(killed)
+"""
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: podmanPath)
+            process.arguments = ["exec", container, "python", "-c", script]
+            process.environment = env
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                DispatchQueue.main.async {
+                    self?.showAlert(title: "Stop failed", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func pmxContainerName(repoPath: String, env: [String: String]) -> String {
+        if let name = env["PMX_NAME"], !name.isEmpty {
+            return name
+        }
+        let namespace = env["PMX_NAMESPACE"].flatMap { $0.isEmpty ? nil : $0 } ?? "ptts"
+        let baseName = URL(fileURLWithPath: repoPath).lastPathComponent
+        let normalized = normalizeContainerBase(baseName)
+        return "\(namespace)-\(normalized)"
+    }
+
+    private func normalizeContainerBase(_ value: String) -> String {
+        var result = ""
+        var lastWasDash = false
+        for scalar in value.unicodeScalars {
+            let v = scalar.value
+            let allowed = (v >= 48 && v <= 57)
+                || (v >= 65 && v <= 90)
+                || (v >= 97 && v <= 122)
+                || v == 95
+                || v == 46
+                || v == 45
+            if allowed {
+                result.unicodeScalars.append(scalar)
+                lastWasDash = false
+            } else if !lastWasDash {
+                result.append("-")
+                lastWasDash = true
+            }
+        }
+        let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return trimmed.isEmpty ? "repo" : trimmed
     }
 
     private func beginStartupChecks() {
