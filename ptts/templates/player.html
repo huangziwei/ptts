@@ -892,9 +892,10 @@
       }
 
       .menu-panel {
-        position: absolute;
-        top: 42px;
-        right: 0;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: auto;
         background: var(--surface);
         border: 1px solid var(--line);
         border-radius: 12px;
@@ -3829,6 +3830,35 @@
         bookmarkPanel.style.transform = "none";
       }
 
+      function positionBookMenuPanel() {
+        if (!bookMenuPanel.classList.contains("open")) {
+          return;
+        }
+        const panelRect = bookMenuPanel.getBoundingClientRect();
+        const anchorRect = bookMenuBtn.getBoundingClientRect();
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const margin = 16;
+        const anchorCenter = anchorRect.left + anchorRect.width / 2;
+        const idealLeft = anchorCenter - panelRect.width / 2;
+        const maxLeft = viewportWidth - panelRect.width - margin;
+        const left = Math.max(margin, Math.min(idealLeft, maxLeft));
+        let top = anchorRect.bottom + 8;
+        if (top + panelRect.height + margin > viewportHeight) {
+          const above = anchorRect.top - panelRect.height - 8;
+          if (above >= margin) {
+            top = above;
+          } else {
+            top = Math.max(margin, viewportHeight - panelRect.height - margin);
+          }
+        }
+        bookMenuPanel.style.left = `${left}px`;
+        bookMenuPanel.style.top = `${top}px`;
+        bookMenuPanel.style.right = "auto";
+        bookMenuPanel.style.bottom = "auto";
+        bookMenuPanel.style.transform = "none";
+      }
+
       function openBookmarkPanel() {
         bookmarkPanel.classList.add("open");
         requestAnimationFrame(positionBookmarkPanel);
@@ -3838,6 +3868,17 @@
       function closeBookmarkPanel() {
         bookmarkPanel.classList.remove("open");
         window.removeEventListener("resize", positionBookmarkPanel);
+      }
+
+      function openBookMenu() {
+        if (bookMenuPanel.classList.contains("open")) {
+          return;
+        }
+        bookMenuPanel.classList.add("open");
+        bookMenuBtn.setAttribute("aria-expanded", "true");
+        requestAnimationFrame(positionBookMenuPanel);
+        window.addEventListener("resize", positionBookMenuPanel);
+        window.addEventListener("scroll", positionBookMenuPanel, { passive: true });
       }
 
       function addBookmark(index) {
@@ -4234,13 +4275,21 @@
         if (bookMenuBtn.disabled) {
           return;
         }
-        const open = bookMenuPanel.classList.toggle("open");
-        bookMenuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+        if (bookMenuPanel.classList.contains("open")) {
+          closeBookMenu();
+        } else {
+          openBookMenu();
+        }
       }
 
       function closeBookMenu() {
+        if (!bookMenuPanel.classList.contains("open")) {
+          return;
+        }
         bookMenuPanel.classList.remove("open");
         bookMenuBtn.setAttribute("aria-expanded", "false");
+        window.removeEventListener("resize", positionBookMenuPanel);
+        window.removeEventListener("scroll", positionBookMenuPanel);
       }
 
       async function startSynth() {
