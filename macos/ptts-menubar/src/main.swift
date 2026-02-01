@@ -1,19 +1,10 @@
 import Cocoa
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let repoPath: String
     private var statusItem: NSStatusItem!
     private var toggleItem: NSMenuItem!
     private var process: Process?
     private var logHandle: FileHandle?
-
-    override init() {
-        let defaultRepoPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("projects/ptts")
-            .path
-        repoPath = ProcessInfo.processInfo.environment["PTTS_ROOT"] ?? defaultRepoPath
-        super.init()
-    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -54,8 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startServer() {
-        guard FileManager.default.fileExists(atPath: repoPath) else {
-            showAlert(title: "pTTS folder not found", message: "Set PTTS_ROOT or update the default path.\nCurrent: \(repoPath)")
+        guard let repoPath = resolveRepoPath() else {
+            showAlert(
+                title: "pTTS folder not found",
+                message: "Place the app inside the pTTS repo (e.g. macos/ptts-menubar/build), or set PTTS_ROOT to the repo root."
+            )
             return
         }
 
@@ -102,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try process.run()
             self.process = process
             updateMenuState()
+            openPlayerURL()
         } catch {
             cleanupProcessState()
             showAlert(title: "Failed to start pTTS", message: error.localizedDescription)
@@ -128,6 +123,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let running = process?.isRunning == true
         toggleItem?.title = running ? "Stop Player Server" : "Start Player Server"
         statusItem?.button?.title = running ? "pTTS (on)" : "pTTS"
+    }
+
+    private func resolveRepoPath() -> String? {
+        if let override = ProcessInfo.processInfo.environment["PTTS_ROOT"], !override.isEmpty {
+            if FileManager.default.fileExists(atPath: override) {
+                return override
+            }
+        }
+
+        var current = Bundle.main.bundleURL
+        for _ in 0..<8 {
+            if isRepoRoot(current) {
+                return current.path
+            }
+            current.deleteLastPathComponent()
+        }
+
+        return nil
+    }
+
+    private func isRepoRoot(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        let pyproject = url.appendingPathComponent("pyproject.toml").path
+        let binDir = url.appendingPathComponent("bin").path
+        let pttsDir = url.appendingPathComponent("ptts").path
+        return fm.fileExists(atPath: pyproject)
+            && fm.fileExists(atPath: binDir)
+            && fm.fileExists(atPath: pttsDir)
     }
 
     private func ensureLogFile() throws -> URL {
@@ -173,6 +196,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         return nil
+    }
+
+    private func openPlayerURL() {
+        let urlString = ProcessInfo.processInfo.environment["PTTS_PLAYER_URL"] ?? "http://localhost:1912"
+        guard let url = URL(string: urlString) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private func showAlert(title: String, message: String) {

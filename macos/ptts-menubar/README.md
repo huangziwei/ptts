@@ -13,10 +13,10 @@ The app will be at `macos/ptts-menubar/build/pTTS Menubar.app`.
 
 ## Run
 
-- Set `PTTS_ROOT` if your repo is not at `~/projects/ptts`:
-  `PTTS_ROOT=/path/to/ptts open "build/pTTS Menubar.app"`
-- Click the menubar item to start/stop the server.
+- Click the menubar item to start/stop the server. When it starts, your default browser opens to the player UI.
 
 Logs are written to `~/Library/Logs/ptts-menubar.log`.
 
 On Intel Macs the app runs `./bin/pmx uv run ptts play`. On Apple Silicon it runs `uv run ptts play`.
+
+The app auto-locates the repo by walking up from the app bundle; keep the app inside the repo. If you move the app elsewhere, set `PTTS_ROOT` to the repo root before launching.
