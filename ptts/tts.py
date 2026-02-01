@@ -1528,6 +1528,146 @@ def synthesize(
     return 0
 
 
+def synthesize_chunk(
+    out_dir: Path,
+    chapter_id: str,
+    chunk_index: int,
+    voice: Optional[str] = None,
+    voice_map_path: Optional[Path] = None,
+    base_dir: Optional[Path] = None,
+) -> dict:
+    _require_tts()
+    if base_dir is None:
+        base_dir = Path.cwd()
+    if chunk_index < 0:
+        raise ValueError("chunk_index must be >= 0")
+
+    manifest_path = out_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Missing manifest at {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    chapters = manifest.get("chapters", [])
+    if not isinstance(chapters, list):
+        raise ValueError("manifest.json chapters missing or invalid")
+
+    entry = None
+    for item in chapters:
+        if isinstance(item, dict) and item.get("id") == chapter_id:
+            entry = item
+            break
+    if entry is None:
+        raise ValueError(f"Unknown chapter_id: {chapter_id}")
+
+    chunks = entry.get("chunks")
+    if not isinstance(chunks, list):
+        chunks = []
+    spans = entry.get("chunk_spans")
+    if not isinstance(spans, list):
+        spans = []
+    chunk_count = len(chunks) or len(spans)
+    if chunk_count <= 0:
+        chunk_dir = out_dir / "chunks" / chapter_id
+        if chunk_dir.exists():
+            chunk_count = len([p for p in chunk_dir.glob("*.txt") if p.stem.isdigit()])
+    if chunk_count <= 0:
+        raise ValueError(f"No chunks available for chapter: {chapter_id}")
+    if chunk_index >= chunk_count:
+        raise ValueError(f"chunk_index out of range for {chapter_id}")
+
+    chunk_text: Optional[str] = None
+    if chunks and chunk_index < len(chunks):
+        chunk_text = str(chunks[chunk_index])
+    if chunk_text is None:
+        chunk_path = out_dir / "chunks" / chapter_id / f"{chunk_index + 1:06d}.txt"
+        if chunk_path.exists():
+            chunk_text = chunk_path.read_text(encoding="utf-8").rstrip("\n")
+    if chunk_text is None:
+        raise ValueError(f"Chunk text missing for {chapter_id} #{chunk_index + 1}")
+
+    durations = entry.get("durations_ms")
+    if not isinstance(durations, list) or len(durations) != chunk_count:
+        durations = [None] * chunk_count
+        entry["durations_ms"] = durations
+
+    if voice is None:
+        default_voice = manifest.get("voice") or DEFAULT_VOICE
+    else:
+        voice = voice.strip()
+        if not voice or voice.lower() == "default":
+            voice = DEFAULT_VOICE
+        default_voice = voice
+    default_voice = _normalize_voice_id(default_voice, DEFAULT_VOICE)
+
+    voice_id = default_voice
+    if voice_map_path:
+        voice_map = _load_voice_map(voice_map_path)
+        if voice_map:
+            default_voice = _normalize_voice_id(voice_map.get("default"), default_voice)
+            raw_chapter_voice = (
+                voice_map.get("chapters", {}).get(chapter_id)
+                if isinstance(voice_map.get("chapters"), dict)
+                else None
+            )
+            voice_id = _normalize_voice_id(raw_chapter_voice, default_voice)
+        else:
+            voice_id = default_voice
+    else:
+        voice_id = _normalize_voice_id(entry.get("voice"), default_voice)
+
+    voice_prompt = resolve_voice_prompt(voice_id, base_dir=base_dir)
+    tts_model = TTSModel.load_model()
+    sample_rate = int(tts_model.sample_rate)
+    if manifest.get("sample_rate") != sample_rate:
+        manifest["sample_rate"] = sample_rate
+
+    max_chars = int(manifest.get("max_chars") or 400)
+    pad_ms = int(manifest.get("pad_ms") or 150)
+    pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
+    pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
+
+    tts_text = prepare_tts_text(chunk_text)
+    seg_path = out_dir / "segments" / chapter_id / f"{chunk_index + 1:06d}.wav"
+    seg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not tts_text.strip():
+        if seg_path.exists():
+            seg_path.unlink()
+        durations[chunk_index] = 0
+        atomic_write_json(manifest_path, manifest)
+        return {
+            "status": "skipped",
+            "chapter_id": chapter_id,
+            "chunk_index": chunk_index,
+            "duration_ms": 0,
+        }
+
+    voice_state = tts_model.get_state_for_audio_prompt(voice_prompt)
+    sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
+    audio_parts: List["torch.Tensor"] = []
+    for sub_text in sub_texts:
+        audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+    if not audio_parts:
+        audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+    if len(audio_parts) == 1:
+        audio = audio_parts[0]
+    else:
+        audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
+    a16 = tensor_to_int16(audio)
+    if pad_tensor is not None:
+        a16 = torch.cat([a16, pad_tensor], dim=0)
+    write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
+
+    dms = wav_duration_ms(seg_path)
+    durations[chunk_index] = dms
+    atomic_write_json(manifest_path, manifest)
+    return {
+        "status": "ok",
+        "chapter_id": chapter_id,
+        "chunk_index": chunk_index,
+        "duration_ms": dms,
+    }
+
+
 def synthesize_text(
     text_path: Path,
     voice: Optional[str],

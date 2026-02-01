@@ -1902,6 +1902,15 @@
 
     <div class="player-bar">
       <div class="player-left">
+        <button class="btn icon" id="regenChunkBtn" aria-label="Regenerate chunk" title="Regenerate selected chunk">
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 12.65-5.65z" fill="currentColor"></path>
+          </svg>
+        </button>
         <div class="status" id="status">Last: —</div>
       </div>
       <div class="player-controls">
@@ -1996,9 +2005,12 @@
         currentChapterId: null,
         currentQueueIndex: 0,
         activeQueueIndex: null,
+        selectedQueueIndex: null,
         waitingFor: null,
         waitTimer: null,
         audioBase: "",
+        chunkCacheBust: {},
+        chunkRegenRunning: false,
         synthTimer: null,
         loadingBook: false,
         initialBookId: null,
@@ -2112,6 +2124,7 @@
       let currentAudio = audio;
       let nextAudio = audioNext;
       const bookmarkBtn = document.getElementById("bookmarkBtn");
+      const regenChunkBtn = document.getElementById("regenChunkBtn");
       const bookmarkList = document.getElementById("bookmarkList");
       const bookmarkPanel = document.getElementById("bookmarkPanel");
       const saveBookmarkBtn = document.getElementById("saveBookmarkBtn");
@@ -3207,7 +3220,10 @@
         state.currentChapterId = null;
         state.currentQueueIndex = 0;
         state.activeQueueIndex = null;
+        state.selectedQueueIndex = null;
         state.audioBase = "";
+        state.chunkCacheBust = {};
+        state.chunkRegenRunning = false;
         state.padMs = 0;
         state.mergeRunning = false;
         state.mergeReady = false;
@@ -3463,6 +3479,9 @@
           state.audioBase = data.audio_base || "";
           state.currentQueueIndex = 0;
           state.activeQueueIndex = null;
+          state.selectedQueueIndex = null;
+          state.chunkCacheBust = {};
+          state.chunkRegenRunning = false;
           state.waitingFor = null;
           if (state.waitTimer) {
             clearTimeout(state.waitTimer);
@@ -3502,6 +3521,7 @@
           await loadVoiceMap();
           await loadVoices();
           updateDeleteButtonState();
+          updateRegenButtonState();
           renderChapters();
           if (state.chapters.length) {
             const desired = desiredChapter || state.chapters[0].id;
@@ -3688,10 +3708,12 @@
         if (!item) {
           return "—";
         }
-        const chapterNum = item.chapterIndex + 1;
-        const chunkNum = item.chunkIndex + 1;
-        const snip = snippet(getChunkText(item), 10);
-        return snip ? `${chapterNum}/${chunkNum} ${snip}` : `${chapterNum}/${chunkNum}`;
+        const text = getChunkText(item);
+        if (!text) {
+          return "\"selected chunk\"";
+        }
+        const cleaned = text.replace(/\s+/g, " ").trim();
+        return cleaned ? `"${cleaned}"` : "\"selected chunk\"";
       }
 
       function describeStatusIndex(index) {
@@ -3868,6 +3890,96 @@
       function closeBookmarkPanel() {
         bookmarkPanel.classList.remove("open");
         window.removeEventListener("resize", positionBookmarkPanel);
+      }
+
+      function chunkCacheKey(item) {
+        return `${item.chapterId}:${item.chunkIndex}`;
+      }
+
+      function updateRegenButtonState() {
+        if (!regenChunkBtn) {
+          return;
+        }
+        const hasSelection = state.selectedQueueIndex !== null;
+        const disabled =
+          !state.book ||
+          !state.queue.length ||
+          !hasSelection ||
+          state.synthRunning ||
+          state.mergeRunning ||
+          state.chunkRegenRunning;
+        regenChunkBtn.disabled = disabled;
+        if (state.chunkRegenRunning) {
+          regenChunkBtn.title = "Regenerating chunk...";
+        } else if (!state.book) {
+          regenChunkBtn.title = "Load a book to regenerate chunks.";
+        } else if (!state.queue.length) {
+          regenChunkBtn.title = "No chunks available.";
+        } else if (!hasSelection) {
+          regenChunkBtn.title = "Select a chunk to regenerate.";
+        } else if (state.synthRunning || state.mergeRunning) {
+          regenChunkBtn.title = "Stop TTS/merge before regenerating.";
+        } else {
+          const label = describeIndex(state.selectedQueueIndex);
+          regenChunkBtn.title = `Regenerate ${label}`;
+        }
+      }
+
+      async function regenerateChunk() {
+        if (!state.book || state.chunkRegenRunning) {
+          return;
+        }
+        if (state.synthRunning || state.mergeRunning) {
+          setStatus("Stop TTS/merge before regenerating.");
+          return;
+        }
+        currentAudio.pause();
+        nextAudio.pause();
+        clearGapless();
+        clearPreload();
+        setPlayButton(false);
+        if (state.selectedQueueIndex === null) {
+          setStatus("Select a chunk to regenerate.");
+          return;
+        }
+        const item = state.queue[state.selectedQueueIndex];
+        if (!item) {
+          setStatus("Chunk not found.");
+          return;
+        }
+        const label = describeIndex(state.selectedQueueIndex);
+        const ok = confirm(`Regenerate audio for ${label}?`);
+        if (!ok) {
+          return;
+        }
+        state.chunkRegenRunning = true;
+        updateRegenButtonState();
+        setStatus(`Regenerating ${label}...`);
+        try {
+          await fetchJson("/api/synth/chunk", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              book_id: state.book.id,
+              chapter_id: item.chapterId,
+              chunk_index: item.chunkIndex,
+            }),
+          });
+          state.chunkCacheBust[chunkCacheKey(item)] = Date.now();
+          clearPreload();
+          if (state.currentQueueIndex === state.selectedQueueIndex) {
+            currentAudio.pause();
+            currentAudio.src = chunkUrl(item);
+            currentAudio.load();
+            setPlayButton(false);
+          }
+          setStatus(`Regenerated ${label}.`);
+        } catch (err) {
+          setStatus(err.message || "Failed to regenerate chunk.");
+        } finally {
+          state.chunkRegenRunning = false;
+          updateRegenButtonState();
+        }
       }
 
       function openBookMenu() {
@@ -4125,6 +4237,7 @@
         updateDeleteButtonState();
         updateSampleButtonState();
         updateAdvancedControls();
+        updateRegenButtonState();
       }
 
       function updateDeleteButtonState() {
@@ -4684,7 +4797,9 @@
           span.scrollIntoView({ block: "center", behavior: "smooth" });
         }
         state.activeQueueIndex = index;
+        state.selectedQueueIndex = index;
         applyLastPlayedHighlight();
+        updateRegenButtonState();
       }
 
       function hasUnsavedCleanChanges() {
@@ -5024,7 +5139,13 @@
 
       function chunkUrl(item) {
         const chunkNum = item.chunkIndex + 1;
-        return `${state.audioBase}/${item.chapterId}/${pad6(chunkNum)}.wav`;
+        const base = `${state.audioBase}/${item.chapterId}/${pad6(chunkNum)}.wav`;
+        const key = chunkCacheKey(item);
+        const bust = state.chunkCacheBust[key];
+        if (!bust) {
+          return base;
+        }
+        return `${base}?v=${bust}`;
       }
 
       function resetAudioPlayers() {
@@ -5365,6 +5486,9 @@
           openBookmarkPanel();
         }
       });
+      if (regenChunkBtn) {
+        regenChunkBtn.addEventListener("click", regenerateChunk);
+      }
       bookmarkList.addEventListener("click", (event) => {
         const target = event.target;
         if (!target || !target.dataset || !target.dataset.action) {

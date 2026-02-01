@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from . import epub as epub_util
 from . import sanitize
+from . import tts as tts_util
 from .text import guess_title_from_path, read_clean_text
 from .voice import BUILTIN_VOICES, DEFAULT_VOICE, resolve_voice_prompt
 
@@ -763,6 +764,12 @@ class SynthRequest(BaseModel):
     chunk_mode: str = "sentence"
     rechunk: bool = False
     use_voice_map: bool = False
+
+
+class ChunkSynthRequest(BaseModel):
+    book_id: str
+    chapter_id: str
+    chunk_index: int
 
 
 class MergeRequest(BaseModel):
@@ -1667,6 +1674,43 @@ def create_app(root_dir: Path) -> FastAPI:
         )
 
         return _no_store({"status": "started", "book_id": payload.book_id})
+
+    @app.post("/api/synth/chunk")
+    def synth_chunk(payload: ChunkSynthRequest) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="TTS is running.")
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(status_code=409, detail="Merge is running.")
+        if payload.chunk_index < 0:
+            raise HTTPException(status_code=400, detail="chunk_index must be >= 0")
+
+        tts_dir = book_dir / "tts"
+        manifest_path = tts_dir / "manifest.json"
+        if not manifest_path.exists():
+            raise HTTPException(status_code=404, detail="Missing TTS manifest.")
+
+        voice_map_path = _voice_map_path(book_dir)
+        if not voice_map_path.exists():
+            voice_map_path = None
+
+        try:
+            result = tts_util.synthesize_chunk(
+                out_dir=tts_dir,
+                chapter_id=payload.chapter_id,
+                chunk_index=payload.chunk_index,
+                voice=None,
+                voice_map_path=voice_map_path,
+                base_dir=repo_root,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return _no_store({"status": "ok", **result})
 
     @app.post("/api/synth/stop")
     def synth_stop(payload: StopRequest) -> JSONResponse:
