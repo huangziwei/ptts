@@ -74,7 +74,15 @@ if [ "$running" != "true" ]; then
   podman start "$container" >/dev/null
 fi
 
-exec podman exec -it \
+if [ -t 0 ]; then
+  exec podman exec -it \
+    -w /work \
+    -e HF_HOME=/work/.cache/huggingface \
+    "$container" \
+    "$@"
+fi
+
+exec podman exec \
   -w /work \
   -e HF_HOME=/work/.cache/huggingface \
   "$container" \
