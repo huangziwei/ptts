@@ -25,6 +25,17 @@ def test_prepare_tts_text_normalizes_roman_title() -> None:
     assert tts.prepare_tts_text("I") == "one."
 
 
+def test_prepare_tts_text_skips_roman_i_pronoun() -> None:
+    text = "In this chapter I continue to investigate."
+    assert tts.prepare_tts_text(text) == text
+
+
+def test_prepare_tts_text_normalizes_roman_heading_with_comma() -> None:
+    text = "In chapter I, we continue."
+    expected = "In chapter one, we continue."
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_make_chunks_keeps_name_initials_together() -> None:
     text = (
         "We are grateful to Irwin Z. Hoffman for his help."

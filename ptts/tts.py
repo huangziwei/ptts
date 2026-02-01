@@ -219,6 +219,32 @@ _ROMAN_HEADING_RE = re.compile(
     re.IGNORECASE,
 )
 _ROMAN_STANDALONE_RE = re.compile(r"^(?P<num>[IVXLCDM]+)(?P<trail>[^A-Za-z0-9]*)$", re.IGNORECASE)
+_ROMAN_I_DETERMINERS = {
+    "a",
+    "an",
+    "another",
+    "any",
+    "each",
+    "every",
+    "his",
+    "her",
+    "its",
+    "my",
+    "no",
+    "our",
+    "some",
+    "that",
+    "the",
+    "their",
+    "this",
+    "your",
+}
+_ROMAN_HEADING_TRAIL_PUNCT = (
+    _SENT_PUNCT
+    | _CLAUSE_PUNCT
+    | set(_CLOSING_PUNCT)
+    | {"-", "\u2013", "\u2014"}
+)
 _WORD_ONES = (
     "zero",
     "one",
@@ -819,9 +845,47 @@ def split_tts_text_for_synthesis(text: str, max_chars: int) -> List[str]:
 
 
 def _normalize_roman_numerals(text: str) -> str:
+    def prev_word(start: int) -> Optional[str]:
+        match = re.search(r"([A-Za-z]+)\s*$", text[:start])
+        if not match:
+            return None
+        return match.group(1)
+
+    def next_word(start: int) -> Optional[str]:
+        match = re.search(r"\b([A-Za-z]+)", text[start:])
+        if not match:
+            return None
+        return match.group(1)
+
+    def next_non_space(start: int) -> str:
+        match = re.search(r"\S", text[start:])
+        if not match:
+            return ""
+        return match.group(0)
+
+    def should_convert_roman_i(match: re.Match[str]) -> bool:
+        label = match.group("label")
+        if label and label[0].isupper():
+            return True
+        prev = prev_word(match.start())
+        if prev and prev.lower() in _ROMAN_I_DETERMINERS:
+            return False
+        next_char = next_non_space(match.end())
+        if not next_char:
+            return True
+        if next_char in _ROMAN_HEADING_TRAIL_PUNCT:
+            return True
+        next_token = next_word(match.end())
+        if next_token and next_token[0].isupper():
+            return True
+        return False
+
     def replace_heading(match: re.Match[str]) -> str:
+        roman = match.group("num")
         number = _roman_to_int(match.group("num"))
         if number is None:
+            return match.group(0)
+        if roman.upper() == "I" and not should_convert_roman_i(match):
             return match.group(0)
         return f"{match.group('label')} {_int_to_words(number)}"
 
