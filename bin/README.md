@@ -1,6 +1,6 @@
 # pmx: Podman wrapper for ptts
 
-Use `pmx` when you need to run `ptts` inside Podman (e.g., Intel Macs or machines without compatible local PyTorch/JAX builds). 
+For the unfortunate few who still use Intel Mac, I have you covered. Use `pmx` when you need to run `ptts` inside Podman.
 
 ## Setup (Podman)
 
