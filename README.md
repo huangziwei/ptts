@@ -2,10 +2,6 @@
 
 ![screenshot](.github/screenshot/player.png)
 
-> ## Note
-> On Apple Silicon (and other modern machines), you can run `ptts` directly with `uv` — no Podman needed.
-> If you still need Podman (e.g., Intel Macs or incompatible local runtimes), see `bin/README.md` for the `pmx` wrapper and container setup.
-
 ## Prerequisites
 
 ```bash
