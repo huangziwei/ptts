@@ -3,30 +3,25 @@
 ![screenshot](.github/screenshot/player.png)
 
 > ## Note
-> As I am still using a vintage Intel MacBook Pro, many cool tools that use latest PyTorch or JAX cannot be run on it directly. I resort to using VMs via Podman. But on other compatible machines, Podman is not necessary at all. Just remove the `./bin/pmx` part and use `uv` directly.
+> On Apple Silicon (and other modern machines), you can run `ptts` directly with `uv` — no Podman needed.
+> If you still need Podman (e.g., Intel Macs or incompatible local runtimes), see `bin/README.md` for the `pmx` wrapper and container setup.
 
 ## Prerequisites
 
 ```bash
 git clone https://github.com/huangziwei/ptts
 cd ~/ptts
-mkdir -p .cache/huggingface
-chmod +x bin/pmx
-
-brew install podman
-podman --version # tested with 5.7.1
-podman machine init --cpus 6 --memory 8192 --disk-size 60 --now pocket-tts
 
 # Install project dependencies into .venv (required for `ptts` CLI)
-PMX_OPTS="-p 1912:1912" ./bin/pmx uv sync
+uv sync
 
 ## To use voice cloning, you need to accept the terms via browser at https://huggingface.co/kyutai/pocket-tts
 ## Then you need to save the access token with correct permissions (I ticked everything in Repositories and Inference)
 ## This step can be skipped if you don't need voice cloning
-# ./bin/pmx uvx hf auth login
+# uvx hf auth login
 
 ## Run once and test if it works in the pocket-tts web ui, or not
-# ./bin/pmx uv run pocket-tts serve --host 0.0.0.0 --port 1912 
+# uv run pocket-tts serve --host 0.0.0.0 --port 1912
 ```
 
 ## TTS a book
@@ -34,7 +29,7 @@ PMX_OPTS="-p 1912:1912" ./bin/pmx uv sync
 ### via the local web app
 
 ```bash
-./bin/pmx uv run ptts play \
+uv run ptts play \
   --root out \
   --host 0.0.0.0 \
   --port 1912
@@ -46,28 +41,28 @@ Open `http://localhost:1912`.
 
 #### 1) Ingest EPUB or TXT into raw chapters
 ```bash
-./bin/pmx uv run ptts ingest \
+uv run ptts ingest \
   --input books/Some-Book.epub \
   --out out/some-book
 ```
 
 Plain text input works the same way:
 ```bash
-./bin/pmx uv run ptts ingest \
+uv run ptts ingest \
   --input books/Some-Book.txt \
   --out out/some-book
 ```
 
 #### 2) Sanitize (clean) chapters
 ```bash
-./bin/pmx uv run ptts sanitize \
+uv run ptts sanitize \
   --book out/some-book \
   --overwrite
 ```
 
 #### 3) Synthesize audio (TTS)
 ```bash
-./bin/pmx uv run --with pocket-tts ptts synth \
+uv run --with pocket-tts ptts synth \
   --book out/some-book \
   --max-chars 400 \
   --pad-ms 150
@@ -76,19 +71,15 @@ Plain text input works the same way:
 By default, `ptts synth` uses the built-in voice `alba`. To choose a built-in voice
 explicitly (or use a cloned wav), pass `--voice`:
 ```bash
-./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --voice alba
-./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --voice voices/ray.wav
+uv run --with pocket-tts ptts synth --book out/some-book --voice alba
+uv run --with pocket-tts ptts synth --book out/some-book --voice voices/ray.wav
 ```
 
 #### 4) Merge to M4B
 ```bash
-./bin/pmx uv run ptts merge \
+uv run ptts merge \
   --book out/some-book \
   --output out/some-book/some-book.m4b
 ```
 
-`ptts merge` requires `ffmpeg` on PATH. If you are using Podman, install it in the same run (or use a custom image):
-
-```bash
-./bin/pmx bash -lc 'apt-get update && apt-get install -y ffmpeg && uv run ptts merge --book out/some-book --output out/some-book/some-book.m4b'
-```
+`ptts merge` requires `ffmpeg` on PATH (for macOS: `brew install ffmpeg`).
