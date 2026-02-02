@@ -14,7 +14,8 @@ dependencies = [
   "python-multipart>=0.0.9",
   "pytest>=7.4",
   "rich>=13.7",
-  "torch==2.9.1+cpu",
+  "torch==2.9.1+cpu; sys_platform != 'darwin'",
+  "torch; sys_platform == 'darwin'",
   "uvicorn>=0.27",
 ]
 
@@ -29,4 +30,11 @@ build-backend = "setuptools.build_meta"
 packages = ["ptts"]
 
 [tool.uv]
-extra-index-url = ["https://download.pytorch.org/whl/cpu"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
