@@ -488,6 +488,7 @@ def _clear_merge_progress(tts_dir: Path) -> None:
         except OSError:
             continue
 
+
 def _merge_ready(book_dir: Path) -> bool:
     manifest = _load_json(book_dir / "tts" / "manifest.json")
     if not manifest:
@@ -1955,12 +1956,13 @@ def create_app(root_dir: Path) -> FastAPI:
             output_path = parts[index - 1]
         else:
             if not output_path.exists():
-                if len(parts) == 1:
-                    output_path = parts[0]
-                elif parts:
-                    raise HTTPException(
-                        status_code=409, detail="Multiple M4B parts available."
-                    )
+                if parts:
+                    if len(parts) == 1:
+                        output_path = parts[0]
+                    else:
+                        raise HTTPException(
+                            status_code=409, detail="Multiple M4B parts available."
+                        )
                 else:
                     raise HTTPException(status_code=404, detail="M4B not found.")
         return FileResponse(
