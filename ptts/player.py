@@ -434,6 +434,60 @@ def _merge_output_path(book_dir: Path) -> Path:
     return library_dir / f"{book_dir.name}.m4b"
 
 
+def _merge_part_paths(book_dir: Path) -> list[Path]:
+    output_path = _merge_output_path(book_dir)
+    library_dir = output_path.parent
+    suffix = output_path.suffix or ".m4b"
+    pattern = f"{output_path.stem}.part*{suffix}"
+    if not library_dir.exists():
+        return []
+    return sorted(path for path in library_dir.glob(pattern) if path.is_file())
+
+
+def _merge_has_output(book_dir: Path) -> bool:
+    output_path = _merge_output_path(book_dir)
+    return output_path.exists() or bool(_merge_part_paths(book_dir))
+
+
+def _merge_output_part_names(book_dir: Path) -> list[str]:
+    return [path.name for path in _merge_part_paths(book_dir)]
+
+
+def _delete_merge_outputs(book_dir: Path) -> bool:
+    removed = False
+    output_path = _merge_output_path(book_dir)
+    if output_path.exists():
+        output_path.unlink()
+        removed = True
+    for part_path in _merge_part_paths(book_dir):
+        try:
+            part_path.unlink()
+            removed = True
+        except OSError:
+            continue
+    return removed
+
+
+def _merge_progress_data(tts_dir: Path) -> dict:
+    progress_path = tts_dir / "merge.progress.json"
+    if progress_path.exists():
+        return _load_json(progress_path)
+    part_paths = sorted(tts_dir.glob("merge.progress.part*.json"))
+    if part_paths:
+        return _load_json(part_paths[-1])
+    return {}
+
+
+def _clear_merge_progress(tts_dir: Path) -> None:
+    progress_path = tts_dir / "merge.progress.json"
+    if progress_path.exists():
+        progress_path.unlink()
+    for part_path in tts_dir.glob("merge.progress.part*.json"):
+        try:
+            part_path.unlink()
+        except OSError:
+            continue
+
 def _merge_ready(book_dir: Path) -> bool:
     manifest = _load_json(book_dir / "tts" / "manifest.json")
     if not manifest:
@@ -619,8 +673,7 @@ def _audio_progress_summary(book_dir: Path, manifest: dict) -> tuple[int, int]:
     if total:
         done = min(done, total)
     if total and done < total:
-        m4b_path = _merge_output_path(book_dir)
-        if m4b_path.exists():
+        if _merge_has_output(book_dir):
             done = total
         elif done == 0:
             wav_done = _count_segment_wavs(book_dir)
@@ -944,9 +997,7 @@ def create_app(root_dir: Path) -> FastAPI:
         merge_job = merge_jobs.get(payload.book_id)
         if merge_job and merge_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="Stop merge before deleting.")
-        m4b_path = _merge_output_path(book_dir)
-        if m4b_path.exists():
-            m4b_path.unlink()
+        _delete_merge_outputs(book_dir)
         if book_dir.exists():
             shutil.rmtree(book_dir)
         return _no_store({"status": "deleted", "book_id": payload.book_id})
@@ -957,11 +1008,7 @@ def create_app(root_dir: Path) -> FastAPI:
         merge_job = merge_jobs.get(payload.book_id)
         if merge_job and merge_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="Stop merge before deleting.")
-        m4b_path = _merge_output_path(book_dir)
-        removed = False
-        if m4b_path.exists():
-            m4b_path.unlink()
-            removed = True
+        removed = _delete_merge_outputs(book_dir)
         return _no_store(
             {
                 "status": "deleted" if removed else "missing",
@@ -1136,9 +1183,7 @@ def create_app(root_dir: Path) -> FastAPI:
                         status_code=400,
                         detail="Invalid book path.",
                     )
-                m4b_path = _merge_output_path(resolved)
-                if m4b_path.exists():
-                    m4b_path.unlink()
+                _delete_merge_outputs(resolved)
                 if resolved.is_dir():
                     shutil.rmtree(resolved)
                 else:
@@ -1777,7 +1822,9 @@ def create_app(root_dir: Path) -> FastAPI:
         book_dir = _resolve_book_dir(root_dir, book_id)
         output_path = _merge_output_path(book_dir)
         tts_dir = book_dir / "tts"
-        progress_path = tts_dir / "merge.progress.json"
+        output_parts = _merge_output_part_names(book_dir)
+        if output_path.exists():
+            output_parts = []
         job = merge_jobs.get(book_id)
         running = False
         exit_code = None
@@ -1803,7 +1850,7 @@ def create_app(root_dir: Path) -> FastAPI:
                 stage = "installing"
             else:
                 stage = "merging"
-        elif output_path.exists():
+        elif output_path.exists() or output_parts:
             stage = "done"
         elif exit_code is not None and exit_code != 0:
             stage = "failed"
@@ -1812,10 +1859,11 @@ def create_app(root_dir: Path) -> FastAPI:
             "running": running,
             "exit_code": exit_code,
             "output_path": str(output_path),
-            "output_exists": output_path.exists(),
+            "output_exists": output_path.exists() or bool(output_parts),
+            "output_parts": output_parts,
             "log_path": log_path,
             "stage": stage,
-            "progress": _load_json(progress_path) if progress_path.exists() else {},
+            "progress": _merge_progress_data(tts_dir),
         }
         return _no_store(payload)
 
@@ -1832,18 +1880,20 @@ def create_app(root_dir: Path) -> FastAPI:
         if not _merge_ready(book_dir):
             raise HTTPException(status_code=409, detail="TTS is not complete.")
 
-        if output_path.exists() and not payload.overwrite:
+        if _merge_has_output(book_dir) and not payload.overwrite:
             raise HTTPException(status_code=409, detail="Output file already exists.")
 
         if ffmpeg_job and ffmpeg_job.process.poll() is None:
             raise HTTPException(status_code=409, detail="ffmpeg install in progress.")
 
+        if payload.overwrite:
+            _delete_merge_outputs(book_dir)
+
         tts_dir = book_dir / "tts"
         tts_dir.mkdir(parents=True, exist_ok=True)
         log_path = tts_dir / "merge.log"
         progress_path = tts_dir / "merge.progress.json"
-        if progress_path.exists():
-            progress_path.unlink()
+        _clear_merge_progress(tts_dir)
         log_handle = log_path.open("w", encoding="utf-8")
 
         install_ffmpeg = shutil.which("ffmpeg") is None
@@ -1890,11 +1940,29 @@ def create_app(root_dir: Path) -> FastAPI:
         )
 
     @app.get("/api/m4b/download")
-    def download_m4b(book_id: str) -> FileResponse:
+    def download_m4b(book_id: str, request: Request) -> FileResponse:
         book_dir = _resolve_book_dir(root_dir, book_id)
+        part = request.query_params.get("part")
         output_path = _merge_output_path(book_dir)
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="M4B not found.")
+        parts = _merge_part_paths(book_dir)
+        if part is not None:
+            try:
+                index = int(part)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid part index.") from exc
+            if index < 1 or index > len(parts):
+                raise HTTPException(status_code=404, detail="M4B part not found.")
+            output_path = parts[index - 1]
+        else:
+            if not output_path.exists():
+                if len(parts) == 1:
+                    output_path = parts[0]
+                elif parts:
+                    raise HTTPException(
+                        status_code=409, detail="Multiple M4B parts available."
+                    )
+                else:
+                    raise HTTPException(status_code=404, detail="M4B not found.")
         return FileResponse(
             path=str(output_path),
             media_type="audio/x-m4b",

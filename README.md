@@ -78,4 +78,15 @@ uv run ptts merge \
   --output out/some-book/some-book.m4b
 ```
 
+Merge auto-splits if the book is longer than 8 hours, keeping parts near-equal
+and splitting only at chapter boundaries.
+
+To override the split threshold:
+```bash
+uv run ptts merge \
+  --book out/some-book \
+  --output out/some-book/some-book.m4b \
+  --split-hours 8
+```
+
 `ptts merge` requires `ffmpeg` on PATH (for macOS: `brew install ffmpeg`).

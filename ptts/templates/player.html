@@ -2043,6 +2043,7 @@
         mergeReady: false,
         mergeExitCode: null,
         mergeOutputExists: false,
+        mergeOutputParts: [],
         mergeStage: "idle",
         editOpen: false,
         previewChapterIndex: null,
@@ -3229,6 +3230,7 @@
         state.mergeReady = false;
         state.mergeExitCode = null;
         state.mergeOutputExists = false;
+        state.mergeOutputParts = [];
         state.mergeStage = "idle";
         state.synthRunning = false;
         state.synthMode = "tts";
@@ -3465,6 +3467,7 @@
           state.mergeReady = false;
           state.mergeExitCode = null;
           state.mergeOutputExists = false;
+          state.mergeOutputParts = [];
           state.mergeStage = "idle";
           state.synthMode = "tts";
           mergeStatus.textContent = "";
@@ -4210,13 +4213,21 @@
         if (!downloadM4bBtn) {
           return;
         }
+        const parts = state.mergeOutputParts || [];
         const available = state.mergeOutputExists && !state.mergeRunning;
         downloadM4bBtn.hidden = !available;
         downloadM4bBtn.disabled = !available;
         if (!available) {
           downloadM4bBtn.title = "No merged M4B available.";
+          downloadM4bBtn.textContent = "Download M4B";
         } else {
-          downloadM4bBtn.title = "Download M4B";
+          if (parts.length > 1) {
+            downloadM4bBtn.title = "Download M4B parts";
+            downloadM4bBtn.textContent = "Download Parts";
+          } else {
+            downloadM4bBtn.title = "Download M4B";
+            downloadM4bBtn.textContent = "Download M4B";
+          }
         }
       }
 
@@ -4364,6 +4375,9 @@
         state.mergeExitCode =
           typeof data.exit_code === "number" ? data.exit_code : null;
         state.mergeOutputExists = !!data.output_exists;
+        state.mergeOutputParts = Array.isArray(data.output_parts)
+          ? data.output_parts
+          : [];
         state.mergeStage = data.stage || (state.mergeRunning ? "merging" : "idle");
         updateMergeButtonState();
         let percentText = "";
@@ -4375,7 +4389,11 @@
         } else if (state.mergeStage === "merging") {
           mergeStatus.textContent = `Merging book...${percentText}`;
         } else if (state.mergeStage === "done") {
-          mergeStatus.textContent = "M4B ready.";
+          if (state.mergeOutputParts.length > 1) {
+            mergeStatus.textContent = `M4B parts ready (${state.mergeOutputParts.length}).`;
+          } else {
+            mergeStatus.textContent = "M4B ready.";
+          }
         } else if (state.mergeStage === "failed") {
           mergeStatus.textContent = "Merge failed. Check tts/merge.log.";
         } else {
@@ -4419,6 +4437,7 @@
         }
         state.mergeExitCode = null;
         state.mergeOutputExists = false;
+        state.mergeOutputParts = [];
         mergeStatus.textContent = "";
         updateMergeButtonState();
         const payload = {
@@ -4472,16 +4491,39 @@
           setStatus("No merged M4B available.");
           return;
         }
-        const url = `/api/m4b/download?book_id=${encodeURIComponent(
+        const parts = state.mergeOutputParts || [];
+        const baseUrl = `/api/m4b/download?book_id=${encodeURIComponent(
           state.book.id
         )}`;
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `${state.book.id}.m4b`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setStatus("Downloading M4B...");
+        if (!parts.length) {
+          const link = document.createElement("a");
+          link.href = baseUrl;
+          link.download = `${state.book.id}.m4b`;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          setStatus("Downloading M4B...");
+          return;
+        }
+        if (parts.length === 1) {
+          const link = document.createElement("a");
+          link.href = `${baseUrl}&part=1`;
+          link.download = parts[0];
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          setStatus("Downloading M4B part...");
+          return;
+        }
+        parts.forEach((name, idx) => {
+          const link = document.createElement("a");
+          link.href = `${baseUrl}&part=${idx + 1}`;
+          link.download = name;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        });
+        setStatus(`Downloading ${parts.length} M4B parts...`);
       }
 
       async function sampleSynth() {
@@ -4580,6 +4622,7 @@
             body: JSON.stringify({ book_id: state.book.id }),
           });
           state.mergeOutputExists = false;
+          state.mergeOutputParts = [];
           state.mergeExitCode = null;
           state.mergeStage = "idle";
           mergeStatus.textContent = "";
@@ -4611,6 +4654,7 @@
           });
           setStatus("TTS cache deleted.");
           state.mergeOutputExists = false;
+          state.mergeOutputParts = [];
           state.mergeExitCode = null;
           state.mergeStage = "idle";
           mergeStatus.textContent = "";

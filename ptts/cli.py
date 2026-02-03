@@ -346,6 +346,8 @@ def _merge(args: argparse.Namespace) -> int:
             bitrate=args.bitrate,
             overwrite=args.overwrite,
             progress_path=Path(args.progress_file) if args.progress_file else None,
+            split_hours=args.split_hours,
+            split_count=args.split_count,
         )
     except Exception as exc:
         sys.stderr.write(f"Merge failed: {exc}\n")
@@ -536,6 +538,16 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument(
         "--progress-file",
         help="Write merge progress to JSON file",
+    )
+    merge.add_argument(
+        "--split-hours",
+        type=float,
+        help="Target hours per part; splits at chapter boundaries",
+    )
+    merge.add_argument(
+        "--split-count",
+        type=int,
+        help="Number of parts to split into; splits at chapter boundaries",
     )
     merge.set_defaults(func=_merge)
 
