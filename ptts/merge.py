@@ -232,7 +232,12 @@ def _parse_timecode(value: str) -> int:
 
 
 def _write_progress(
-    path: Path, stage: str, out_time_ms: int, total_ms: int
+    path: Path,
+    stage: str,
+    out_time_ms: int,
+    total_ms: int,
+    part_index: int | None = None,
+    part_total: int | None = None,
 ) -> None:
     percent = 0.0
     if total_ms > 0:
@@ -243,6 +248,10 @@ def _write_progress(
         "total_ms": int(total_ms),
         "percent": round(percent, 2),
     }
+    if part_index is not None:
+        payload["part_index"] = int(part_index)
+    if part_total is not None:
+        payload["part_total"] = int(part_total)
     _atomic_write_json(path, payload)
 
 
@@ -518,8 +527,17 @@ def _run_ffmpeg_with_progress(
     cmd: list[str],
     progress_path: Path,
     total_ms: int,
+    part_index: int | None = None,
+    part_total: int | None = None,
 ) -> int:
-    _write_progress(progress_path, "merging", 0, total_ms)
+    _write_progress(
+        progress_path,
+        "merging",
+        0,
+        total_ms,
+        part_index=part_index,
+        part_total=part_total,
+    )
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -552,12 +570,33 @@ def _run_ffmpeg_with_progress(
                     pending_time_ms = None
                 if value == "end":
                     out_time_ms = total_ms or out_time_ms
-                    _write_progress(progress_path, "done", out_time_ms, total_ms)
+                    _write_progress(
+                        progress_path,
+                        "done",
+                        out_time_ms,
+                        total_ms,
+                        part_index=part_index,
+                        part_total=part_total,
+                    )
                 elif value == "continue":
-                    _write_progress(progress_path, "merging", out_time_ms, total_ms)
+                    _write_progress(
+                        progress_path,
+                        "merging",
+                        out_time_ms,
+                        total_ms,
+                        part_index=part_index,
+                        part_total=part_total,
+                    )
     proc.wait()
     if proc.returncode != 0:
-        _write_progress(progress_path, "failed", out_time_ms, total_ms)
+        _write_progress(
+            progress_path,
+            "failed",
+            out_time_ms,
+            total_ms,
+            part_index=part_index,
+            part_total=part_total,
+        )
     return int(proc.returncode)
 
 
@@ -636,7 +675,13 @@ def merge_book(
             progress=part_progress is not None,
         )
         if part_progress is not None:
-            code = _run_ffmpeg_with_progress(cmd, part_progress, part_ms)
+            code = _run_ffmpeg_with_progress(
+                cmd,
+                part_progress,
+                part_ms,
+                part_index=idx,
+                part_total=len(parts),
+            )
         else:
             proc = subprocess.run(cmd, cwd=str(tts_dir))
             code = int(proc.returncode)

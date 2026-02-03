@@ -4380,14 +4380,31 @@
           : [];
         state.mergeStage = data.stage || (state.mergeRunning ? "merging" : "idle");
         updateMergeButtonState();
-        let percentText = "";
-        if (data.progress && typeof data.progress.percent === "number") {
-          percentText = ` ${data.progress.percent.toFixed(1)}%`;
-        }
+        const progress = data && data.progress ? data.progress : {};
+        const percent =
+          progress && typeof progress.percent === "number"
+            ? progress.percent
+            : null;
+        const partIndex =
+          progress && typeof progress.part_index === "number"
+            ? progress.part_index
+            : null;
+        const partTotal =
+          progress && typeof progress.part_total === "number"
+            ? progress.part_total
+            : null;
         if (state.mergeStage === "installing") {
           mergeStatus.textContent = "Installing ffmpeg...";
         } else if (state.mergeStage === "merging") {
-          mergeStatus.textContent = `Merging book...${percentText}`;
+          let label = "Merging book";
+          if (partIndex && partTotal && partTotal > 1) {
+            label = `Merging part ${partIndex}/${partTotal}`;
+          }
+          if (percent !== null) {
+            mergeStatus.textContent = `${label}: ${percent.toFixed(1)}%`;
+          } else {
+            mergeStatus.textContent = `${label}...`;
+          }
         } else if (state.mergeStage === "done") {
           if (state.mergeOutputParts.length > 1) {
             mergeStatus.textContent = `M4B parts ready (${state.mergeOutputParts.length}).`;
