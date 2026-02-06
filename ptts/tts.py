@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import contextvars
 import hashlib
 import json
+import logging
 import re
 import shutil
 import sys
 import time
 import unicodedata
 import wave
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from rich.progress import (
     BarColumn,
@@ -31,6 +34,64 @@ try:
 except Exception:  # pragma: no cover - optional runtime dependency
     torch = None
     TTSModel = None
+
+
+_TTS_WARNING_CONTEXT = contextvars.ContextVar("_TTS_WARNING_CONTEXT", default=None)
+_TTS_WARNING_FILTER_INSTALLED = False
+
+
+@contextmanager
+def _tts_warning_context(
+    chapter_id: str,
+    chunk_idx: int,
+    chunk_total: int,
+    sub_idx: Optional[int] = None,
+    sub_total: Optional[int] = None,
+) -> Iterator[None]:
+    token = _TTS_WARNING_CONTEXT.set(
+        {
+            "chapter_id": chapter_id,
+            "chunk_idx": chunk_idx,
+            "chunk_total": chunk_total,
+            "sub_idx": sub_idx,
+            "sub_total": sub_total,
+        }
+    )
+    try:
+        yield
+    finally:
+        _TTS_WARNING_CONTEXT.reset(token)
+
+
+class _TTSWarningContextFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno != logging.WARNING:
+            return True
+        if record.name != "pocket_tts.models.tts_model":
+            return True
+        msg = record.getMessage()
+        if "Maximum generation length reached without EOS" not in msg:
+            return True
+        ctx = _TTS_WARNING_CONTEXT.get()
+        if not ctx:
+            return True
+        details = (
+            f" [chapter={ctx['chapter_id']} chunk={ctx['chunk_idx']}/{ctx['chunk_total']}"
+        )
+        if ctx.get("sub_idx") is not None and ctx.get("sub_total") is not None:
+            details += f" sub={ctx['sub_idx']}/{ctx['sub_total']}"
+        details += "]"
+        record.msg = f"{msg}{details}"
+        record.args = ()
+        return True
+
+
+def _install_tts_warning_filter() -> None:
+    global _TTS_WARNING_FILTER_INSTALLED
+    if _TTS_WARNING_FILTER_INSTALLED:
+        return
+    logging.getLogger("pocket_tts.models.tts_model").addFilter(_TTSWarningContextFilter())
+    _TTS_WARNING_FILTER_INSTALLED = True
 
 
 _SENT_SPLIT_RE = re.compile(
@@ -1468,6 +1529,7 @@ def synthesize(
     write_status(out_dir, "cloning", "Preparing voice")
 
     tts_model = TTSModel.load_model()
+    _install_tts_warning_filter()
     sample_rate = int(tts_model.sample_rate)
     if manifest.get("sample_rate") != sample_rate:
         manifest["sample_rate"] = sample_rate
@@ -1578,17 +1640,22 @@ def synthesize(
                         pause_multiplier = 1
 
                 sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
+                sub_total = len(sub_texts)
                 audio_parts: List["torch.Tensor"] = []
-                for sub_text in sub_texts:
+                for sub_idx, sub_text in enumerate(sub_texts, start=1):
                     sub_text = sub_text.strip()
                     if not sub_text:
                         continue
                     if not _ends_with_sentence_punct(sub_text):
                         sub_text = f"{sub_text}."
-                    audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+                    with _tts_warning_context(
+                        chapter_id, chunk_idx, chapter_total, sub_idx, sub_total
+                    ):
+                        audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
 
                 if not audio_parts:
-                    audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+                    with _tts_warning_context(chapter_id, chunk_idx, chapter_total, 1, 1):
+                        audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
 
                 if len(audio_parts) == 1:
                     audio = audio_parts[0]
@@ -1734,6 +1801,7 @@ def synthesize_chunk(
 
     voice_prompt = resolve_voice_prompt(voice_id, base_dir=base_dir)
     tts_model = TTSModel.load_model()
+    _install_tts_warning_filter()
     sample_rate = int(tts_model.sample_rate)
     if manifest.get("sample_rate") != sample_rate:
         manifest["sample_rate"] = sample_rate
@@ -1766,11 +1834,16 @@ def synthesize_chunk(
 
     voice_state = tts_model.get_state_for_audio_prompt(voice_prompt)
     sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
+    sub_total = len(sub_texts)
     audio_parts: List["torch.Tensor"] = []
-    for sub_text in sub_texts:
-        audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+    for sub_idx, sub_text in enumerate(sub_texts, start=1):
+        with _tts_warning_context(
+            chapter_id, chunk_index + 1, chunk_count, sub_idx, sub_total
+        ):
+            audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
     if not audio_parts:
-        audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+        with _tts_warning_context(chapter_id, chunk_index + 1, chunk_count, 1, 1):
+            audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
     if len(audio_parts) == 1:
         audio = audio_parts[0]
     else:
