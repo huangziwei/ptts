@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,20 @@ def test_html_to_text_normalizes_curly_apostrophe() -> None:
     assert epub_util.html_to_text(html) == "It's fine."
 
 
+def test_html_to_text_preserves_heading_break_strength() -> None:
+    html = (
+        b"<html><body>"
+        b"<h1>Main Title</h1>"
+        b"<p>First paragraph.</p>"
+        b"<h2>2.</h2>"
+        b"<p>Second paragraph.</p>"
+        b"</body></html>"
+    )
+    text = epub_util.html_to_text(html)
+    assert "Main Title\n\n\n\n\nFirst paragraph." in text
+    assert "2.\n\n\nSecond paragraph." in text
+
+
 def test_extract_chapters_preserves_multi_toc_split_series() -> None:
     book = _load_book(CHANDLER_EPUB)
     entries = epub_util.build_toc_entries(book)
@@ -135,3 +150,9 @@ def test_extract_chapters_merges_single_toc_split_series() -> None:
         snippet = _find_unique_snippet(second_text, first_text)
         if snippet:
             assert snippet in chapter.text
+
+
+def test_extract_chapters_preserves_section_breaks_in_news_epub() -> None:
+    book = _load_book(NEWS_EPUB)
+    chapters = epub_util.extract_chapters(book, prefer_toc=True)
+    assert any(re.search(r"\n{3,}", chapter.text) for chapter in chapters)

@@ -209,6 +209,17 @@ def test_make_chunks_prefers_clause_punctuation_for_long_sentences() -> None:
     assert chunks == ["Alice Johnson, Bob Smith,", "Carol Jones, Dave Brown."]
 
 
+def test_compute_chunk_pause_multipliers_from_break_strength() -> None:
+    text = "Chapter Title\n\n\n\n\nFirst section.\n\n\nSecond section."
+    spans = tts.make_chunk_spans(text, max_chars=200)
+    assert [text[start:end] for start, end in spans] == [
+        "Chapter Title",
+        "First section.",
+        "Second section.",
+    ]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [5, 3, 1]
+
+
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
     chunk_dir = tmp_path / "chunks"
     chunks = ["One.", "Two."]
@@ -242,3 +253,4 @@ def test_prepare_manifest_writes_chunks(tmp_path: Path) -> None:
     assert (out_dir / "chunks" / "0001-test" / "000001.txt").exists()
     assert manifest["chapters"][0]["chunks"] == ["Hello world"]
     assert manifest["chapters"][0]["chunk_spans"] == [[0, 11]]
+    assert manifest["chapters"][0]["pause_multipliers"] == [1]

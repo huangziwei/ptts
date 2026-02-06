@@ -245,6 +245,10 @@ _ROMAN_HEADING_TRAIL_PUNCT = (
     | set(_CLOSING_PUNCT)
     | {"-", "\u2013", "\u2014"}
 )
+_SECTION_BREAK_NEWLINES = 3
+_TITLE_BREAK_NEWLINES = 5
+_SECTION_BREAK_PAD_MULTIPLIER = 3
+_TITLE_BREAK_PAD_MULTIPLIER = 5
 _WORD_ONES = (
     "zero",
     "one",
@@ -371,6 +375,50 @@ def split_sentence_spans(paragraph: str, offset: int) -> List[Tuple[int, int]]:
     if span:
         spans.append((offset + span[0], offset + span[1]))
     return spans
+
+
+def _coerce_span_pairs(spans: Sequence[Sequence[int]]) -> List[Tuple[int, int]]:
+    pairs: List[Tuple[int, int]] = []
+    for span in spans:
+        if not isinstance(span, (list, tuple)) or len(span) != 2:
+            continue
+        try:
+            start = int(span[0])
+            end = int(span[1])
+        except (TypeError, ValueError):
+            continue
+        if start < 0 or end < start:
+            continue
+        pairs.append((start, end))
+    return pairs
+
+
+def _pause_multiplier_from_gap(gap: str) -> int:
+    if not gap:
+        return 1
+    max_run = 0
+    for match in re.finditer(r"\n+", gap):
+        max_run = max(max_run, len(match.group(0)))
+    if max_run >= _TITLE_BREAK_NEWLINES:
+        return _TITLE_BREAK_PAD_MULTIPLIER
+    if max_run >= _SECTION_BREAK_NEWLINES:
+        return _SECTION_BREAK_PAD_MULTIPLIER
+    return 1
+
+
+def compute_chunk_pause_multipliers(
+    text: str, spans: Sequence[Tuple[int, int]]
+) -> List[int]:
+    if not spans:
+        return []
+    multipliers = [1] * len(spans)
+    for idx in range(len(spans) - 1):
+        end = int(spans[idx][1])
+        next_start = int(spans[idx + 1][0])
+        if next_start < end:
+            continue
+        multipliers[idx] = _pause_multiplier_from_gap(text[end:next_start])
+    return multipliers
 
 
 def _next_word(text: str, start: int) -> str:
@@ -1188,6 +1236,30 @@ def prepare_manifest(
                     "manifest.json missing chunk spans. "
                     "Run with --rechunk to regenerate manifest."
                 )
+            span_pairs = _coerce_span_pairs(chunk_spans)
+            if len(span_pairs) != len(chunks):
+                raise ValueError(
+                    "manifest.json contains invalid chunk spans. "
+                    "Run with --rechunk to regenerate manifest."
+                )
+            expected_pause = compute_chunk_pause_multipliers(
+                ch_input.text, span_pairs
+            )
+            pause_multipliers = ch_manifest.get("pause_multipliers")
+            if (
+                not isinstance(pause_multipliers, list)
+                or len(pause_multipliers) != len(chunks)
+            ):
+                ch_manifest["pause_multipliers"] = expected_pause
+            else:
+                normalized_pause: List[int] = []
+                for idx, value in enumerate(pause_multipliers):
+                    try:
+                        parsed = int(value)
+                    except (TypeError, ValueError):
+                        parsed = expected_pause[idx]
+                    normalized_pause.append(parsed if parsed > 0 else expected_pause[idx])
+                ch_manifest["pause_multipliers"] = normalized_pause
             chapter_chunks.append(chunks)
         pad_ms = int(manifest.get("pad_ms", pad_ms))
     else:
@@ -1199,6 +1271,7 @@ def prepare_manifest(
             )
             chunks = [ch.text[start:end] for start, end in spans]
             span_list = [[start, end] for start, end in spans]
+            pause_multipliers = compute_chunk_pause_multipliers(ch.text, spans)
             if not chunks:
                 raise ValueError(f"No chunks generated for chapter: {ch.id}")
             chapter_chunks.append(chunks)
@@ -1211,6 +1284,7 @@ def prepare_manifest(
                     "text_sha256": sha256_str(ch.text),
                     "chunks": chunks,
                     "chunk_spans": span_list,
+                    "pause_multipliers": pause_multipliers,
                     "durations_ms": [None] * len(chunks),
                 }
             )
@@ -1404,8 +1478,21 @@ def synthesize(
         voice_states[voice_id] = tts_model.get_state_for_audio_prompt(voice_prompt)
     write_status(out_dir, "synthesizing")
 
-    pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
-    pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
+    base_pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
+    pad_tensors: Dict[int, Optional["torch.Tensor"]] = {}
+
+    def pad_tensor_for(multiplier: int) -> Optional["torch.Tensor"]:
+        multiplier = max(1, int(multiplier))
+        if base_pad_samples <= 0:
+            return None
+        if multiplier not in pad_tensors:
+            total_samples = base_pad_samples * multiplier
+            pad_tensors[multiplier] = (
+                torch.zeros(total_samples, dtype=torch.int16)
+                if total_samples > 0
+                else None
+            )
+        return pad_tensors[multiplier]
 
     segment_paths: List[Path] = []
     selected_ids = set(only_chapter_ids) if only_chapter_ids else None
@@ -1479,6 +1566,16 @@ def synthesize(
                     continue
                 voice_id = chapter_voice_map.get(chapter_id, default_voice)
                 voice_state = voice_states[voice_id]
+                pause_multiplier = 1
+                raw_pause = ch_entry.get("pause_multipliers")
+                if (
+                    isinstance(raw_pause, list)
+                    and len(raw_pause) == chapter_total
+                ):
+                    try:
+                        pause_multiplier = max(1, int(raw_pause[chunk_idx - 1]))
+                    except (TypeError, ValueError):
+                        pause_multiplier = 1
 
                 sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
                 audio_parts: List["torch.Tensor"] = []
@@ -1499,6 +1596,7 @@ def synthesize(
                     audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
                 a16 = tensor_to_int16(audio)
 
+                pad_tensor = pad_tensor_for(pause_multiplier)
                 if pad_tensor is not None and pad_tensor.numel() > 0:
                     a16 = torch.cat([a16, pad_tensor], dim=0)
 
@@ -1588,6 +1686,26 @@ def synthesize_chunk(
     if not isinstance(durations, list) or len(durations) != chunk_count:
         durations = [None] * chunk_count
         entry["durations_ms"] = durations
+    span_pairs = _coerce_span_pairs(spans)
+    pause_multipliers = entry.get("pause_multipliers")
+    if not isinstance(pause_multipliers, list) or len(pause_multipliers) != chunk_count:
+        computed_pause = [1] * chunk_count
+        if span_pairs and len(span_pairs) == chunk_count:
+            chapter_text = ""
+            rel_path = entry.get("path")
+            if isinstance(rel_path, str) and rel_path:
+                clean_path = (out_dir.parent / rel_path).resolve()
+                if clean_path.exists():
+                    try:
+                        chapter_text = read_clean_text(clean_path)
+                    except OSError:
+                        chapter_text = ""
+            if chapter_text:
+                computed_pause = compute_chunk_pause_multipliers(
+                    chapter_text, span_pairs
+                )
+        pause_multipliers = computed_pause
+        entry["pause_multipliers"] = pause_multipliers
 
     if voice is None:
         default_voice = manifest.get("voice") or DEFAULT_VOICE
@@ -1622,7 +1740,12 @@ def synthesize_chunk(
 
     max_chars = int(manifest.get("max_chars") or 400)
     pad_ms = int(manifest.get("pad_ms") or 180)
-    pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
+    base_pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
+    try:
+        pause_multiplier = max(1, int(pause_multipliers[chunk_index]))
+    except (TypeError, ValueError, IndexError):
+        pause_multiplier = 1
+    pad_samples = base_pad_samples * pause_multiplier
     pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
 
     tts_text = prepare_tts_text(chunk_text)
@@ -1653,7 +1776,7 @@ def synthesize_chunk(
     else:
         audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
     a16 = tensor_to_int16(audio)
-    if pad_tensor is not None:
+    if pad_tensor is not None and pad_tensor.numel() > 0:
         a16 = torch.cat([a16, pad_tensor], dim=0)
     write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
 

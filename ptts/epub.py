@@ -10,6 +10,12 @@ from urllib.parse import unquote
 from bs4 import BeautifulSoup
 from ebooklib import ITEM_DOCUMENT, ITEM_IMAGE, epub
 
+_PARAGRAPH_BREAK = "\n\n"
+_SECTION_BREAK = "\n\n\n"
+_TITLE_BREAK = "\n\n\n\n\n"
+_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_NUMERIC_HEADING_RE = re.compile(r"^[\W_]*(?:\d+|[ivxlcdm]+)[\W_]*$", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class TocEntry:
@@ -281,6 +287,33 @@ def _looks_like_note_marker(text: str) -> bool:
     return bool(_NOTE_MARKER_RE.match(text.strip()))
 
 
+def _normalize_break_runs(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        count = len(match.group(0))
+        if count >= len(_TITLE_BREAK):
+            return _TITLE_BREAK
+        if count >= len(_SECTION_BREAK):
+            return _SECTION_BREAK
+        return match.group(0)
+
+    return re.sub(r"\n{3,}", repl, text)
+
+
+def _is_title_heading(text: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", (text or "")).strip()
+    if not cleaned:
+        return False
+    return not bool(_NUMERIC_HEADING_RE.fullmatch(cleaned))
+
+
+def _break_after_block(text: str, tag_name: str, is_first_block: bool) -> str:
+    if tag_name in _HEADING_TAGS:
+        if is_first_block and _is_title_heading(text):
+            return _TITLE_BREAK
+        return _SECTION_BREAK
+    return _PARAGRAPH_BREAK
+
+
 def _collect_footnote_index(
     book: epub.EpubBook,
 ) -> dict[str, set[str]]:
@@ -403,21 +436,9 @@ def html_to_text(
             tag.decompose()
     root = soup.body if soup.body else soup
 
-    block_tags = {
-        "p",
-        "div",
-        "li",
-        "blockquote",
-        "pre",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-    }
+    block_tags = {"p", "div", "li", "blockquote", "pre", *_HEADING_TAGS}
 
-    blocks: List[str] = []
+    blocks: List[tuple[str, str]] = []
     for elem in root.find_all(block_tags):
         if any(getattr(parent, "name", None) in block_tags for parent in elem.parents):
             continue
@@ -426,14 +447,23 @@ def html_to_text(
         text = elem.get_text(separator="", strip=False)
         text = text.replace("\xa0", " ")
         text = re.sub(r"[ \t]+\n", "\n", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = _normalize_break_runs(text)
         text = re.sub(r"[ \t]{2,}", " ", text)
         text = text.strip()
         if text:
-            blocks.append(text)
+            blocks.append((text, (elem.name or "").lower()))
 
     if blocks:
-        return normalize_text("\n\n".join(blocks))
+        parts: List[str] = []
+        for idx, (block_text, tag_name) in enumerate(blocks):
+            parts.append(block_text)
+            if idx + 1 < len(blocks):
+                parts.append(
+                    _break_after_block(
+                        block_text, tag_name, is_first_block=idx == 0
+                    )
+                )
+        return normalize_text("".join(parts))
 
     text = root.get_text(separator="", strip=False)
     return normalize_text(text)
@@ -453,7 +483,7 @@ def normalize_text(text: str) -> str:
     )
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _normalize_break_runs(text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\.[ \t]*\.[ \t]*\.", "...", text)
     return text.strip()

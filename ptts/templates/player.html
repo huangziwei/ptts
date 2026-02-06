@@ -1075,6 +1075,20 @@
         margin: 0 0 16px;
       }
 
+      .chapter-text hr.section-break {
+        border: 0;
+        border-top: 1px solid var(--line);
+        margin: 18px auto 20px;
+        max-width: 72px;
+        opacity: 0.75;
+      }
+
+      .chapter-text hr.section-break.title-break {
+        border-top-width: 2px;
+        max-width: 120px;
+        opacity: 0.95;
+      }
+
       .panel {
         background: var(--surface);
         border: 1px solid var(--line);
@@ -3684,7 +3698,17 @@
 
       function splitParagraphSpans(text) {
         const spans = [];
-        const re = /\n\s*\n+/g;
+        const re = /\n(?:[ \t]*\n)+/g;
+        const classifyBreak = (delimiter) => {
+          const newlineCount = (delimiter.match(/\n/g) || []).length;
+          if (newlineCount >= 5) {
+            return "title";
+          }
+          if (newlineCount >= 3) {
+            return "section";
+          }
+          return "paragraph";
+        };
         let start = 0;
         let match;
         while ((match = re.exec(text)) !== null) {
@@ -3698,7 +3722,11 @@
             paraEnd -= 1;
           }
           if (paraStart < paraEnd) {
-            spans.push([paraStart, paraEnd]);
+            spans.push({
+              start: paraStart,
+              end: paraEnd,
+              breakAfter: classifyBreak(match[0]),
+            });
           }
           start = match.index + match[0].length;
         }
@@ -3711,7 +3739,7 @@
           tailEnd -= 1;
         }
         if (tailStart < tailEnd) {
-          spans.push([tailStart, tailEnd]);
+          spans.push({ start: tailStart, end: tailEnd, breakAfter: null });
         }
         return spans;
       }
@@ -4880,7 +4908,9 @@
           chapterText.innerHTML = "<p class=\"empty-state\">No text available.</p>";
         } else {
           chapterText.innerHTML = "";
-          paragraphs.forEach(([paraStart, paraEnd]) => {
+          paragraphs.forEach((paragraph) => {
+            const paraStart = paragraph.start;
+            const paraEnd = paragraph.end;
             const p = document.createElement("p");
             let cursor = paraStart;
 
@@ -4912,6 +4942,17 @@
               );
             }
             chapterText.appendChild(p);
+            if (
+              paragraph.breakAfter === "section" ||
+              paragraph.breakAfter === "title"
+            ) {
+              const rule = document.createElement("hr");
+              rule.className =
+                paragraph.breakAfter === "title"
+                  ? "section-break title-break"
+                  : "section-break";
+              chapterText.appendChild(rule);
+            }
           });
         }
         applyLastPlayedHighlight();

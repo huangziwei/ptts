@@ -21,6 +21,9 @@ RULE_KEYS = (
 PARAGRAPH_BREAK_OPTIONS = ("double", "single")
 DEFAULT_PARAGRAPH_BREAKS = "double"
 RULES_FILENAME = "sanitize-rules.json"
+_PARAGRAPH_BREAK = "\n\n"
+_SECTION_BREAK = "\n\n\n"
+_TITLE_BREAK = "\n\n\n\n\n"
 
 DEFAULT_RULES: Dict[str, List[str]] = {
     "drop_chapter_title_patterns": [
@@ -85,10 +88,10 @@ def template_rules_path() -> Path:
 def book_rules_path(book_dir: Path) -> Path:
     return book_dir / RULES_FILENAME
 
+
 _WORD_RE = re.compile(r"[^\W\d_](?:[^\W\d_]|['\u2019\-]|\u0300-\u036F)*")
 _ROMAN_NUMERAL_RE = re.compile(r"^[IVXLCDM]+$")
 _SMALL_CAPS_MIN_WORDS = 2
-_SMALL_CAPS_MAX_WORDS = 6
 _ALL_CAPS_HEADING_MAX_WORDS = 8
 _SMALL_CAPS_ACRONYMS = {
     "abc",
@@ -291,9 +294,7 @@ def compile_patterns(patterns: Iterable[str]) -> List[re.Pattern]:
                 category=FutureWarning,
                 message="Possible nested set.*",
             )
-            compiled.append(
-                re.compile(pattern, flags=re.IGNORECASE | re.MULTILINE)
-            )
+            compiled.append(re.compile(pattern, flags=re.IGNORECASE | re.MULTILINE))
     return compiled
 
 
@@ -393,6 +394,8 @@ def _normalize_small_caps_word(
     mapped = case_map.get(lower)
     if mapped:
         return _capitalize_mapped(mapped, is_first=is_first)
+    if lower == "i":
+        return "I"
     if lower in _SMALL_CAPS_STOPWORDS:
         return lower.capitalize() if is_first else lower
     if _should_preserve_caps_word(word, lower):
@@ -400,9 +403,7 @@ def _normalize_small_caps_word(
     return _titlecase_token(word) if is_first else lower
 
 
-def _normalize_small_caps_paragraph(
-    paragraph: str, case_map: Dict[str, str]
-) -> str:
+def _normalize_small_caps_paragraph(paragraph: str, case_map: Dict[str, str]) -> str:
     if not re.search(r"[a-z]", paragraph):
         return paragraph
     matches = list(_WORD_RE.finditer(paragraph))
@@ -415,8 +416,6 @@ def _normalize_small_caps_paragraph(
         if not _is_all_caps_word(word):
             break
         run.append(match)
-        if len(run) >= _SMALL_CAPS_MAX_WORDS:
-            break
 
     if len(run) < _SMALL_CAPS_MIN_WORDS:
         return paragraph
@@ -440,7 +439,7 @@ def _normalize_small_caps_paragraph(
     pieces: List[str] = []
     last = 0
     for idx, match in enumerate(run):
-        pieces.append(paragraph[last:match.start()])
+        pieces.append(paragraph[last : match.start()])
         replacement = _normalize_small_caps_word(
             match.group(0), case_map=case_map, is_first=idx == 0
         )
@@ -450,17 +449,34 @@ def _normalize_small_caps_paragraph(
     return "".join(pieces)
 
 
-def normalize_small_caps(
-    text: str, extra_words: Optional[Iterable[str]] = None
-) -> str:
+def _normalize_break_delimiter(delimiter: str) -> str:
+    count = delimiter.count("\n")
+    if count >= len(_TITLE_BREAK):
+        return _TITLE_BREAK
+    if count >= len(_SECTION_BREAK):
+        return _SECTION_BREAK
+    return _PARAGRAPH_BREAK
+
+
+def _normalize_break_runs(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        return _normalize_break_delimiter(match.group(0))
+
+    return re.sub(r"\n{3,}", repl, text)
+
+
+def normalize_small_caps(text: str, extra_words: Optional[Iterable[str]] = None) -> str:
     if not text:
         return text
     case_map = _build_case_map(text, extra_words or [])
-    blocks = re.split(r"\n\s*\n", text)
-    normalized: List[str] = []
-    for block in blocks:
-        normalized.append(_normalize_small_caps_paragraph(block, case_map))
-    return "\n\n".join(normalized)
+    parts = re.split(r"(\n{2,})", text)
+    normalized_parts: List[str] = []
+    for idx, part in enumerate(parts):
+        if idx % 2 == 1:
+            normalized_parts.append(_normalize_break_delimiter(part))
+            continue
+        normalized_parts.append(_normalize_small_caps_paragraph(part, case_map))
+    return "".join(normalized_parts)
 
 
 def _is_all_caps_block(text: str) -> bool:
@@ -503,9 +519,7 @@ def _normalize_all_caps_sentence_word(
     return lower
 
 
-def _should_titlecase_all_caps_line(
-    line: str, matches: List[re.Match]
-) -> bool:
+def _should_titlecase_all_caps_line(line: str, matches: List[re.Match]) -> bool:
     if re.search(r"[.!?]", line):
         return False
     return len(matches) <= _ALL_CAPS_HEADING_MAX_WORDS
@@ -517,7 +531,7 @@ def _normalize_all_caps_title_line(
     pieces: List[str] = []
     last = 0
     for idx, match in enumerate(matches):
-        pieces.append(line[last:match.start()])
+        pieces.append(line[last : match.start()])
         replacement = _normalize_all_caps_title_word(
             match.group(0), case_map=case_map, is_first=idx == 0
         )
@@ -534,7 +548,7 @@ def _normalize_all_caps_sentence_line(
     last = 0
     sentence_start = True
     for idx, match in enumerate(matches):
-        pieces.append(line[last:match.start()])
+        pieces.append(line[last : match.start()])
         replacement = _normalize_all_caps_sentence_word(
             match.group(0), case_map=case_map, is_first=sentence_start
         )
@@ -558,32 +572,32 @@ def _normalize_all_caps_line(line: str, case_map: Dict[str, str]) -> str:
     return _normalize_all_caps_sentence_line(line, matches, case_map)
 
 
-def normalize_all_caps(
-    text: str, extra_words: Optional[Iterable[str]] = None
-) -> str:
+def normalize_all_caps(text: str, extra_words: Optional[Iterable[str]] = None) -> str:
     if not text:
         return text
     case_map = _build_case_map(text, extra_words or [])
-    blocks = re.split(r"\n\s*\n", text)
+    parts = re.split(r"(\n{2,})", text)
     normalized: List[str] = []
-    for block in blocks:
+    for idx, block in enumerate(parts):
+        if idx % 2 == 1:
+            normalized.append(_normalize_break_delimiter(block))
+            continue
         if "\n" in block:
             lines = block.split("\n")
             normalized_lines = [
-                _normalize_all_caps_line(line, case_map=case_map)
-                for line in lines
+                _normalize_all_caps_line(line, case_map=case_map) for line in lines
             ]
             normalized.append("\n".join(normalized_lines))
         else:
-            normalized.append(
-                _normalize_all_caps_line(block, case_map=case_map)
-            )
-    return "\n\n".join(normalized)
+            normalized.append(_normalize_all_caps_line(block, case_map=case_map))
+    return "".join(normalized)
 
 
 def _case_context_words(metadata: dict, chapter_title: str) -> List[str]:
     extra: List[str] = []
-    title = str(metadata.get("title") or "").strip() if isinstance(metadata, dict) else ""
+    title = (
+        str(metadata.get("title") or "").strip() if isinstance(metadata, dict) else ""
+    )
     if title:
         extra.append(title)
     authors = metadata.get("authors") if isinstance(metadata, dict) else []
@@ -615,14 +629,17 @@ def normalize_text(
     )
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _normalize_break_runs(text)
     text = re.sub(r'(^|[\s“("])\[(?P<l>[A-Za-z])\](?=[a-z])', r"\1\g<l>", text)
     text = re.sub(r"-\n(?=\w)", "-", text)
 
     if unwrap_lines:
-        blocks = re.split(r"\n\s*\n", text)
-        normalized_blocks: List[str] = []
-        for block in blocks:
+        parts = re.split(r"(\n{2,})", text)
+        normalized_parts: List[str] = []
+        for idx, block in enumerate(parts):
+            if idx % 2 == 1:
+                normalized_parts.append(_normalize_break_delimiter(block))
+                continue
             lines = block.split("\n")
             if _should_preserve_lines(lines):
                 merged = "\n".join(line.strip() for line in lines if line.strip())
@@ -630,8 +647,8 @@ def normalize_text(
                 merged = " ".join(line.strip() for line in lines if line.strip())
             merged = re.sub(r"[ \t]{2,}", " ", merged).strip()
             if merged:
-                normalized_blocks.append(merged)
-        text = "\n\n".join(normalized_blocks)
+                normalized_parts.append(merged)
+        text = "".join(normalized_parts)
     else:
         text = re.sub(r"[ \t]{2,}", " ", text)
 
@@ -640,12 +657,11 @@ def normalize_text(
     if paragraph_breaks == "single":
         text = re.sub(r"(?<!\n)\n(?!\n)", "\n\n", text)
 
+    text = _normalize_break_runs(text)
     return text.strip()
 
 
-def apply_section_cutoff(
-    text: str, patterns: List[re.Pattern]
-) -> Tuple[str, str]:
+def apply_section_cutoff(text: str, patterns: List[re.Pattern]) -> Tuple[str, str]:
     for pattern in patterns:
         match = pattern.search(text)
         if match:
@@ -663,9 +679,7 @@ def apply_remove_patterns(
     return text, stats
 
 
-def should_drop_title(
-    title: str, patterns: List[re.Pattern]
-) -> str:
+def should_drop_title(title: str, patterns: List[re.Pattern]) -> str:
     for pattern in patterns:
         if pattern.search(title):
             return pattern.pattern
@@ -784,9 +798,7 @@ def sanitize_book(
             unwrap_lines=rules.paragraph_breaks != "single",
             paragraph_breaks=rules.paragraph_breaks,
         )
-        cutoff_text, cutoff_reason = apply_section_cutoff(
-            raw_text, cutoff_patterns
-        )
+        cutoff_text, cutoff_reason = apply_section_cutoff(raw_text, cutoff_patterns)
         cleaned, stats = apply_remove_patterns(cutoff_text, remove_patterns)
         cleaned = normalize_text(
             cleaned,
@@ -1200,6 +1212,9 @@ def restore_chapter(
             if not chunks:
                 raise ValueError("No chunks generated for restored chapter.")
             span_list = [[start, end] for start, end in spans]
+            pause_multipliers = tts_util.compute_chunk_pause_multipliers(
+                tts_text, spans
+            )
             chunk_dir = tts_dir / "chunks" / chapter_id
             tts_util.write_chunk_files(chunks, chunk_dir, overwrite=True)
 
@@ -1211,6 +1226,7 @@ def restore_chapter(
                 "text_sha256": tts_util.sha256_str(tts_text),
                 "chunks": chunks,
                 "chunk_spans": span_list,
+                "pause_multipliers": pause_multipliers,
                 "durations_ms": [None] * len(chunks),
             }
 
@@ -1232,7 +1248,9 @@ def restore_chapter(
             ]
             insert_at = len(existing)
             for idx, entry in enumerate(existing):
-                if positions.get(entry.get("id") or "", 0) > positions.get(chapter_id, 0):
+                if positions.get(entry.get("id") or "", 0) > positions.get(
+                    chapter_id, 0
+                ):
                     insert_at = idx
                     break
             existing.insert(insert_at, restored_entry)

@@ -45,6 +45,28 @@ def test_normalize_text_collapses_ellipsis_spacing() -> None:
     )
 
 
+def test_normalize_text_preserves_section_breaks() -> None:
+    text = "First paragraph.\n\n\nSecond paragraph."
+    assert sanitize.normalize_text(text) == "First paragraph.\n\n\nSecond paragraph."
+
+
+def test_normalize_small_caps_handles_long_all_caps_sentence_start() -> None:
+    text = (
+        "THIS IS A WORK OF NONFICTION, AND I HAVE USED REAL NAMES WITH one "
+        "exception: Polat."
+    )
+    expected = (
+        "This is a work of nonfiction, and I have used real names with one "
+        "exception: Polat."
+    )
+    assert sanitize.normalize_small_caps(text) == expected
+
+
+def test_normalize_all_caps_preserves_section_breaks() -> None:
+    text = "THE INTRO\n\n\nSECOND PARAGRAPH."
+    assert sanitize.normalize_all_caps(text) == "The Intro\n\n\nSecond paragraph."
+
+
 def test_apply_remove_patterns_citation() -> None:
     text = "Some text (Smith, 2010, p. 5) continues."
     patterns = sanitize.compile_patterns(sanitize.DEFAULT_RULES["remove_patterns"])
