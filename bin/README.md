@@ -31,7 +31,7 @@ Open `http://localhost:1912`.
 ```bash
 ./bin/pmx uv run ptts ingest --input books/Some-Book.epub --out out/some-book
 ./bin/pmx uv run ptts sanitize --book out/some-book --overwrite
-./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --max-chars 400 --pad-ms 150
+./bin/pmx uv run --with pocket-tts ptts synth --book out/some-book --max-chars 400 --pad-ms 180
 ./bin/pmx uv run ptts merge --book out/some-book --output out/some-book/some-book.m4b
 ```
 

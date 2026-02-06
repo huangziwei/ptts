@@ -61,7 +61,7 @@ uv run ptts sanitize \
 uv run --with pocket-tts ptts synth \
   --book out/some-book \
   --max-chars 400 \
-  --pad-ms 150
+  --pad-ms 180
 ```
 
 By default, `ptts synth` uses the built-in voice `alba`. To choose a built-in voice
