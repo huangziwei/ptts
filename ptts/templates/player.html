@@ -2179,12 +2179,30 @@
       const advancedApplyVoice = document.getElementById("advancedApplyVoice");
       const advancedClearVoice = document.getElementById("advancedClearVoice");
       const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const BOUNDARY_LOG_ENABLED = (() => {
+        try {
+          const params = new URLSearchParams(window.location.search || "");
+          if (params.get("debug_boundary_log") === "1") {
+            return true;
+          }
+        } catch (err) {
+          // ignore
+        }
+        try {
+          return localStorage.getItem("ptts.debugBoundaryLog") === "1";
+        } catch (err) {
+          return false;
+        }
+      })();
       const BOUNDARY_LOG_BATCH_SIZE = 24;
       const BOUNDARY_LOG_FLUSH_MS = 4000;
       let latencyAudioContext = null;
       let latencyAudioContextInit = false;
 
       function ensureLatencyAudioContext() {
+        if (!BOUNDARY_LOG_ENABLED) {
+          return null;
+        }
         if (latencyAudioContextInit) {
           return latencyAudioContext;
         }
@@ -2251,6 +2269,9 @@
         trigger,
         remainingMs = 0
       ) {
+        if (!BOUNDARY_LOG_ENABLED) {
+          return;
+        }
         if (!Number.isFinite(expectedAt)) {
           return;
         }
@@ -2272,6 +2293,9 @@
       }
 
       function scheduleBoundaryLogFlush() {
+        if (!BOUNDARY_LOG_ENABLED) {
+          return;
+        }
         if (state.boundaryLogFlushTimer) {
           return;
         }
@@ -2282,6 +2306,14 @@
       }
 
       async function flushBoundaryLogBuffer(force = false) {
+        if (!BOUNDARY_LOG_ENABLED) {
+          if (state.boundaryLogFlushTimer) {
+            clearTimeout(state.boundaryLogFlushTimer);
+            state.boundaryLogFlushTimer = null;
+          }
+          state.boundaryLogBuffer = [];
+          return;
+        }
         if (!state.book || !state.boundaryLogBuffer.length) {
           return;
         }
@@ -2350,6 +2382,9 @@
       }
 
       function enqueueBoundaryLog(entry) {
+        if (!BOUNDARY_LOG_ENABLED) {
+          return;
+        }
         if (!state.book || !entry || typeof entry !== "object") {
           return;
         }
@@ -2364,6 +2399,10 @@
       function finalizeBoundaryMeasurement(index, context = {}) {
         const pending = state.pendingBoundary;
         if (!pending) {
+          return;
+        }
+        if (!BOUNDARY_LOG_ENABLED) {
+          state.pendingBoundary = null;
           return;
         }
         if (pending.toIndex !== index) {
@@ -6106,7 +6145,9 @@
       audioNext.addEventListener("play", () => guardUnexpectedPlay(audioNext));
       document.addEventListener("visibilitychange", () => {
         if (document.hidden) {
-          void flushBoundaryLogBuffer(true);
+          if (BOUNDARY_LOG_ENABLED) {
+            void flushBoundaryLogBuffer(true);
+          }
           return;
         }
         if (!document.hidden) {
@@ -6114,7 +6155,9 @@
         }
       });
       window.addEventListener("pagehide", () => {
-        void flushBoundaryLogBuffer(true);
+        if (BOUNDARY_LOG_ENABLED) {
+          void flushBoundaryLogBuffer(true);
+        }
       });
 
       speedBtn.addEventListener("click", () => {
