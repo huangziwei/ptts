@@ -2062,6 +2062,7 @@
         playbackRate: 1.0,
         mergeRunning: false,
         mergeReady: false,
+        mergePartial: false,
         mergeExitCode: null,
         mergeOutputExists: false,
         mergeOutputParts: [],
@@ -3422,6 +3423,7 @@
         state.padMs = 0;
         state.mergeRunning = false;
         state.mergeReady = false;
+        state.mergePartial = false;
         state.mergeExitCode = null;
         state.mergeOutputExists = false;
         state.mergeOutputParts = [];
@@ -3665,6 +3667,7 @@
           state.playback = { lastPlayed: null, furthestPlayed: null, bookmarks: [] };
           state.mergeRunning = false;
           state.mergeReady = false;
+          state.mergePartial = false;
           state.mergeExitCode = null;
           state.mergeOutputExists = false;
           state.mergeOutputParts = [];
@@ -4310,11 +4313,14 @@
         state.synthMode = data.mode || "tts";
         const sampling = state.synthMode === "sample";
         const progress = data.progress;
+        const doneChunks =
+          progress && typeof progress.done === "number" ? progress.done : 0;
+        const totalChunks =
+          progress && typeof progress.total === "number" ? progress.total : 0;
         const complete =
           !sampling &&
-          !!progress &&
-          progress.total > 0 &&
-          progress.done >= progress.total;
+          totalChunks > 0 &&
+          doneChunks >= totalChunks;
         startTts.classList.remove("success");
         if (state.synthRunning && sampling) {
           startTts.textContent = "Start TTS";
@@ -4331,9 +4337,9 @@
           sampleTts.textContent = "Sample";
         }
         const overall = data.overall_progress || null;
-        state.mergeReady =
-          complete &&
-          !state.synthRunning;
+        state.mergePartial =
+          !sampling && doneChunks > 0 && totalChunks > 0 && doneChunks < totalChunks;
+        state.mergeReady = !sampling && doneChunks > 0 && totalChunks > 0;
         updateMergeButtonState();
         const stage = data.stage || "idle";
         if (stage === "chunking") {
@@ -4456,7 +4462,7 @@
           if (state.mergeOutputExists) {
             mergeBtn.title = "Delete the merged M4B from the book menu to re-merge.";
           } else if (!state.mergeReady) {
-            mergeBtn.title = "Finish TTS to enable merge.";
+            mergeBtn.title = "Generate at least one chunk to enable merge.";
           } else {
             mergeBtn.title = "Merge M4B";
           }
@@ -4770,12 +4776,21 @@
           return;
         }
         if (!state.mergeReady) {
-          setStatus("Finish TTS before merging.");
+          setStatus("Generate at least one chunk before merging.");
           return;
         }
         if (state.mergeOutputExists) {
           setStatus("M4B already exists.");
           return;
+        }
+        if (state.mergePartial) {
+          const proceed = window.confirm(
+            "TTS is incomplete. This merge will produce a partial M4B and stop at the first missing chunk. Continue?"
+          );
+          if (!proceed) {
+            setStatus("Merge canceled.");
+            return;
+          }
         }
         mergeStatus.textContent = "Starting merge...";
         try {

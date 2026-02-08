@@ -509,7 +509,7 @@ def _merge_ready(book_dir: Path) -> bool:
     progress = _compute_progress(manifest)
     if not progress or not progress.get("total"):
         return False
-    return progress.get("done", 0) >= progress.get("total", 0)
+    return progress.get("done", 0) > 0
 
 
 def _ffmpeg_install_command() -> str:
@@ -1979,7 +1979,10 @@ def create_app(root_dir: Path) -> FastAPI:
             raise HTTPException(status_code=409, detail="Merge is already running.")
 
         if not _merge_ready(book_dir):
-            raise HTTPException(status_code=409, detail="TTS is not complete.")
+            raise HTTPException(
+                status_code=409,
+                detail="No synthesized chunks yet. Generate at least one chunk first.",
+            )
 
         if _merge_has_output(book_dir) and not payload.overwrite:
             raise HTTPException(status_code=409, detail="Output file already exists.")

@@ -378,7 +378,7 @@ def _load_chapter_segments(tts_dir: Path) -> tuple[List[dict], int]:
 
     seg_root = tts_dir / "segments"
     chapter_segments: List[dict] = []
-    missing: List[Path] = []
+    first_missing: Path | None = None
     total_ms = 0
 
     for entry in chapters:
@@ -399,8 +399,8 @@ def _load_chapter_segments(tts_dir: Path) -> tuple[List[dict], int]:
         for idx in range(1, chunk_count + 1):
             seg_path = chapter_dir / f"{idx:06d}.wav"
             if not seg_path.exists():
-                missing.append(seg_path)
-                continue
+                first_missing = seg_path
+                break
             segments.append(seg_path)
             duration_ms = None
             if idx - 1 < len(durations_list):
@@ -411,19 +411,25 @@ def _load_chapter_segments(tts_dir: Path) -> tuple[List[dict], int]:
                 duration_ms = _wav_duration_ms(seg_path)
             chapter_total_ms += duration_ms
 
-        chapter_segments.append(
-            {
-                "title": str(title),
-                "duration_ms": int(chapter_total_ms),
-                "segments": segments,
-            }
-        )
-        total_ms += chapter_total_ms
+        if segments:
+            chapter_segments.append(
+                {
+                    "title": str(title),
+                    "duration_ms": int(chapter_total_ms),
+                    "segments": segments,
+                }
+            )
+            total_ms += chapter_total_ms
+        if first_missing is not None:
+            break
 
-    if missing:
-        sample = "\n".join(str(path) for path in missing[:5])
-        raise FileNotFoundError(
-            f"Missing {len(missing)} segment(s). Sample:\n{sample}"
+    if total_ms <= 0:
+        hint = f" First missing segment: {first_missing}." if first_missing else ""
+        raise FileNotFoundError(f"No synthesized segments available for merge.{hint}")
+    if first_missing is not None:
+        print(
+            f"warning: partial merge mode; stopped at first missing segment: {first_missing}",
+            file=sys.stderr,
         )
     return chapter_segments, int(total_ms)
 
