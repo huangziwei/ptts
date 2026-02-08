@@ -243,12 +243,12 @@ def test_prepare_manifest_writes_chunks(tmp_path: Path) -> None:
         out_dir=out_dir,
         voice="voice.wav",
         max_chars=50,
-        pad_ms=180,
+        pad_ms=280,
         chunk_mode="sentence",
         rechunk=False,
     )
 
-    assert pad_ms == 180
+    assert pad_ms == 280
     assert chunks == [["Hello world"]]
     assert (out_dir / "chunks" / "0001-test" / "000001.txt").exists()
     assert manifest["chapters"][0]["chunks"] == ["Hello world"]

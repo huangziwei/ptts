@@ -5593,7 +5593,7 @@
         if (!padMs) {
           return 0;
         }
-        return Math.min(0.2, padMs / 1000);
+        return Math.min(0.35, padMs / 1000);
       }
 
       function armGapless(index) {
@@ -5695,11 +5695,15 @@
           );
           updateMarks();
 
-          let available = false;
-          try {
-            available = await chunkExists(item);
-          } catch (err) {
-            available = false;
+          const preloadedReady =
+            state.preloadedIndex === index && Boolean(nextAudio.src);
+          let available = preloadedReady;
+          if (!available) {
+            try {
+              available = await chunkExists(item);
+            } catch (err) {
+              available = false;
+            }
           }
 
           if (!available) {
