@@ -2078,6 +2078,10 @@
         cleanEditChapter: null,
         bookVoice: null,
         playTransitioning: false,
+        pendingBoundary: null,
+        boundaryLogBuffer: [],
+        boundaryLogFlushTimer: null,
+        boundaryLogInFlight: false,
       };
 
       const bookList = document.getElementById("bookList");
@@ -2173,10 +2177,170 @@
       const advancedApplyVoice = document.getElementById("advancedApplyVoice");
       const advancedClearVoice = document.getElementById("advancedClearVoice");
       const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      const BOUNDARY_LOG_BATCH_SIZE = 24;
+      const BOUNDARY_LOG_FLUSH_MS = 4000;
 
       function setStatus(message, mode = "message") {
         status.textContent = message;
         state.statusMode = mode;
+      }
+
+      function clearPendingBoundaryMeasurement() {
+        state.pendingBoundary = null;
+      }
+
+      function queueBoundaryMeasurement(
+        fromIndex,
+        toIndex,
+        expectedAt,
+        trigger,
+        remainingMs = 0
+      ) {
+        if (!Number.isFinite(expectedAt)) {
+          return;
+        }
+        if (
+          typeof fromIndex !== "number" ||
+          typeof toIndex !== "number" ||
+          toIndex !== fromIndex + 1
+        ) {
+          return;
+        }
+        state.pendingBoundary = {
+          fromIndex,
+          toIndex,
+          expectedAt,
+          trigger: String(trigger || "auto"),
+          remainingMs: Math.max(0, Number(remainingMs) || 0),
+          queuedAt: performance.now(),
+        };
+      }
+
+      function scheduleBoundaryLogFlush() {
+        if (state.boundaryLogFlushTimer) {
+          return;
+        }
+        state.boundaryLogFlushTimer = setTimeout(() => {
+          state.boundaryLogFlushTimer = null;
+          void flushBoundaryLogBuffer();
+        }, BOUNDARY_LOG_FLUSH_MS);
+      }
+
+      async function flushBoundaryLogBuffer(force = false) {
+        if (!state.book || !state.boundaryLogBuffer.length) {
+          return;
+        }
+        if (state.boundaryLogInFlight) {
+          if (force) {
+            scheduleBoundaryLogFlush();
+          }
+          return;
+        }
+        if (state.boundaryLogFlushTimer) {
+          clearTimeout(state.boundaryLogFlushTimer);
+          state.boundaryLogFlushTimer = null;
+        }
+
+        const takeCount = force
+          ? state.boundaryLogBuffer.length
+          : Math.min(BOUNDARY_LOG_BATCH_SIZE, state.boundaryLogBuffer.length);
+        if (!takeCount) {
+          return;
+        }
+        const entries = state.boundaryLogBuffer.slice(0, takeCount);
+        state.boundaryLogBuffer = state.boundaryLogBuffer.slice(takeCount);
+        const payload = { book_id: state.book.id, entries };
+
+        if (
+          force &&
+          typeof navigator !== "undefined" &&
+          typeof navigator.sendBeacon === "function"
+        ) {
+          try {
+            const blob = new Blob([JSON.stringify(payload)], {
+              type: "application/json",
+            });
+            const queued = navigator.sendBeacon(
+              "/api/playback/boundary-log",
+              blob
+            );
+            if (queued) {
+              return;
+            }
+          } catch (err) {
+            // fallback to fetch
+          }
+        }
+
+        state.boundaryLogInFlight = true;
+        try {
+          await fetchJson("/api/playback/boundary-log", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } catch (err) {
+          state.boundaryLogBuffer = entries.concat(state.boundaryLogBuffer);
+        } finally {
+          state.boundaryLogInFlight = false;
+        }
+
+        if (state.boundaryLogBuffer.length) {
+          if (force) {
+            void flushBoundaryLogBuffer(false);
+          } else {
+            scheduleBoundaryLogFlush();
+          }
+        }
+      }
+
+      function enqueueBoundaryLog(entry) {
+        if (!state.book || !entry || typeof entry !== "object") {
+          return;
+        }
+        state.boundaryLogBuffer.push(entry);
+        if (state.boundaryLogBuffer.length >= BOUNDARY_LOG_BATCH_SIZE) {
+          void flushBoundaryLogBuffer();
+          return;
+        }
+        scheduleBoundaryLogFlush();
+      }
+
+      function finalizeBoundaryMeasurement(index, context = {}) {
+        const pending = state.pendingBoundary;
+        if (!pending) {
+          return;
+        }
+        if (pending.toIndex !== index) {
+          state.pendingBoundary = null;
+          return;
+        }
+        const deltaMs = performance.now() - pending.expectedAt;
+        if (!Number.isFinite(deltaMs)) {
+          state.pendingBoundary = null;
+          return;
+        }
+        const fromItem = state.queue[pending.fromIndex] || {};
+        const toItem = state.queue[pending.toIndex] || {};
+        enqueueBoundaryLog({
+          from_index: pending.fromIndex,
+          to_index: pending.toIndex,
+          from_chapter_id: String(fromItem.chapterId || ""),
+          to_chapter_id: String(toItem.chapterId || ""),
+          from_chunk_index:
+            typeof fromItem.chunkIndex === "number" ? fromItem.chunkIndex : null,
+          to_chunk_index:
+            typeof toItem.chunkIndex === "number" ? toItem.chunkIndex : null,
+          chapter_switch: (fromItem.chapterId || "") !== (toItem.chapterId || ""),
+          trigger: String(pending.trigger || "auto"),
+          remaining_ms: Math.max(0, Number(pending.remainingMs) || 0),
+          delta_ms: Number(deltaMs.toFixed(3)),
+          pad_ms: Number(state.padMs) || 0,
+          playback_rate: Number(state.playbackRate) || 1,
+          preloaded: Boolean(context.usedPreload),
+          captured_unix: Math.floor(Date.now() / 1000),
+        });
+        state.pendingBoundary = null;
       }
 
       function setUploadStatus(message, tone = "idle") {
@@ -3233,6 +3397,14 @@
       }
 
       function clearBookView() {
+        void flushBoundaryLogBuffer(true);
+        clearPendingBoundaryMeasurement();
+        if (state.boundaryLogFlushTimer) {
+          clearTimeout(state.boundaryLogFlushTimer);
+          state.boundaryLogFlushTimer = null;
+        }
+        state.boundaryLogBuffer = [];
+        state.boundaryLogInFlight = false;
         state.book = null;
         state.chapters = [];
         state.chapterMap = {};
@@ -3475,6 +3647,11 @@
       }
 
       async function selectBook(bookId, chapterId) {
+        if (state.book && state.book.id !== bookId) {
+          await flushBoundaryLogBuffer(true);
+          clearPendingBoundaryMeasurement();
+          state.boundaryLogBuffer = [];
+        }
         state.loadingBook = true;
         resetAudioPlayers();
         try {
@@ -5343,6 +5520,7 @@
       }
 
       function resetAudioPlayers() {
+        clearPendingBoundaryMeasurement();
         [audio, audioNext].forEach((element) => {
           element.ontimeupdate = null;
           element.pause();
@@ -5443,6 +5621,14 @@
           currentAudio.ontimeupdate = null;
           const nextIndex = index + 1;
           if (state.preloadedIndex === nextIndex && nextAudio.src) {
+            const boundaryDelayMs = Math.max(0, remaining * 1000);
+            queueBoundaryMeasurement(
+              index,
+              nextIndex,
+              performance.now() + boundaryDelayMs,
+              "gapless",
+              boundaryDelayMs
+            );
             playIndex(nextIndex);
           }
         };
@@ -5481,9 +5667,14 @@
 
       async function playIndex(index) {
         if (!state.queue.length) {
+          clearPendingBoundaryMeasurement();
           return;
         }
+        if (state.pendingBoundary && state.pendingBoundary.toIndex !== index) {
+          clearPendingBoundaryMeasurement();
+        }
         if (index < 0 || index >= state.queue.length) {
+          clearPendingBoundaryMeasurement();
           setStatus("End of book.");
           currentAudio.pause();
           clearGapless();
@@ -5512,6 +5703,7 @@
           }
 
           if (!available) {
+            clearPendingBoundaryMeasurement();
             waitForChunk(index);
             currentAudio.pause();
             setPlayButton(false);
@@ -5534,11 +5726,13 @@
           setPlaybackRate(state.playbackRate || 1);
           try {
             await currentAudio.play();
+            finalizeBoundaryMeasurement(index, { usedPreload });
             setStatus(
               `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${chapterTotal}`
             );
             setPlayButton(true);
           } catch (err) {
+            clearPendingBoundaryMeasurement();
             setStatus("Press Play to start audio.");
             setPlayButton(false);
           }
@@ -5570,6 +5764,7 @@
           setPlayButton(false);
           setIdleStatus();
           clearGapless();
+          clearPendingBoundaryMeasurement();
         }
       }
 
@@ -5773,16 +5968,26 @@
         if (state.playTransitioning) {
           return;
         }
-        playIndex(state.currentQueueIndex + 1);
+        const fromIndex = state.currentQueueIndex;
+        const nextIndex = fromIndex + 1;
+        queueBoundaryMeasurement(fromIndex, nextIndex, performance.now(), "ended", 0);
+        playIndex(nextIndex);
       }
       audio.addEventListener("ended", handleEnded);
       audioNext.addEventListener("ended", handleEnded);
       audio.addEventListener("play", () => guardUnexpectedPlay(audio));
       audioNext.addEventListener("play", () => guardUnexpectedPlay(audioNext));
       document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          void flushBoundaryLogBuffer(true);
+          return;
+        }
         if (!document.hidden) {
           pauseInactiveAudio();
         }
+      });
+      window.addEventListener("pagehide", () => {
+        void flushBoundaryLogBuffer(true);
       });
 
       speedBtn.addEventListener("click", () => {

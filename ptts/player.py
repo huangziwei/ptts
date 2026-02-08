@@ -425,6 +425,19 @@ def _playback_path(book_dir: Path) -> Path:
     return book_dir / "playback.json"
 
 
+def _boundary_latency_log_path(book_dir: Path) -> Path:
+    return book_dir / "tts" / "player-boundary-latency.jsonl"
+
+
+def _append_jsonl(path: Path, entries: List[dict]) -> None:
+    if not entries:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def _m4b_library_dir(root_dir: Path) -> Path:
     return root_dir / "_m4b"
 
@@ -581,6 +594,73 @@ def _sanitize_playback(data: dict) -> dict:
     }
 
 
+def _sanitize_boundary_log_entries(entries: list[dict]) -> list[dict]:
+    cleaned: list[dict] = []
+    for raw in entries[:500]:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            from_index = int(raw.get("from_index"))
+            to_index = int(raw.get("to_index"))
+            delta_ms = float(raw.get("delta_ms"))
+        except (TypeError, ValueError):
+            continue
+        if from_index < 0 or to_index < 0:
+            continue
+        if not (-5000.0 <= delta_ms <= 5000.0):
+            continue
+        try:
+            from_chunk_index = (
+                int(raw.get("from_chunk_index"))
+                if raw.get("from_chunk_index") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            from_chunk_index = None
+        try:
+            to_chunk_index = (
+                int(raw.get("to_chunk_index"))
+                if raw.get("to_chunk_index") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            to_chunk_index = None
+        try:
+            remaining_ms = float(raw.get("remaining_ms") or 0.0)
+        except (TypeError, ValueError):
+            remaining_ms = 0.0
+        try:
+            pad_ms = int(raw.get("pad_ms") or 0)
+        except (TypeError, ValueError):
+            pad_ms = 0
+        try:
+            playback_rate = float(raw.get("playback_rate") or 1.0)
+        except (TypeError, ValueError):
+            playback_rate = 1.0
+        try:
+            captured_unix = int(raw.get("captured_unix") or time.time())
+        except (TypeError, ValueError):
+            captured_unix = int(time.time())
+        cleaned.append(
+            {
+                "logged_unix": int(time.time()),
+                "captured_unix": captured_unix,
+                "from_index": from_index,
+                "to_index": to_index,
+                "from_chapter_id": str(raw.get("from_chapter_id") or ""),
+                "to_chapter_id": str(raw.get("to_chapter_id") or ""),
+                "from_chunk_index": from_chunk_index,
+                "to_chunk_index": to_chunk_index,
+                "chapter_switch": bool(raw.get("chapter_switch", False)),
+                "trigger": str(raw.get("trigger") or "auto"),
+                "remaining_ms": round(max(0.0, remaining_ms), 3),
+                "delta_ms": round(delta_ms, 3),
+                "pad_ms": max(0, pad_ms),
+                "playback_rate": round(max(0.25, min(4.0, playback_rate)), 3),
+                "preloaded": bool(raw.get("preloaded", False)),
+            }
+        )
+    return cleaned
 
 
 def _compute_progress(manifest: dict) -> dict:
@@ -875,6 +955,11 @@ class PlaybackPayload(BaseModel):
     bookmarks: List[dict] = []
 
 
+class BoundaryLogPayload(BaseModel):
+    book_id: str
+    entries: List[dict] = []
+
+
 class DeleteBookRequest(BaseModel):
     book_id: str
 
@@ -1120,6 +1205,21 @@ def create_app(root_dir: Path) -> FastAPI:
         _atomic_write_json(_playback_path(book_dir), cleaned)
         cleaned["exists"] = True
         return _no_store(cleaned)
+
+    @app.post("/api/playback/boundary-log")
+    def playback_boundary_log(payload: BoundaryLogPayload) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        cleaned = _sanitize_boundary_log_entries(payload.entries)
+        if not cleaned:
+            return _no_store({"logged": 0})
+        log_path = _boundary_latency_log_path(book_dir)
+        _append_jsonl(log_path, cleaned)
+        try:
+            rel = log_path.relative_to(book_dir)
+            log_ref = rel.as_posix()
+        except ValueError:
+            log_ref = str(log_path)
+        return _no_store({"logged": len(cleaned), "path": log_ref})
 
     @app.post("/api/ingest")
     def ingest_file(file: UploadFile = File(...), override: bool = False) -> JSONResponse:
