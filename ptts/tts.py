@@ -310,6 +310,7 @@ _SECTION_BREAK_NEWLINES = 3
 _TITLE_BREAK_NEWLINES = 5
 _SECTION_BREAK_PAD_MULTIPLIER = 3
 _TITLE_BREAK_PAD_MULTIPLIER = 5
+_CHAPTER_BREAK_PAD_MULTIPLIER = _TITLE_BREAK_PAD_MULTIPLIER
 _WORD_ONES = (
     "zero",
     "one",
@@ -480,6 +481,46 @@ def compute_chunk_pause_multipliers(
             continue
         multipliers[idx] = _pause_multiplier_from_gap(text[end:next_start])
     return multipliers
+
+
+def _normalize_pause_multipliers(
+    pause_multipliers: object, chunk_count: int, fallback: Optional[Sequence[int]] = None
+) -> List[int]:
+    if chunk_count <= 0:
+        return []
+    normalized = [1] * chunk_count
+    if isinstance(fallback, Sequence):
+        for idx in range(min(chunk_count, len(fallback))):
+            try:
+                parsed = int(fallback[idx])
+            except (TypeError, ValueError):
+                parsed = 1
+            normalized[idx] = parsed if parsed > 0 else 1
+    if isinstance(pause_multipliers, list) and len(pause_multipliers) == chunk_count:
+        for idx, value in enumerate(pause_multipliers):
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                normalized[idx] = parsed
+    return normalized
+
+
+def _apply_chapter_boundary_pause_multipliers(manifest_chapters: Sequence[dict]) -> None:
+    for idx, entry in enumerate(manifest_chapters):
+        if idx >= len(manifest_chapters) - 1:
+            break
+        if not isinstance(entry, dict):
+            continue
+        chunks = entry.get("chunks")
+        if not isinstance(chunks, list) or not chunks:
+            continue
+        normalized = _normalize_pause_multipliers(
+            entry.get("pause_multipliers"), len(chunks)
+        )
+        normalized[-1] = max(normalized[-1], _CHAPTER_BREAK_PAD_MULTIPLIER)
+        entry["pause_multipliers"] = normalized
 
 
 def _next_word(text: str, start: int) -> str:
@@ -1306,22 +1347,13 @@ def prepare_manifest(
             expected_pause = compute_chunk_pause_multipliers(
                 ch_input.text, span_pairs
             )
-            pause_multipliers = ch_manifest.get("pause_multipliers")
-            if (
-                not isinstance(pause_multipliers, list)
-                or len(pause_multipliers) != len(chunks)
-            ):
-                ch_manifest["pause_multipliers"] = expected_pause
-            else:
-                normalized_pause: List[int] = []
-                for idx, value in enumerate(pause_multipliers):
-                    try:
-                        parsed = int(value)
-                    except (TypeError, ValueError):
-                        parsed = expected_pause[idx]
-                    normalized_pause.append(parsed if parsed > 0 else expected_pause[idx])
-                ch_manifest["pause_multipliers"] = normalized_pause
+            ch_manifest["pause_multipliers"] = _normalize_pause_multipliers(
+                ch_manifest.get("pause_multipliers"),
+                len(chunks),
+                fallback=expected_pause,
+            )
             chapter_chunks.append(chunks)
+        _apply_chapter_boundary_pause_multipliers(manifest_chapters)
         pad_ms = int(manifest.get("pad_ms", pad_ms))
     else:
         chapter_chunks = []
@@ -1349,6 +1381,7 @@ def prepare_manifest(
                     "durations_ms": [None] * len(chunks),
                 }
             )
+        _apply_chapter_boundary_pause_multipliers(manifest_chapters)
 
         manifest = {
             "created_unix": int(time.time()),
@@ -1716,9 +1749,11 @@ def synthesize_chunk(
         raise ValueError("manifest.json chapters missing or invalid")
 
     entry = None
-    for item in chapters:
+    entry_index = -1
+    for idx, item in enumerate(chapters):
         if isinstance(item, dict) and item.get("id") == chapter_id:
             entry = item
+            entry_index = idx
             break
     if entry is None:
         raise ValueError(f"Unknown chapter_id: {chapter_id}")
@@ -1772,6 +1807,15 @@ def synthesize_chunk(
                     chapter_text, span_pairs
                 )
         pause_multipliers = computed_pause
+        entry["pause_multipliers"] = pause_multipliers
+    if entry_index >= 0 and entry_index < len(chapters) - 1 and pause_multipliers:
+        normalized_pause = _normalize_pause_multipliers(
+            pause_multipliers, chunk_count
+        )
+        normalized_pause[-1] = max(
+            normalized_pause[-1], _CHAPTER_BREAK_PAD_MULTIPLIER
+        )
+        pause_multipliers = normalized_pause
         entry["pause_multipliers"] = pause_multipliers
 
     if voice is None:

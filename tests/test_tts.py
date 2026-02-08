@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from ptts import tts
@@ -254,3 +255,88 @@ def test_prepare_manifest_writes_chunks(tmp_path: Path) -> None:
     assert manifest["chapters"][0]["chunks"] == ["Hello world"]
     assert manifest["chapters"][0]["chunk_spans"] == [[0, 11]]
     assert manifest["chapters"][0]["pause_multipliers"] == [1]
+
+
+def test_prepare_manifest_applies_chapter_boundary_pause_multiplier(
+    tmp_path: Path,
+) -> None:
+    chapters = [
+        tts.ChapterInput(
+            index=1,
+            id="0001-first",
+            title="First",
+            text="First chapter text.",
+            path=None,
+        ),
+        tts.ChapterInput(
+            index=2,
+            id="0002-second",
+            title="Second",
+            text="Second chapter text.",
+            path=None,
+        ),
+    ]
+    out_dir = tmp_path / "out"
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=chapters,
+        out_dir=out_dir,
+        voice="voice.wav",
+        max_chars=200,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+    )
+
+    assert manifest["chapters"][0]["pause_multipliers"][-1] == 5
+    assert manifest["chapters"][1]["pause_multipliers"][-1] == 1
+
+
+def test_prepare_manifest_backfills_chapter_boundary_pause_for_existing_manifest(
+    tmp_path: Path,
+) -> None:
+    chapters = [
+        tts.ChapterInput(
+            index=1,
+            id="0001-first",
+            title="First",
+            text="First chapter text.",
+            path=None,
+        ),
+        tts.ChapterInput(
+            index=2,
+            id="0002-second",
+            title="Second",
+            text="Second chapter text.",
+            path=None,
+        ),
+    ]
+    out_dir = tmp_path / "out"
+    tts.prepare_manifest(
+        chapters=chapters,
+        out_dir=out_dir,
+        voice="voice.wav",
+        max_chars=200,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+    )
+
+    manifest_path = out_dir / "manifest.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["chapters"][0]["pause_multipliers"] = [1]
+    manifest_path.write_text(
+        json.dumps(manifest_data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=chapters,
+        out_dir=out_dir,
+        voice="voice.wav",
+        max_chars=200,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+    )
+
+    assert manifest["chapters"][0]["pause_multipliers"][-1] == 5
