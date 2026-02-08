@@ -595,6 +595,15 @@ def _sanitize_playback(data: dict) -> dict:
 
 
 def _sanitize_boundary_log_entries(entries: list[dict]) -> list[dict]:
+    def _optional_ms(value: object, upper_bound: float = 5000.0) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not (0.0 <= parsed <= upper_bound):
+            return None
+        return round(parsed, 3)
+
     cleaned: list[dict] = []
     for raw in entries[:500]:
         if not isinstance(raw, dict):
@@ -641,25 +650,41 @@ def _sanitize_boundary_log_entries(entries: list[dict]) -> list[dict]:
             captured_unix = int(raw.get("captured_unix") or time.time())
         except (TypeError, ValueError):
             captured_unix = int(time.time())
-        cleaned.append(
-            {
-                "logged_unix": int(time.time()),
-                "captured_unix": captured_unix,
-                "from_index": from_index,
-                "to_index": to_index,
-                "from_chapter_id": str(raw.get("from_chapter_id") or ""),
-                "to_chapter_id": str(raw.get("to_chapter_id") or ""),
-                "from_chunk_index": from_chunk_index,
-                "to_chunk_index": to_chunk_index,
-                "chapter_switch": bool(raw.get("chapter_switch", False)),
-                "trigger": str(raw.get("trigger") or "auto"),
-                "remaining_ms": round(max(0.0, remaining_ms), 3),
-                "delta_ms": round(delta_ms, 3),
-                "pad_ms": max(0, pad_ms),
-                "playback_rate": round(max(0.25, min(4.0, playback_rate)), 3),
-                "preloaded": bool(raw.get("preloaded", False)),
-            }
+        entry = {
+            "logged_unix": int(time.time()),
+            "captured_unix": captured_unix,
+            "from_index": from_index,
+            "to_index": to_index,
+            "from_chapter_id": str(raw.get("from_chapter_id") or ""),
+            "to_chapter_id": str(raw.get("to_chapter_id") or ""),
+            "from_chunk_index": from_chunk_index,
+            "to_chunk_index": to_chunk_index,
+            "chapter_switch": bool(raw.get("chapter_switch", False)),
+            "trigger": str(raw.get("trigger") or "auto"),
+            "remaining_ms": round(max(0.0, remaining_ms), 3),
+            "delta_ms": round(delta_ms, 3),
+            "pad_ms": max(0, pad_ms),
+            "playback_rate": round(max(0.25, min(4.0, playback_rate)), 3),
+            "preloaded": bool(raw.get("preloaded", False)),
+        }
+        play_call_delay_ms = _optional_ms(raw.get("play_call_delay_ms"))
+        if play_call_delay_ms is not None:
+            entry["play_call_delay_ms"] = play_call_delay_ms
+        play_promise_ms = _optional_ms(raw.get("play_promise_ms"))
+        if play_promise_ms is not None:
+            entry["play_promise_ms"] = play_promise_ms
+        base_latency_ms = _optional_ms(raw.get("base_latency_ms"), upper_bound=2000.0)
+        if base_latency_ms is not None:
+            entry["base_latency_ms"] = base_latency_ms
+        output_latency_ms = _optional_ms(
+            raw.get("output_latency_ms"), upper_bound=5000.0
         )
+        if output_latency_ms is not None:
+            entry["output_latency_ms"] = output_latency_ms
+        audio_context_state = str(raw.get("audio_context_state") or "").strip()
+        if audio_context_state:
+            entry["audio_context_state"] = audio_context_state[:32]
+        cleaned.append(entry)
     return cleaned
 
 

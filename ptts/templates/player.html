@@ -2059,6 +2059,7 @@
         preloadedIndex: null,
         padMs: 0,
         gaplessArmedIndex: null,
+        gaplessPollTimer: null,
         playbackRate: 1.0,
         mergeRunning: false,
         mergeReady: false,
@@ -2180,6 +2181,59 @@
       const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
       const BOUNDARY_LOG_BATCH_SIZE = 24;
       const BOUNDARY_LOG_FLUSH_MS = 4000;
+      let latencyAudioContext = null;
+      let latencyAudioContextInit = false;
+
+      function ensureLatencyAudioContext() {
+        if (latencyAudioContextInit) {
+          return latencyAudioContext;
+        }
+        latencyAudioContextInit = true;
+        const Ctor = window.AudioContext || window.webkitAudioContext;
+        if (!Ctor) {
+          return null;
+        }
+        try {
+          latencyAudioContext = new Ctor();
+        } catch (err) {
+          latencyAudioContext = null;
+        }
+        return latencyAudioContext;
+      }
+
+      async function primeLatencyAudioContext() {
+        const ctx = ensureLatencyAudioContext();
+        if (!ctx || typeof ctx.resume !== "function" || ctx.state !== "suspended") {
+          return;
+        }
+        try {
+          await ctx.resume();
+        } catch (err) {
+          // ignore
+        }
+      }
+
+      function readAudioLatencySnapshot() {
+        const snapshot = {
+          baseLatencyMs: null,
+          outputLatencyMs: null,
+          contextState: "",
+        };
+        const ctx = ensureLatencyAudioContext();
+        if (!ctx) {
+          return snapshot;
+        }
+        snapshot.contextState = String(ctx.state || "");
+        const base = Number(ctx.baseLatency);
+        if (Number.isFinite(base) && base >= 0) {
+          snapshot.baseLatencyMs = Number((base * 1000).toFixed(3));
+        }
+        const output = Number(ctx.outputLatency);
+        if (Number.isFinite(output) && output >= 0) {
+          snapshot.outputLatencyMs = Number((output * 1000).toFixed(3));
+        }
+        return snapshot;
+      }
 
       function setStatus(message, mode = "message") {
         status.textContent = message;
@@ -2321,9 +2375,22 @@
           state.pendingBoundary = null;
           return;
         }
+        const playCallAt = Number(context.playCallAt);
+        const playResolvedAt = Number(context.playResolvedAt);
+        const playCallDelayMs =
+          Number.isFinite(playCallAt)
+            ? Math.max(0, playCallAt - pending.queuedAt)
+            : null;
+        const playPromiseMs =
+          Number.isFinite(playCallAt) && Number.isFinite(playResolvedAt)
+            ? Math.max(0, playResolvedAt - playCallAt)
+            : null;
+        const baseLatencyMs = Number(context.baseLatencyMs);
+        const outputLatencyMs = Number(context.outputLatencyMs);
+        const audioContextState = String(context.audioContextState || "");
         const fromItem = state.queue[pending.fromIndex] || {};
         const toItem = state.queue[pending.toIndex] || {};
-        enqueueBoundaryLog({
+        const entry = {
           from_index: pending.fromIndex,
           to_index: pending.toIndex,
           from_chapter_id: String(fromItem.chapterId || ""),
@@ -2340,7 +2407,23 @@
           playback_rate: Number(state.playbackRate) || 1,
           preloaded: Boolean(context.usedPreload),
           captured_unix: Math.floor(Date.now() / 1000),
-        });
+        };
+        if (playCallDelayMs !== null) {
+          entry.play_call_delay_ms = Number(playCallDelayMs.toFixed(3));
+        }
+        if (playPromiseMs !== null) {
+          entry.play_promise_ms = Number(playPromiseMs.toFixed(3));
+        }
+        if (Number.isFinite(baseLatencyMs) && baseLatencyMs >= 0) {
+          entry.base_latency_ms = Number(baseLatencyMs.toFixed(3));
+        }
+        if (Number.isFinite(outputLatencyMs) && outputLatencyMs >= 0) {
+          entry.output_latency_ms = Number(outputLatencyMs.toFixed(3));
+        }
+        if (audioContextState) {
+          entry.audio_context_state = audioContextState;
+        }
+        enqueueBoundaryLog(entry);
         state.pendingBoundary = null;
       }
 
@@ -5536,6 +5619,7 @@
 
       function resetAudioPlayers() {
         clearPendingBoundaryMeasurement();
+        clearGapless();
         [audio, audioNext].forEach((element) => {
           element.ontimeupdate = null;
           element.pause();
@@ -5545,7 +5629,6 @@
         currentAudio = audio;
         nextAudio = audioNext;
         state.preloadedIndex = null;
-        state.gaplessArmedIndex = null;
         setPlayButton(false);
       }
 
@@ -5600,6 +5683,10 @@
 
       function clearGapless() {
         state.gaplessArmedIndex = null;
+        if (state.gaplessPollTimer) {
+          clearInterval(state.gaplessPollTimer);
+          state.gaplessPollTimer = null;
+        }
         currentAudio.ontimeupdate = null;
       }
 
@@ -5608,7 +5695,7 @@
         if (!padMs) {
           return 0;
         }
-        return Math.min(0.35, padMs / 1000);
+        return Math.min(0.085, padMs / 1000);
       }
 
       function armGapless(index) {
@@ -5617,12 +5704,11 @@
         if (!tailSec) {
           return;
         }
-        state.gaplessArmedIndex = index;
-        currentAudio.ontimeupdate = () => {
+        const tryGaplessSwitch = () => {
           if (state.gaplessArmedIndex !== index) {
             return;
           }
-          if (currentAudio.paused) {
+          if (currentAudio.paused || state.playTransitioning) {
             return;
           }
           const duration = currentAudio.duration;
@@ -5633,20 +5719,25 @@
           if (remaining > tailSec) {
             return;
           }
-          currentAudio.ontimeupdate = null;
           const nextIndex = index + 1;
-          if (state.preloadedIndex === nextIndex && nextAudio.src) {
-            const boundaryDelayMs = Math.max(0, remaining * 1000);
-            queueBoundaryMeasurement(
-              index,
-              nextIndex,
-              performance.now() + boundaryDelayMs,
-              "gapless",
-              boundaryDelayMs
-            );
-            playIndex(nextIndex);
+          if (state.preloadedIndex !== nextIndex || !nextAudio.src) {
+            return;
           }
+          clearGapless();
+          const boundaryDelayMs = Math.max(0, remaining * 1000);
+          queueBoundaryMeasurement(
+            index,
+            nextIndex,
+            performance.now() + boundaryDelayMs,
+            "gapless",
+            boundaryDelayMs
+          );
+          playIndex(nextIndex);
         };
+        state.gaplessArmedIndex = index;
+        currentAudio.ontimeupdate = tryGaplessSwitch;
+        state.gaplessPollTimer = window.setInterval(tryGaplessSwitch, 25);
+        tryGaplessSwitch();
       }
 
       async function preloadIndex(index) {
@@ -5681,6 +5772,7 @@
       }
 
       async function playIndex(index) {
+        void primeLatencyAudioContext();
         if (!state.queue.length) {
           clearPendingBoundaryMeasurement();
           return;
@@ -5743,9 +5835,24 @@
             currentAudio.load();
           }
           setPlaybackRate(state.playbackRate || 1);
+          const latencyBeforePlay = readAudioLatencySnapshot();
+          const playCallAt = performance.now();
           try {
             await currentAudio.play();
-            finalizeBoundaryMeasurement(index, { usedPreload });
+            const playResolvedAt = performance.now();
+            const latencyAfterPlay = readAudioLatencySnapshot();
+            finalizeBoundaryMeasurement(index, {
+              usedPreload,
+              playCallAt,
+              playResolvedAt,
+              baseLatencyMs:
+                latencyAfterPlay.baseLatencyMs ?? latencyBeforePlay.baseLatencyMs,
+              outputLatencyMs:
+                latencyAfterPlay.outputLatencyMs ??
+                latencyBeforePlay.outputLatencyMs,
+              audioContextState:
+                latencyAfterPlay.contextState || latencyBeforePlay.contextState,
+            });
             setStatus(
               `Playing ${item.chapterId} ${item.chunkIndex + 1} / ${chapterTotal}`
             );
@@ -5775,6 +5882,7 @@
           return;
         }
         if (currentAudio.paused) {
+          void primeLatencyAudioContext();
           const lastIndex = getLastPlayed();
           const startIndex = lastIndex === null ? 0 : lastIndex;
           playIndex(startIndex);

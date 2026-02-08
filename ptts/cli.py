@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -404,6 +405,159 @@ def _sample(args: argparse.Namespace) -> int:
     )
 
 
+def _jsonl_entries(path: Path) -> list[dict]:
+    entries: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                entries.append(payload)
+    return entries
+
+
+def _as_float(value: object) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _as_int(value: object) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _percentile(sorted_values: list[float], q: float) -> Optional[float]:
+    if not sorted_values:
+        return None
+    idx = int((len(sorted_values) - 1) * q)
+    return sorted_values[idx]
+
+
+def _series_stats(values: list[float]) -> Optional[dict]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    return {
+        "n": n,
+        "min": round(ordered[0], 3),
+        "p10": round(_percentile(ordered, 0.10) or ordered[0], 3),
+        "p25": round(_percentile(ordered, 0.25) or ordered[0], 3),
+        "p50": round(_percentile(ordered, 0.50) or ordered[0], 3),
+        "p75": round(_percentile(ordered, 0.75) or ordered[-1], 3),
+        "p90": round(_percentile(ordered, 0.90) or ordered[-1], 3),
+        "max": round(ordered[-1], 3),
+        "mean": round(sum(ordered) / n, 3),
+    }
+
+
+def _boundary_report_payload(entries: list[dict], min_samples: int = 200) -> dict:
+    filtered: list[dict] = []
+    delta_values: list[float] = []
+    output_latency_values: list[float] = []
+    corrected_values: list[float] = []
+
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("trigger") or "") != "gapless":
+            continue
+        if raw.get("preloaded") is not True:
+            continue
+        playback_rate = _as_float(raw.get("playback_rate"))
+        if playback_rate is None or not (0.95 <= playback_rate <= 1.05):
+            continue
+        delta_ms = _as_float(raw.get("delta_ms"))
+        if delta_ms is None or not (-5000.0 <= delta_ms <= 5000.0):
+            continue
+        filtered.append(raw)
+        delta_values.append(delta_ms)
+        output_latency_ms = _as_float(raw.get("output_latency_ms"))
+        if output_latency_ms is None or not (0.0 <= output_latency_ms <= 5000.0):
+            continue
+        output_latency_values.append(output_latency_ms)
+        corrected_values.append(delta_ms + output_latency_ms)
+
+    filtered_count = len(filtered)
+    corrected_count = len(corrected_values)
+    coverage = (
+        corrected_count / filtered_count if filtered_count > 0 else 0.0
+    )
+    pad_values = sorted(
+        {
+            value
+            for value in (_as_int(entry.get("pad_ms")) for entry in filtered)
+            if value is not None
+        }
+    )
+
+    recommendation = {
+        "recommended_pad_adjust_ms": None,
+        "basis": "insufficient_data",
+        "reason": "",
+    }
+    if filtered_count < min_samples:
+        recommendation["reason"] = (
+            f"Need at least {min_samples} filtered boundaries; found {filtered_count}."
+        )
+    elif coverage < 0.8:
+        recommendation["reason"] = (
+            "Need output latency on >=80% of filtered boundaries; "
+            f"current coverage is {round(coverage * 100.0, 1)}%."
+        )
+    else:
+        corrected_stats = _series_stats(corrected_values)
+        if corrected_stats:
+            recommendation["recommended_pad_adjust_ms"] = int(
+                round(corrected_stats["p50"])
+            )
+            recommendation["basis"] = "p50(delta_ms + output_latency_ms)"
+            recommendation["reason"] = (
+                "Positive means increase pad_ms to make merged M4B pauses closer "
+                "to player pauses."
+            )
+
+    return {
+        "samples_total": len(entries),
+        "samples_filtered": filtered_count,
+        "samples_with_output_latency": corrected_count,
+        "output_latency_coverage": round(coverage, 4),
+        "pad_ms_values": pad_values,
+        "delta_ms": _series_stats(delta_values),
+        "output_latency_ms": _series_stats(output_latency_values),
+        "corrected_delta_ms": _series_stats(corrected_values),
+        "recommendation": recommendation,
+    }
+
+
+def _boundary_report(args: argparse.Namespace) -> int:
+    path = Path(args.log)
+    if not path.exists():
+        sys.stderr.write(f"Log file not found: {path}\n")
+        return 2
+    try:
+        entries = _jsonl_entries(path)
+    except OSError as exc:
+        sys.stderr.write(f"Failed to read log file: {exc}\n")
+        return 2
+    payload = _boundary_report_payload(entries, min_samples=max(1, args.min_samples))
+    payload["log_path"] = str(path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ptts")
     subparsers = parser.add_subparsers(dest="command")
@@ -564,6 +718,22 @@ def build_parser() -> argparse.ArgumentParser:
             Path(args.root), host=args.host, port=args.port
         )
     )
+
+    boundary = subparsers.add_parser(
+        "boundary-report", help="Analyze player boundary latency logs"
+    )
+    boundary.add_argument(
+        "--log",
+        required=True,
+        help="Path to player-boundary-latency.jsonl",
+    )
+    boundary.add_argument(
+        "--min-samples",
+        type=int,
+        default=200,
+        help="Minimum filtered boundary count required for recommendation (default: 200)",
+    )
+    boundary.set_defaults(func=_boundary_report)
 
     clean = subparsers.add_parser(
         "clean", help="Remove generated audio artifacts (not yet implemented)"
