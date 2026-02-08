@@ -919,7 +919,7 @@ class SynthRequest(BaseModel):
     book_id: str
     voice: Optional[str] = None
     max_chars: int = 400
-    pad_ms: int = 280
+    pad_ms: int = 300
     chunk_mode: str = "sentence"
     rechunk: bool = False
     use_voice_map: bool = False

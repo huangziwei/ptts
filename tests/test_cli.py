@@ -8,7 +8,7 @@ def _entry(
     trigger: str = "gapless",
     preloaded: bool = True,
     playback_rate: float = 1.0,
-    pad_ms: int = 280,
+    pad_ms: int = 300,
 ) -> dict:
     payload = {
         "trigger": trigger,

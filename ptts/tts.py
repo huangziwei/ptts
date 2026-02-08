@@ -1411,7 +1411,7 @@ def chunk_book(
     out_dir: Optional[Path] = None,
     voice: Optional[str] = None,
     max_chars: int = 400,
-    pad_ms: int = 280,
+    pad_ms: int = 300,
     chunk_mode: str = "sentence",
     rechunk: bool = True,
 ) -> Dict[str, Any]:
@@ -1442,7 +1442,7 @@ def synthesize(
     voice: Optional[str],
     out_dir: Path,
     max_chars: int = 400,
-    pad_ms: int = 280,
+    pad_ms: int = 300,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
     wipe_segments: Optional[bool] = None,
@@ -1807,7 +1807,7 @@ def synthesize_chunk(
         manifest["sample_rate"] = sample_rate
 
     max_chars = int(manifest.get("max_chars") or 400)
-    pad_ms = int(manifest.get("pad_ms") or 280)
+    pad_ms = int(manifest.get("pad_ms") or 300)
     base_pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
     try:
         pause_multiplier = max(1, int(pause_multipliers[chunk_index]))
@@ -1869,7 +1869,7 @@ def synthesize_text(
     voice: Optional[str],
     out_dir: Path,
     max_chars: int = 400,
-    pad_ms: int = 280,
+    pad_ms: int = 300,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
     voice_map_path: Optional[Path] = None,
@@ -1894,7 +1894,7 @@ def synthesize_book(
     voice: Optional[str],
     out_dir: Optional[Path] = None,
     max_chars: int = 400,
-    pad_ms: int = 280,
+    pad_ms: int = 300,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
     voice_map_path: Optional[Path] = None,
@@ -1926,7 +1926,7 @@ def synthesize_book_sample(
     voice: Optional[str],
     out_dir: Optional[Path] = None,
     max_chars: int = 400,
-    pad_ms: int = 280,
+    pad_ms: int = 300,
     chunk_mode: str = "sentence",
     rechunk: bool = False,
     voice_map_path: Optional[Path] = None,
@@ -2015,8 +2015,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--pad-ms",
         type=int,
-        default=280,
-        help="Silence to append to each chunk in ms (default: 280)",
+        default=300,
+        help="Silence to append to each chunk in ms (default: 300)",
     )
     ap.add_argument(
         "--chunk-mode",
