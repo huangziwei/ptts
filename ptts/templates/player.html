@@ -656,11 +656,35 @@
         cursor: pointer;
       }
 
-      .voice-button.voice-add {
+      .voice-button-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .voice-gender {
+        display: inline-flex;
+        min-width: 16px;
+        height: 16px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        border: 1px solid var(--line-strong);
+        font-size: 10px;
+        line-height: 1;
+      }
+
+      .voice-button.voice-action {
         min-width: 30px;
         padding: 6px 0;
         font-size: 14px;
         line-height: 1;
+      }
+
+      .voice-button.voice-action.edit-mode {
+        padding: 6px 10px;
+        font-size: 11px;
+        line-height: 1.2;
       }
 
       .voice-button.active {
@@ -988,6 +1012,16 @@
         font-family: var(--ui);
       }
 
+      .meta-form select {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line-strong);
+        background: var(--surface-2);
+        color: var(--ink);
+        font-family: var(--ui);
+      }
+
       .meta-actions {
         display: flex;
         align-items: center;
@@ -1032,6 +1066,12 @@
 
       .clone-preview audio {
         width: 100%;
+      }
+
+      .clone-edit-note {
+        margin: 2px 0 0;
+        font-size: 11px;
+        color: var(--muted);
       }
 
       .reader-body {
@@ -1943,26 +1983,37 @@
               <button class="btn circle" id="cloneClose" type="button" aria-label="Close">x</button>
             </div>
             <div class="meta-form clone-form">
-              <label for="cloneSource">Source URL or local path</label>
-              <input
-                id="cloneSource"
-                type="text"
-                placeholder="https://... or /absolute/path/to/audio.mp3"
-                autocomplete="off"
-              />
-              <div class="clone-grid">
-                <div>
-                  <label for="cloneStart">Start</label>
-                  <input id="cloneStart" type="text" placeholder="0 or 00:00:00 (default: 0)" />
+              <div id="cloneAudioFields">
+                <label for="cloneSource">Source URL or local path</label>
+                <input
+                  id="cloneSource"
+                  type="text"
+                  placeholder="https://... or /absolute/path/to/audio.mp3"
+                  autocomplete="off"
+                />
+                <div class="clone-grid">
+                  <div>
+                    <label for="cloneStart">Start</label>
+                    <input id="cloneStart" type="text" placeholder="0 or 00:00:00 (default: 0)" />
+                  </div>
+                  <div>
+                    <label for="cloneDuration">Duration (seconds)</label>
+                    <input id="cloneDuration" type="number" min="0.1" step="0.1" placeholder="12 (default)" />
+                  </div>
                 </div>
-                <div>
-                  <label for="cloneDuration">Duration (seconds)</label>
-                  <input id="cloneDuration" type="number" min="0.1" step="0.1" placeholder="12 (default)" />
-                </div>
+                <label for="cloneName">Voice name (optional)</label>
+                <input id="cloneName" type="text" placeholder="Defaults to source name" autocomplete="off" />
+                <p class="clone-hint">Use URL or absolute local path, then tweak start/duration and preview until it sounds right.</p>
               </div>
-              <label for="cloneName">Voice name (optional)</label>
-              <input id="cloneName" type="text" placeholder="Defaults to source name" autocomplete="off" />
-              <p class="clone-hint">Use URL or absolute local path, then tweak start/duration and preview until it sounds right.</p>
+              <div class="clone-edit-note" id="cloneEditNote" hidden>
+                Editing voice tag for <strong id="cloneEditVoiceLabel"></strong>
+              </div>
+              <label for="cloneGender">Voice gender</label>
+              <select id="cloneGender">
+                <option value="">None</option>
+                <option value="female">Female</option>
+                <option value="male">Male</option>
+              </select>
               <div class="clone-preview" id="clonePreviewWrap" hidden>
                 <audio id="clonePreviewAudio" controls preload="metadata"></audio>
               </div>
@@ -2162,6 +2213,10 @@
         boundaryLogBuffer: [],
         boundaryLogFlushTimer: null,
         boundaryLogInFlight: false,
+        localVoiceValues: [],
+        voiceGenderMap: {},
+        cloneMode: "add",
+        cloneEditVoice: null,
         cloneNameDirty: false,
         cloneModalBusy: false,
       };
@@ -2213,10 +2268,15 @@
       const clonePreviewBtn = document.getElementById("clonePreviewBtn");
       const cloneSave = document.getElementById("cloneSave");
       const cloneStatus = document.getElementById("cloneStatus");
+      const cloneTitleLabel = document.getElementById("cloneTitleLabel");
+      const cloneAudioFields = document.getElementById("cloneAudioFields");
+      const cloneEditNote = document.getElementById("cloneEditNote");
+      const cloneEditVoiceLabel = document.getElementById("cloneEditVoiceLabel");
       const cloneSource = document.getElementById("cloneSource");
       const cloneStart = document.getElementById("cloneStart");
       const cloneDuration = document.getElementById("cloneDuration");
       const cloneName = document.getElementById("cloneName");
+      const cloneGender = document.getElementById("cloneGender");
       const clonePreviewWrap = document.getElementById("clonePreviewWrap");
       const clonePreviewAudio = document.getElementById("clonePreviewAudio");
       const metaModal = document.getElementById("metaModal");
@@ -2290,6 +2350,7 @@
       const BOUNDARY_LOG_FLUSH_MS = 4000;
       let latencyAudioContext = null;
       let latencyAudioContextInit = false;
+      let localVoiceActionButton = null;
 
       function ensureLatencyAudioContext() {
         if (!BOUNDARY_LOG_ENABLED) {
@@ -3218,6 +3279,7 @@
         buttons.forEach((button) => {
           button.classList.toggle("active", button.dataset.voice === value);
         });
+        updateLocalVoiceActionButton();
         if (state.advancedMode) {
           state.voiceMap.default = value;
           if (persist) {
@@ -3226,14 +3288,71 @@
           renderAdvancedPanel();
         } else {
           state.voicePreference = value;
-          if (persist && value) {
-            localStorage.setItem("ptts.voice", value);
+          if (persist) {
+            if (value) {
+              localStorage.setItem("ptts.voice", value);
+            } else {
+              localStorage.removeItem("ptts.voice");
+            }
           }
         }
       }
 
       function getSelectedVoice() {
         return state.selectedVoice;
+      }
+
+      function normalizeVoiceGender(value) {
+        const raw = String(value || "").trim().toLowerCase();
+        if (raw === "female" || raw === "male") {
+          return raw;
+        }
+        return "";
+      }
+
+      function voiceGenderBadge(gender) {
+        const normalized = normalizeVoiceGender(gender);
+        if (normalized === "female") {
+          return "F";
+        }
+        if (normalized === "male") {
+          return "M";
+        }
+        return "";
+      }
+
+      function isLocalVoice(value) {
+        if (!value) {
+          return false;
+        }
+        return state.localVoiceValues.includes(value);
+      }
+
+      function selectedLocalVoice() {
+        return isLocalVoice(state.selectedVoice) ? state.selectedVoice : null;
+      }
+
+      function updateLocalVoiceActionButton() {
+        if (!localVoiceActionButton) {
+          return;
+        }
+        const selected = selectedLocalVoice();
+        if (selected) {
+          localVoiceActionButton.textContent = "Edit";
+          localVoiceActionButton.title = "Edit selected local voice tag";
+          localVoiceActionButton.setAttribute(
+            "aria-label",
+            "Edit selected local voice tag"
+          );
+          localVoiceActionButton.classList.add("edit-mode");
+          localVoiceActionButton.dataset.mode = "edit";
+        } else {
+          localVoiceActionButton.textContent = "+";
+          localVoiceActionButton.title = "Clone local voice";
+          localVoiceActionButton.setAttribute("aria-label", "Clone local voice");
+          localVoiceActionButton.classList.remove("edit-mode");
+          localVoiceActionButton.dataset.mode = "add";
+        }
       }
 
       function appendVoiceGroup(container, label, items, options = {}) {
@@ -3253,21 +3372,45 @@
           button.type = "button";
           button.className = "voice-button";
           button.dataset.voice = item.value;
-          button.textContent = formatVoiceLabel(item.label);
+          const wrapper = document.createElement("span");
+          wrapper.className = "voice-button-label";
+          const labelText = formatVoiceLabel(item.label);
+          const labelSpan = document.createElement("span");
+          labelSpan.textContent = labelText;
+          wrapper.appendChild(labelSpan);
+          const badge = voiceGenderBadge(item.gender);
+          if (badge) {
+            const badgeSpan = document.createElement("span");
+            badgeSpan.className = "voice-gender";
+            badgeSpan.textContent = badge;
+            badgeSpan.title = item.gender === "female" ? "Female voice" : "Male voice";
+            wrapper.appendChild(badgeSpan);
+          }
+          button.appendChild(wrapper);
           button.addEventListener("click", () => {
+            if (state.selectedVoice === item.value) {
+              setSelectedVoice(null);
+              return;
+            }
             setSelectedVoice(item.value);
           });
           buttons.appendChild(button);
         });
         if (includeAddButton) {
-          const addButton = document.createElement("button");
-          addButton.type = "button";
-          addButton.className = "voice-button voice-add";
-          addButton.textContent = "+";
-          addButton.title = "Clone local voice";
-          addButton.setAttribute("aria-label", "Clone local voice");
-          addButton.addEventListener("click", openCloneModal);
-          buttons.appendChild(addButton);
+          const actionButton = document.createElement("button");
+          actionButton.type = "button";
+          actionButton.className = "voice-button voice-action";
+          actionButton.addEventListener("click", () => {
+            const selected = selectedLocalVoice();
+            if (selected) {
+              openCloneModal("edit", selected);
+              return;
+            }
+            openCloneModal("add");
+          });
+          buttons.appendChild(actionButton);
+          localVoiceActionButton = actionButton;
+          updateLocalVoiceActionButton();
         }
         group.appendChild(title);
         group.appendChild(buttons);
@@ -3312,8 +3455,25 @@
           const builtin = Array.isArray(data.builtin) ? data.builtin : [];
           const defaultVoice = data.default || "";
 
+          state.localVoiceValues = local
+            .map((item) => item.value)
+            .filter((value) => typeof value === "string" && value);
+          const voiceGenderMap = {};
+          local.forEach((item) => {
+            const value = typeof item.value === "string" ? item.value : "";
+            if (!value) {
+              return;
+            }
+            const gender = normalizeVoiceGender(item.gender);
+            if (gender) {
+              voiceGenderMap[value] = gender;
+            }
+          });
+          state.voiceGenderMap = voiceGenderMap;
+
           state.voiceOptions = [...local, ...builtin];
           voiceGroup.innerHTML = "";
+          localVoiceActionButton = null;
           appendVoiceGroup(voiceGroup, "Local voices", local, {
             includeAddButton: true,
           });
@@ -4822,6 +4982,9 @@
         if (cloneName) {
           cloneName.disabled = busy;
         }
+        if (cloneGender) {
+          cloneGender.disabled = busy;
+        }
         if (clonePreviewBtn) {
           clonePreviewBtn.disabled = busy;
         }
@@ -4830,10 +4993,47 @@
         }
       }
 
-      function openCloneModal() {
+      function setCloneMode(mode, editVoiceValue = null) {
+        const editing = mode === "edit";
+        state.cloneMode = editing ? "edit" : "add";
+        state.cloneEditVoice = editing ? editVoiceValue : null;
+        if (cloneTitleLabel) {
+          cloneTitleLabel.textContent = editing
+            ? "Edit local voice"
+            : "Clone local voice";
+        }
+        if (cloneAudioFields) {
+          cloneAudioFields.hidden = editing;
+        }
+        if (clonePreviewBtn) {
+          clonePreviewBtn.hidden = editing;
+        }
+        if (cloneSave) {
+          cloneSave.textContent = editing ? "Save tag" : "Save voice";
+        }
+        if (cloneEditNote) {
+          cloneEditNote.hidden = !editing;
+        }
+        if (cloneEditVoiceLabel) {
+          cloneEditVoiceLabel.textContent = editing
+            ? voiceLabelFromValue(editVoiceValue || "")
+            : "";
+        }
+        if (editing) {
+          resetClonePreview();
+        }
+      }
+
+      function openCloneModal(mode = "add", editVoiceValue = null) {
         if (!cloneModal) {
           return;
         }
+        const selectedForEdit =
+          mode === "edit" ? editVoiceValue || selectedLocalVoice() : null;
+        if (mode === "edit" && !selectedForEdit) {
+          mode = "add";
+        }
+        setCloneMode(mode, selectedForEdit);
         if (cloneSource) {
           cloneSource.value = "";
         }
@@ -4846,11 +5046,20 @@
         if (cloneName) {
           cloneName.value = "";
         }
+        if (cloneGender) {
+          if (mode === "edit" && selectedForEdit) {
+            cloneGender.value = state.voiceGenderMap[selectedForEdit] || "";
+          } else {
+            cloneGender.value = "";
+          }
+        }
         state.cloneNameDirty = false;
         setCloneStatus("");
         setCloneBusy(false);
         cloneModal.hidden = false;
-        if (cloneSource) {
+        if (mode === "edit" && cloneGender) {
+          cloneGender.focus();
+        } else if (cloneSource) {
           cloneSource.focus();
           cloneSource.select();
         }
@@ -4867,10 +5076,14 @@
       }
 
       function clonePayload() {
+        if (state.cloneMode === "edit") {
+          return null;
+        }
         const source = cloneSource ? cloneSource.value.trim() : "";
         const start = cloneStart ? cloneStart.value.trim() : "";
         const duration = cloneDuration ? cloneDuration.value.trim() : "";
         const name = cloneName ? cloneName.value.trim() : "";
+        const gender = cloneGender ? normalizeVoiceGender(cloneGender.value) : "";
         if (!source) {
           setCloneStatus("Source is required.", "error");
           if (cloneSource) {
@@ -4893,10 +5106,16 @@
         if (name) {
           payload.name = name;
         }
+        if (gender) {
+          payload.gender = gender;
+        }
         return payload;
       }
 
       async function previewCloneVoice() {
+        if (state.cloneMode === "edit") {
+          return;
+        }
         const payload = clonePayload();
         if (!payload) {
           return;
@@ -4932,7 +5151,40 @@
         }
       }
 
+      async function saveVoiceMetadata() {
+        const voiceValue = state.cloneEditVoice || selectedLocalVoice();
+        if (!voiceValue) {
+          setCloneStatus("Select a local voice to edit.", "error");
+          return;
+        }
+        const gender = cloneGender ? normalizeVoiceGender(cloneGender.value) : "";
+        setCloneBusy(true);
+        setCloneStatus("Saving tag...");
+        try {
+          await fetchJson("/api/voices/metadata", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              voice: voiceValue,
+              gender: gender || null,
+            }),
+          });
+          await loadVoices();
+          setSelectedVoice(voiceValue);
+          setStatus("Voice tag updated.");
+          closeCloneModal();
+        } catch (err) {
+          setCloneStatus(err.message || "Save failed.", "error");
+        } finally {
+          setCloneBusy(false);
+        }
+      }
+
       async function saveCloneVoice() {
+        if (state.cloneMode === "edit") {
+          await saveVoiceMetadata();
+          return;
+        }
         const basePayload = clonePayload();
         if (!basePayload) {
           return;

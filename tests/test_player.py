@@ -95,15 +95,22 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
             "start": "1",
             "duration": "3.5",
             "name": "NARRATOR",
+            "gender": "female",
         },
     )
     assert save.status_code == 200
     save_payload = save.json()
     assert save_payload["status"] == "saved"
     assert save_payload["used_preview"] is True
+    assert save_payload["gender"] == "female"
     assert save_payload["voice"] == {"label": "narrator", "value": "voices/narrator.wav"}
     assert len(calls) == 1
     assert (repo_root / "voices" / "narrator.wav").exists()
+    voices_payload = client.get("/api/voices").json()
+    local_entry = next(
+        item for item in voices_payload["local"] if item["value"] == "voices/narrator.wav"
+    )
+    assert local_entry["gender"] == "female"
 
     conflict = client.post(
         "/api/voices/clone/save",
@@ -176,3 +183,60 @@ def test_clone_preview_rejects_relative_local_path(
     )
     assert response.status_code == 400
     assert "must be absolute" in response.json()["detail"]
+
+
+def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    voice_path = voices_dir / "sample.wav"
+    voice_path.write_bytes(b"RIFFFAKEWAVE")
+
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    save = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "gender": "male"},
+    )
+    assert save.status_code == 200
+    assert save.json()["gender"] == "male"
+
+    listed = client.get("/api/voices")
+    assert listed.status_code == 200
+    local_entry = next(
+        item for item in listed.json()["local"] if item["value"] == "voices/sample.wav"
+    )
+    assert local_entry["gender"] == "male"
+
+    clear = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "gender": None},
+    )
+    assert clear.status_code == 200
+    assert clear.json()["gender"] is None
+
+    listed_after = client.get("/api/voices")
+    local_entry_after = next(
+        item
+        for item in listed_after.json()["local"]
+        if item["value"] == "voices/sample.wav"
+    )
+    assert "gender" not in local_entry_after
+
+
+def test_voice_metadata_rejects_invalid_gender(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    (voices_dir / "sample.wav").write_bytes(b"RIFFFAKEWAVE")
+
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "gender": "robot"},
+    )
+    assert response.status_code == 400
+    assert "Gender must be" in response.json()["detail"]

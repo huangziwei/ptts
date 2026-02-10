@@ -52,6 +52,79 @@ def _find_repo_root(start: Path) -> Path:
 
 
 _CLONE_TIME_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)?$")
+_VOICE_GENDERS = {"female", "male"}
+
+
+def _normalize_voice_gender(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    if raw not in _VOICE_GENDERS:
+        raise ValueError("Gender must be 'female' or 'male'.")
+    return raw
+
+
+def _voices_metadata_path(repo_root: Path) -> Path:
+    return repo_root / "voices" / "metadata.json"
+
+
+def _resolve_local_voice_value(value: str, repo_root: Path) -> tuple[str, Path]:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Voice is required.")
+    candidate = Path(raw)
+    resolved = candidate.resolve() if candidate.is_absolute() else (repo_root / candidate).resolve()
+    voices_dir = (repo_root / "voices").resolve()
+    if voices_dir not in resolved.parents:
+        raise ValueError("Voice must be inside the voices directory.")
+    if resolved.suffix.lower() != ".wav":
+        raise ValueError("Voice must be a .wav file.")
+    try:
+        rel = resolved.relative_to(repo_root).as_posix()
+    except ValueError:
+        rel = str(resolved)
+    return rel, resolved
+
+
+def _load_voice_metadata(repo_root: Path) -> dict[str, dict[str, str]]:
+    path = _voices_metadata_path(repo_root)
+    try:
+        raw = _load_json(path)
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, dict[str, str]] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            rel_key, _ = _resolve_local_voice_value(key, repo_root)
+        except ValueError:
+            continue
+        gender: Optional[str] = None
+        if isinstance(value, dict):
+            try:
+                gender = _normalize_voice_gender(value.get("gender"))
+            except ValueError:
+                gender = None
+        elif isinstance(value, str):
+            try:
+                gender = _normalize_voice_gender(value)
+            except ValueError:
+                gender = None
+        if not gender:
+            continue
+        cleaned[rel_key] = {"gender": gender}
+    return cleaned
+
+
+def _save_voice_metadata(repo_root: Path, metadata: dict[str, dict[str, str]]) -> None:
+    path = _voices_metadata_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, metadata)
 
 
 def _is_http_url(value: str) -> bool:
@@ -1187,6 +1260,12 @@ class VoiceCloneSavePayload(BaseModel):
     duration: Union[str, float, int] = 12
     name: Optional[str] = None
     overwrite: bool = False
+    gender: Optional[str] = None
+
+
+class VoiceMetadataPayload(BaseModel):
+    voice: str
+    gender: Optional[str] = None
 
 
 def create_app(root_dir: Path) -> FastAPI:
@@ -1366,6 +1445,7 @@ def create_app(root_dir: Path) -> FastAPI:
     @app.get("/api/voices")
     def list_voices() -> JSONResponse:
         voices_dir = repo_root / "voices"
+        voice_metadata = _load_voice_metadata(repo_root)
         local: List[dict] = []
         if voices_dir.exists():
             for wav in sorted(voices_dir.glob("*.wav")):
@@ -1374,13 +1454,44 @@ def create_app(root_dir: Path) -> FastAPI:
                     value = rel.as_posix()
                 except ValueError:
                     value = str(wav)
-                local.append({"label": wav.stem, "value": value})
+                entry = {"label": wav.stem, "value": value}
+                metadata = voice_metadata.get(value)
+                if isinstance(metadata, dict):
+                    gender = metadata.get("gender")
+                    if isinstance(gender, str) and gender in _VOICE_GENDERS:
+                        entry["gender"] = gender
+                local.append(entry)
         builtin = [
             {"label": name, "value": name}
             for name in sorted(BUILTIN_VOICES.keys())
         ]
         return _no_store(
             {"local": local, "builtin": builtin, "default": DEFAULT_VOICE}
+        )
+
+    @app.post("/api/voices/metadata")
+    def set_voice_metadata(payload: VoiceMetadataPayload) -> JSONResponse:
+        try:
+            voice_value, voice_path = _resolve_local_voice_value(payload.voice, repo_root)
+            gender = _normalize_voice_gender(payload.gender)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not voice_path.exists() or not voice_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Voice file not found: {voice_path}")
+
+        metadata = _load_voice_metadata(repo_root)
+        if gender:
+            metadata[voice_value] = {"gender": gender}
+        else:
+            metadata.pop(voice_value, None)
+        _save_voice_metadata(repo_root, metadata)
+        return _no_store(
+            {
+                "status": "saved",
+                "voice": voice_value,
+                "gender": gender,
+            }
         )
 
     @app.post("/api/voices/clone/preview")
@@ -1444,6 +1555,7 @@ def create_app(root_dir: Path) -> FastAPI:
             )
             start = _parse_clone_time(payload.start, "start", allow_zero=True)
             duration = _parse_clone_time(payload.duration, "duration", allow_zero=False)
+            gender = _normalize_voice_gender(payload.gender)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1480,12 +1592,22 @@ def create_app(root_dir: Path) -> FastAPI:
             value = output_path.relative_to(repo_root).as_posix()
         except ValueError:
             value = str(output_path)
+
+        if payload.gender is not None:
+            metadata = _load_voice_metadata(repo_root)
+            if gender:
+                metadata[value] = {"gender": gender}
+            else:
+                metadata.pop(value, None)
+            _save_voice_metadata(repo_root, metadata)
+
         return _no_store(
             {
                 "status": "saved",
                 "voice": {"label": output_name, "value": value},
                 "overwrote": replaced,
                 "used_preview": can_reuse_preview,
+                "gender": gender if payload.gender is not None else None,
             }
         )
 
