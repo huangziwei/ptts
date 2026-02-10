@@ -273,3 +273,44 @@ def test_voice_metadata_rejects_invalid_gender(tmp_path: Path) -> None:
     )
     assert response.status_code == 400
     assert "Gender must be" in response.json()["detail"]
+
+
+def test_voice_delete_removes_file_and_metadata(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    voice_path = voices_dir / "sample.wav"
+    voice_path.write_bytes(b"RIFFFAKEWAVE")
+
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    tagged = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "gender": "female"},
+    )
+    assert tagged.status_code == 200
+    assert tagged.json()["voice"] == "voices/sample.wav"
+    assert tagged.json()["gender"] == "female"
+
+    deleted = client.post(
+        "/api/voices/delete",
+        json={"voice": "voices/sample.wav"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "deleted", "voice": "voices/sample.wav"}
+    assert not voice_path.exists()
+
+    listed = client.get("/api/voices")
+    assert listed.status_code == 200
+    assert all(item["value"] != "voices/sample.wav" for item in listed.json()["local"])
+
+    metadata_path = repo_root / "voices" / "metadata.json"
+    metadata = player._load_json(metadata_path)
+    assert "voices/sample.wav" not in metadata
+
+    missing = client.post(
+        "/api/voices/delete",
+        json={"voice": "voices/sample.wav"},
+    )
+    assert missing.status_code == 404

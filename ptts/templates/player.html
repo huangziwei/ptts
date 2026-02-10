@@ -2097,6 +2097,7 @@
               </div>
               <span class="meta-status" id="cloneStatus"></span>
               <button class="btn" id="cloneCancel" type="button">Cancel</button>
+              <button class="btn danger" id="cloneDelete" type="button" hidden>Delete voice</button>
               <button class="btn" id="clonePreviewBtn" type="button">Preview</button>
               <button class="btn primary" id="cloneSave" type="button">Save voice</button>
             </div>
@@ -2344,6 +2345,7 @@
       const cloneClose = document.getElementById("cloneClose");
       const cloneCancel = document.getElementById("cloneCancel");
       const clonePreviewBtn = document.getElementById("clonePreviewBtn");
+      const cloneDelete = document.getElementById("cloneDelete");
       const cloneSave = document.getElementById("cloneSave");
       const cloneStatus = document.getElementById("cloneStatus");
       const cloneTitleLabel = document.getElementById("cloneTitleLabel");
@@ -5252,6 +5254,9 @@
         if (clonePreviewBtn) {
           clonePreviewBtn.disabled = busy;
         }
+        if (cloneDelete) {
+          cloneDelete.disabled = busy;
+        }
         if (cloneSave) {
           cloneSave.disabled = busy;
         }
@@ -5271,6 +5276,9 @@
         }
         if (clonePreviewBtn) {
           clonePreviewBtn.hidden = editing;
+        }
+        if (cloneDelete) {
+          cloneDelete.hidden = !editing;
         }
         if (cloneSave) {
           cloneSave.textContent = editing ? "Save metadata" : "Save voice";
@@ -5470,6 +5478,35 @@
           closeCloneModal();
         } catch (err) {
           setCloneStatus(err.message || "Save failed.", "error");
+        } finally {
+          setCloneBusy(false);
+        }
+      }
+
+      async function deleteLocalVoice() {
+        const voiceValue = state.cloneEditVoice || selectedLocalVoice();
+        if (!voiceValue) {
+          setCloneStatus("Select a local voice to delete.", "error");
+          return;
+        }
+        const label = voiceLabelFromValue(voiceValue) || voiceValue;
+        const confirmed = window.confirm(`Delete voice "${label}"?`);
+        if (!confirmed) {
+          return;
+        }
+        setCloneBusy(true);
+        setCloneStatus("Deleting voice...");
+        try {
+          await fetchJson("/api/voices/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ voice: voiceValue }),
+          });
+          await loadVoices();
+          setStatus(`Deleted voice: ${label}.`);
+          closeCloneModal();
+        } catch (err) {
+          setCloneStatus(err.message || "Delete failed.", "error");
         } finally {
           setCloneBusy(false);
         }
@@ -6857,6 +6894,9 @@
       cloneClose.addEventListener("click", closeCloneModal);
       cloneCancel.addEventListener("click", closeCloneModal);
       clonePreviewBtn.addEventListener("click", previewCloneVoice);
+      if (cloneDelete) {
+        cloneDelete.addEventListener("click", deleteLocalVoice);
+      }
       cloneSave.addEventListener("click", saveCloneVoice);
       cloneSource.addEventListener("input", () => {
         resetClonePreview();

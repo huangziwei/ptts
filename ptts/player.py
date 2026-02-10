@@ -1288,6 +1288,10 @@ class VoiceMetadataPayload(BaseModel):
     name: Optional[str] = None
 
 
+class VoiceDeletePayload(BaseModel):
+    voice: str
+
+
 def create_app(root_dir: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app = FastAPI()
@@ -1568,6 +1572,31 @@ def create_app(root_dir: Path) -> FastAPI:
                 "name": display_name,
             }
         )
+
+    @app.post("/api/voices/delete")
+    def delete_voice(payload: VoiceDeletePayload) -> JSONResponse:
+        try:
+            voice_value, voice_path = _resolve_local_voice_value(payload.voice, repo_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not voice_path.exists() or not voice_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Voice file not found: {voice_path}")
+
+        try:
+            voice_path.unlink()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Unable to delete voice: {exc}",
+            ) from exc
+
+        metadata = _load_voice_metadata(repo_root)
+        if voice_value in metadata:
+            metadata.pop(voice_value, None)
+            _save_voice_metadata(repo_root, metadata)
+
+        return _no_store({"status": "deleted", "voice": voice_value})
 
     @app.post("/api/voices/clone/preview")
     def preview_clone_voice(payload: VoiceClonePreviewPayload) -> JSONResponse:
