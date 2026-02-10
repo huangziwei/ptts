@@ -1313,7 +1313,10 @@ def prepare_tts_text(
 ) -> str:
     text = _strip_double_quotes(text)
     text = _strip_single_quotes(text)
+    text = apply_reading_overrides(text, reading_overrides or [])
     text = _transliterate_pali_sanskrit(text)
+    # Apply twice so users can match either original spellings (with diacritics)
+    # or transliterated forms used by Pocket-TTS.
     text = apply_reading_overrides(text, reading_overrides or [])
     text = normalize_abbreviations(text)
     text = _normalize_roman_numerals(text)

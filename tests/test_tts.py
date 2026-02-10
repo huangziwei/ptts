@@ -146,6 +146,14 @@ def test_prepare_tts_text_reading_overrides_word_boundary_default() -> None:
     assert tts.prepare_tts_text(text, overrides) == expected
 
 
+def test_prepare_tts_text_applies_diacritic_pattern_before_transliteration() -> None:
+    text = "satipaṭṭhāna"
+    overrides = [
+        {"pattern": r"\bsatipa(?:ṭṭhāna|tthana)\b", "reading": "sah-tee-pat-ta-na"}
+    ]
+    assert tts.prepare_tts_text(text, overrides) == "sah-tee-pat-ta-na."
+
+
 def test_apply_reading_overrides_first_mode() -> None:
     text = "sutta sutta sutta"
     overrides = [{"base": "sutta", "reading": "soot-ta", "mode": "first"}]
