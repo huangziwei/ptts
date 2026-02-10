@@ -656,24 +656,6 @@
         cursor: pointer;
       }
 
-      .voice-button-label {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .voice-gender {
-        display: inline-flex;
-        min-width: 16px;
-        height: 16px;
-        align-items: center;
-        justify-content: center;
-        border-radius: 999px;
-        border: 1px solid var(--line-strong);
-        font-size: 10px;
-        line-height: 1;
-      }
-
       .voice-button.voice-action {
         min-width: 30px;
         padding: 6px 0;
@@ -2006,8 +1988,10 @@
                 <p class="clone-hint">Use URL or absolute local path, then tweak start/duration and preview until it sounds right.</p>
               </div>
               <div class="clone-edit-note" id="cloneEditNote" hidden>
-                Editing voice tag for <strong id="cloneEditVoiceLabel"></strong>
+                Editing voice metadata for <strong id="cloneEditVoiceLabel"></strong>
               </div>
+              <label for="cloneDisplayName">Display name (optional)</label>
+              <input id="cloneDisplayName" type="text" placeholder="Shown in voice list" autocomplete="off" />
               <label for="cloneGender">Voice gender</label>
               <select id="cloneGender">
                 <option value="">None</option>
@@ -2215,6 +2199,7 @@
         boundaryLogInFlight: false,
         localVoiceValues: [],
         voiceGenderMap: {},
+        voiceDisplayNameMap: {},
         cloneMode: "add",
         cloneEditVoice: null,
         cloneNameDirty: false,
@@ -2276,6 +2261,7 @@
       const cloneStart = document.getElementById("cloneStart");
       const cloneDuration = document.getElementById("cloneDuration");
       const cloneName = document.getElementById("cloneName");
+      const cloneDisplayName = document.getElementById("cloneDisplayName");
       const cloneGender = document.getElementById("cloneGender");
       const clonePreviewWrap = document.getElementById("clonePreviewWrap");
       const clonePreviewAudio = document.getElementById("clonePreviewAudio");
@@ -3310,17 +3296,6 @@
         return "";
       }
 
-      function voiceGenderBadge(gender) {
-        const normalized = normalizeVoiceGender(gender);
-        if (normalized === "female") {
-          return "F";
-        }
-        if (normalized === "male") {
-          return "M";
-        }
-        return "";
-      }
-
       function isLocalVoice(value) {
         if (!value) {
           return false;
@@ -3339,10 +3314,10 @@
         const selected = selectedLocalVoice();
         if (selected) {
           localVoiceActionButton.textContent = "Edit";
-          localVoiceActionButton.title = "Edit selected local voice tag";
+          localVoiceActionButton.title = "Edit selected local voice metadata";
           localVoiceActionButton.setAttribute(
             "aria-label",
-            "Edit selected local voice tag"
+            "Edit selected local voice metadata"
           );
           localVoiceActionButton.classList.add("edit-mode");
           localVoiceActionButton.dataset.mode = "edit";
@@ -3372,21 +3347,7 @@
           button.type = "button";
           button.className = "voice-button";
           button.dataset.voice = item.value;
-          const wrapper = document.createElement("span");
-          wrapper.className = "voice-button-label";
-          const labelText = formatVoiceLabel(item.label);
-          const labelSpan = document.createElement("span");
-          labelSpan.textContent = labelText;
-          wrapper.appendChild(labelSpan);
-          const badge = voiceGenderBadge(item.gender);
-          if (badge) {
-            const badgeSpan = document.createElement("span");
-            badgeSpan.className = "voice-gender";
-            badgeSpan.textContent = badge;
-            badgeSpan.title = item.gender === "female" ? "Female voice" : "Male voice";
-            wrapper.appendChild(badgeSpan);
-          }
-          button.appendChild(wrapper);
+          button.textContent = displayVoiceLabel(item);
           button.addEventListener("click", () => {
             if (state.selectedVoice === item.value) {
               setSelectedVoice(null);
@@ -3431,13 +3392,25 @@
           .join(" ");
       }
 
+      function displayVoiceLabel(item) {
+        if (!item || !item.label) {
+          return "";
+        }
+        const value = typeof item.value === "string" ? item.value : "";
+        const metadataLabel = value ? state.voiceDisplayNameMap[value] : "";
+        if (metadataLabel) {
+          return metadataLabel;
+        }
+        return formatVoiceLabel(item.label);
+      }
+
       function voiceLabelFromValue(value) {
         if (!value) {
           return "";
         }
         const match = state.voiceOptions.find((entry) => entry.value === value);
         if (match && match.label) {
-          return formatVoiceLabel(match.label);
+          return displayVoiceLabel(match);
         }
         const parts = String(value).split(/[\\/]/);
         let leaf = parts[parts.length - 1] || "";
@@ -3446,6 +3419,39 @@
           return formatVoiceLabel(leaf);
         }
         return formatVoiceLabel(value);
+      }
+
+      function renderLocalVoiceGroups(local) {
+        const female = [];
+        const male = [];
+        const unspecified = [];
+        local.forEach((item) => {
+          const gender = normalizeVoiceGender(item.gender);
+          if (gender === "female") {
+            female.push(item);
+          } else if (gender === "male") {
+            male.push(item);
+          } else {
+            unspecified.push(item);
+          }
+        });
+        const groups = [
+          { label: "Female local voices", items: female },
+          { label: "Male local voices", items: male },
+          { label: "Unspecified local voices", items: unspecified },
+        ];
+        const nonEmpty = groups.filter((group) => group.items.length > 0);
+        if (!nonEmpty.length) {
+          appendVoiceGroup(voiceGroup, "Unspecified local voices", [], {
+            includeAddButton: true,
+          });
+          return;
+        }
+        nonEmpty.forEach((group, index) => {
+          appendVoiceGroup(voiceGroup, group.label, group.items, {
+            includeAddButton: index === nonEmpty.length - 1,
+          });
+        });
       }
 
       async function loadVoices() {
@@ -3459,6 +3465,7 @@
             .map((item) => item.value)
             .filter((value) => typeof value === "string" && value);
           const voiceGenderMap = {};
+          const voiceDisplayNameMap = {};
           local.forEach((item) => {
             const value = typeof item.value === "string" ? item.value : "";
             if (!value) {
@@ -3468,15 +3475,17 @@
             if (gender) {
               voiceGenderMap[value] = gender;
             }
+            if (typeof item.label === "string" && item.label.trim()) {
+              voiceDisplayNameMap[value] = item.label.trim();
+            }
           });
           state.voiceGenderMap = voiceGenderMap;
+          state.voiceDisplayNameMap = voiceDisplayNameMap;
 
           state.voiceOptions = [...local, ...builtin];
           voiceGroup.innerHTML = "";
           localVoiceActionButton = null;
-          appendVoiceGroup(voiceGroup, "Local voices", local, {
-            includeAddButton: true,
-          });
+          renderLocalVoiceGroups(local);
           appendVoiceGroup(voiceGroup, "Built-in voices", builtin);
 
           const available = state.voiceOptions.map((item) => item.value);
@@ -4982,6 +4991,9 @@
         if (cloneName) {
           cloneName.disabled = busy;
         }
+        if (cloneDisplayName) {
+          cloneDisplayName.disabled = busy;
+        }
         if (cloneGender) {
           cloneGender.disabled = busy;
         }
@@ -4999,7 +5011,7 @@
         state.cloneEditVoice = editing ? editVoiceValue : null;
         if (cloneTitleLabel) {
           cloneTitleLabel.textContent = editing
-            ? "Edit local voice"
+            ? "Edit local voice metadata"
             : "Clone local voice";
         }
         if (cloneAudioFields) {
@@ -5009,7 +5021,7 @@
           clonePreviewBtn.hidden = editing;
         }
         if (cloneSave) {
-          cloneSave.textContent = editing ? "Save tag" : "Save voice";
+          cloneSave.textContent = editing ? "Save metadata" : "Save voice";
         }
         if (cloneEditNote) {
           cloneEditNote.hidden = !editing;
@@ -5045,6 +5057,15 @@
         }
         if (cloneName) {
           cloneName.value = "";
+        }
+        if (cloneDisplayName) {
+          if (mode === "edit" && selectedForEdit) {
+            cloneDisplayName.value =
+              state.voiceDisplayNameMap[selectedForEdit] ||
+              voiceLabelFromValue(selectedForEdit);
+          } else {
+            cloneDisplayName.value = "";
+          }
         }
         if (cloneGender) {
           if (mode === "edit" && selectedForEdit) {
@@ -5083,6 +5104,7 @@
         const start = cloneStart ? cloneStart.value.trim() : "";
         const duration = cloneDuration ? cloneDuration.value.trim() : "";
         const name = cloneName ? cloneName.value.trim() : "";
+        const displayName = cloneDisplayName ? cloneDisplayName.value.trim() : "";
         const gender = cloneGender ? normalizeVoiceGender(cloneGender.value) : "";
         if (!source) {
           setCloneStatus("Source is required.", "error");
@@ -5105,6 +5127,9 @@
         };
         if (name) {
           payload.name = name;
+        }
+        if (displayName) {
+          payload.display_name = displayName;
         }
         if (gender) {
           payload.gender = gender;
@@ -5158,8 +5183,11 @@
           return;
         }
         const gender = cloneGender ? normalizeVoiceGender(cloneGender.value) : "";
+        const displayName = cloneDisplayName
+          ? cloneDisplayName.value.trim()
+          : "";
         setCloneBusy(true);
-        setCloneStatus("Saving tag...");
+        setCloneStatus("Saving metadata...");
         try {
           await fetchJson("/api/voices/metadata", {
             method: "POST",
@@ -5167,11 +5195,12 @@
             body: JSON.stringify({
               voice: voiceValue,
               gender: gender || null,
+              name: displayName || null,
             }),
           });
           await loadVoices();
           setSelectedVoice(voiceValue);
-          setStatus("Voice tag updated.");
+          setStatus("Voice metadata updated.");
           closeCloneModal();
         } catch (err) {
           setCloneStatus(err.message || "Save failed.", "error");
@@ -6577,6 +6606,9 @@
       });
       cloneName.addEventListener("input", () => {
         state.cloneNameDirty = cloneName.value.trim().length > 0;
+      });
+      cloneDisplayName.addEventListener("input", () => {
+        setCloneStatus("");
       });
       cloneModal.addEventListener("click", (event) => {
         if (event.target === cloneModal) {

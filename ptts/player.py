@@ -66,6 +66,15 @@ def _normalize_voice_gender(value: object) -> Optional[str]:
     return raw
 
 
+def _normalize_voice_display_name(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    return re.sub(r"\s+", " ", raw)
+
+
 def _voices_metadata_path(repo_root: Path) -> Path:
     return repo_root / "voices" / "metadata.json"
 
@@ -105,19 +114,26 @@ def _load_voice_metadata(repo_root: Path) -> dict[str, dict[str, str]]:
         except ValueError:
             continue
         gender: Optional[str] = None
+        display_name: Optional[str] = None
         if isinstance(value, dict):
             try:
                 gender = _normalize_voice_gender(value.get("gender"))
             except ValueError:
                 gender = None
+            display_name = _normalize_voice_display_name(value.get("name"))
         elif isinstance(value, str):
             try:
                 gender = _normalize_voice_gender(value)
             except ValueError:
                 gender = None
-        if not gender:
+        if not gender and not display_name:
             continue
-        cleaned[rel_key] = {"gender": gender}
+        entry: dict[str, str] = {}
+        if gender:
+            entry["gender"] = gender
+        if display_name:
+            entry["name"] = display_name
+        cleaned[rel_key] = entry
     return cleaned
 
 
@@ -125,6 +141,16 @@ def _save_voice_metadata(repo_root: Path, metadata: dict[str, dict[str, str]]) -
     path = _voices_metadata_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(path, metadata)
+
+
+def _payload_fields_set(payload: BaseModel) -> set[str]:
+    fields = getattr(payload, "model_fields_set", None)
+    if isinstance(fields, set):
+        return {str(item) for item in fields}
+    legacy = getattr(payload, "__fields_set__", None)
+    if isinstance(legacy, set):
+        return {str(item) for item in legacy}
+    return set()
 
 
 def _is_http_url(value: str) -> bool:
@@ -1259,6 +1285,7 @@ class VoiceCloneSavePayload(BaseModel):
     start: Optional[str] = None
     duration: Union[str, float, int] = 12
     name: Optional[str] = None
+    display_name: Optional[str] = None
     overwrite: bool = False
     gender: Optional[str] = None
 
@@ -1266,6 +1293,7 @@ class VoiceCloneSavePayload(BaseModel):
 class VoiceMetadataPayload(BaseModel):
     voice: str
     gender: Optional[str] = None
+    name: Optional[str] = None
 
 
 def create_app(root_dir: Path) -> FastAPI:
@@ -1457,6 +1485,9 @@ def create_app(root_dir: Path) -> FastAPI:
                 entry = {"label": wav.stem, "value": value}
                 metadata = voice_metadata.get(value)
                 if isinstance(metadata, dict):
+                    display_name = _normalize_voice_display_name(metadata.get("name"))
+                    if display_name:
+                        entry["label"] = display_name
                     gender = metadata.get("gender")
                     if isinstance(gender, str) and gender in _VOICE_GENDERS:
                         entry["gender"] = gender
@@ -1473,7 +1504,6 @@ def create_app(root_dir: Path) -> FastAPI:
     def set_voice_metadata(payload: VoiceMetadataPayload) -> JSONResponse:
         try:
             voice_value, voice_path = _resolve_local_voice_value(payload.voice, repo_root)
-            gender = _normalize_voice_gender(payload.gender)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1481,8 +1511,34 @@ def create_app(root_dir: Path) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Voice file not found: {voice_path}")
 
         metadata = _load_voice_metadata(repo_root)
+        existing = metadata.get(voice_value) if isinstance(metadata.get(voice_value), dict) else {}
+        fields_set = _payload_fields_set(payload)
+        has_gender = "gender" in fields_set
+        has_name = "name" in fields_set
+
+        gender: Optional[str]
+        if has_gender:
+            try:
+                gender = _normalize_voice_gender(payload.gender)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            raw_gender = existing.get("gender") if isinstance(existing, dict) else None
+            gender = raw_gender if isinstance(raw_gender, str) and raw_gender in _VOICE_GENDERS else None
+
+        display_name: Optional[str]
+        if has_name:
+            display_name = _normalize_voice_display_name(payload.name)
+        else:
+            display_name = _normalize_voice_display_name(existing.get("name") if isinstance(existing, dict) else None)
+
+        entry: dict[str, str] = {}
         if gender:
-            metadata[voice_value] = {"gender": gender}
+            entry["gender"] = gender
+        if display_name:
+            entry["name"] = display_name
+        if entry:
+            metadata[voice_value] = entry
         else:
             metadata.pop(voice_value, None)
         _save_voice_metadata(repo_root, metadata)
@@ -1491,6 +1547,7 @@ def create_app(root_dir: Path) -> FastAPI:
                 "status": "saved",
                 "voice": voice_value,
                 "gender": gender,
+                "name": display_name,
             }
         )
 
@@ -1555,6 +1612,7 @@ def create_app(root_dir: Path) -> FastAPI:
             )
             start = _parse_clone_time(payload.start, "start", allow_zero=True)
             duration = _parse_clone_time(payload.duration, "duration", allow_zero=False)
+            display_name = _normalize_voice_display_name(payload.display_name)
             gender = _normalize_voice_gender(payload.gender)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1593,10 +1651,38 @@ def create_app(root_dir: Path) -> FastAPI:
         except ValueError:
             value = str(output_path)
 
-        if payload.gender is not None:
+        fields_set = _payload_fields_set(payload)
+        has_gender = "gender" in fields_set
+        has_display_name = "display_name" in fields_set
+        if has_gender or has_display_name:
             metadata = _load_voice_metadata(repo_root)
-            if gender:
-                metadata[value] = {"gender": gender}
+            existing = (
+                metadata.get(value)
+                if isinstance(metadata.get(value), dict)
+                else {}
+            )
+            next_gender = (
+                gender
+                if has_gender
+                else (
+                    existing.get("gender")
+                    if isinstance(existing.get("gender"), str)
+                    and existing.get("gender") in _VOICE_GENDERS
+                    else None
+                )
+            )
+            next_name = (
+                display_name
+                if has_display_name
+                else _normalize_voice_display_name(existing.get("name"))
+            )
+            entry: dict[str, str] = {}
+            if next_gender:
+                entry["gender"] = next_gender
+            if next_name:
+                entry["name"] = next_name
+            if entry:
+                metadata[value] = entry
             else:
                 metadata.pop(value, None)
             _save_voice_metadata(repo_root, metadata)
@@ -1608,6 +1694,7 @@ def create_app(root_dir: Path) -> FastAPI:
                 "overwrote": replaced,
                 "used_preview": can_reuse_preview,
                 "gender": gender if payload.gender is not None else None,
+                "display_name": display_name if payload.display_name is not None else None,
             }
         )
 
