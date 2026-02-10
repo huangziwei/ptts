@@ -645,6 +645,40 @@
         gap: 8px;
       }
 
+      .local-voice-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .local-voice-section {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+      }
+
+      .local-voice-section-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: var(--muted);
+      }
+
+      .local-voice-section-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .local-voice-section-buttons .voice-button {
+        padding: 5px 10px;
+      }
+
       .voice-button {
         border: 1px solid var(--line-strong);
         background: var(--surface-2);
@@ -3330,6 +3364,39 @@
         }
       }
 
+      function createVoiceSelectionButton(item) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "voice-button";
+        button.dataset.voice = item.value;
+        button.textContent = displayVoiceLabel(item);
+        button.addEventListener("click", () => {
+          if (state.selectedVoice === item.value) {
+            setSelectedVoice(null);
+            return;
+          }
+          setSelectedVoice(item.value);
+        });
+        return button;
+      }
+
+      function createLocalVoiceActionButton() {
+        const actionButton = document.createElement("button");
+        actionButton.type = "button";
+        actionButton.className = "voice-button voice-action";
+        actionButton.addEventListener("click", () => {
+          const selected = selectedLocalVoice();
+          if (selected) {
+            openCloneModal("edit", selected);
+            return;
+          }
+          openCloneModal("add");
+        });
+        localVoiceActionButton = actionButton;
+        updateLocalVoiceActionButton();
+        return actionButton;
+      }
+
       function appendVoiceGroup(container, label, items, options = {}) {
         const includeAddButton = !!options.includeAddButton;
         if (!items.length && !includeAddButton) {
@@ -3343,35 +3410,10 @@
         const buttons = document.createElement("div");
         buttons.className = "voice-buttons";
         items.forEach((item) => {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "voice-button";
-          button.dataset.voice = item.value;
-          button.textContent = displayVoiceLabel(item);
-          button.addEventListener("click", () => {
-            if (state.selectedVoice === item.value) {
-              setSelectedVoice(null);
-              return;
-            }
-            setSelectedVoice(item.value);
-          });
-          buttons.appendChild(button);
+          buttons.appendChild(createVoiceSelectionButton(item));
         });
         if (includeAddButton) {
-          const actionButton = document.createElement("button");
-          actionButton.type = "button";
-          actionButton.className = "voice-button voice-action";
-          actionButton.addEventListener("click", () => {
-            const selected = selectedLocalVoice();
-            if (selected) {
-              openCloneModal("edit", selected);
-              return;
-            }
-            openCloneModal("add");
-          });
-          buttons.appendChild(actionButton);
-          localVoiceActionButton = actionButton;
-          updateLocalVoiceActionButton();
+          buttons.appendChild(createLocalVoiceActionButton());
         }
         group.appendChild(title);
         group.appendChild(buttons);
@@ -3435,23 +3477,49 @@
             unspecified.push(item);
           }
         });
-        const groups = [
-          { label: "Female local voices", items: female },
-          { label: "Male local voices", items: male },
-          { label: "Unspecified local voices", items: unspecified },
+        const group = document.createElement("div");
+        group.className = "voice-group";
+        const title = document.createElement("div");
+        title.className = "voice-group-title";
+        title.textContent = "Local voices";
+        const row = document.createElement("div");
+        row.className = "local-voice-row";
+        const buckets = [
+          { label: "F", items: female, title: "Female voices" },
+          { label: "M", items: male, title: "Male voices" },
+          { label: "Other", items: unspecified, title: "Unspecified voices" },
         ];
-        const nonEmpty = groups.filter((group) => group.items.length > 0);
-        if (!nonEmpty.length) {
-          appendVoiceGroup(voiceGroup, "Unspecified local voices", [], {
-            includeAddButton: true,
+        let hasLocal = false;
+        buckets.forEach((bucket) => {
+          if (!bucket.items.length) {
+            return;
+          }
+          hasLocal = true;
+          const section = document.createElement("div");
+          section.className = "local-voice-section";
+          section.title = bucket.title;
+          const label = document.createElement("span");
+          label.className = "local-voice-section-label";
+          label.textContent = bucket.label;
+          const buttons = document.createElement("div");
+          buttons.className = "local-voice-section-buttons";
+          bucket.items.forEach((item) => {
+            buttons.appendChild(createVoiceSelectionButton(item));
           });
-          return;
-        }
-        nonEmpty.forEach((group, index) => {
-          appendVoiceGroup(voiceGroup, group.label, group.items, {
-            includeAddButton: index === nonEmpty.length - 1,
-          });
+          section.appendChild(label);
+          section.appendChild(buttons);
+          row.appendChild(section);
         });
+        if (!hasLocal) {
+          const empty = document.createElement("div");
+          empty.className = "voice-empty";
+          empty.textContent = "No local voices.";
+          row.appendChild(empty);
+        }
+        row.appendChild(createLocalVoiceActionButton());
+        group.appendChild(title);
+        group.appendChild(row);
+        voiceGroup.appendChild(group);
       }
 
       async function loadVoices() {
