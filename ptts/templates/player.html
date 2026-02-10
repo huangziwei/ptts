@@ -2067,15 +2067,13 @@
                     <input id="cloneDuration" type="number" min="0.1" step="0.1" placeholder="12 (default)" />
                   </div>
                 </div>
-                <label for="cloneName">Voice name (optional)</label>
-                <input id="cloneName" type="text" placeholder="Defaults to source name" autocomplete="off" />
                 <p class="clone-hint">Use URL or absolute local path, then tweak start/duration and preview until it sounds right.</p>
               </div>
               <div class="clone-edit-note" id="cloneEditNote" hidden>
                 Editing voice metadata for <strong id="cloneEditVoiceLabel"></strong>
               </div>
-              <label for="cloneDisplayName">Display name (optional)</label>
-              <input id="cloneDisplayName" type="text" placeholder="Shown in voice list" autocomplete="off" />
+              <label for="cloneName">Voice name</label>
+              <input id="cloneName" type="text" placeholder="Defaults to source name" autocomplete="off" />
               <label>Voice gender</label>
               <div class="clone-gender-toggle" role="radiogroup" aria-label="Voice gender">
                 <label class="clone-gender-option">
@@ -2358,7 +2356,6 @@
       const cloneName = document.getElementById("cloneName");
       const cloneBuiltinWrap = document.getElementById("cloneBuiltinWrap");
       const cloneBuiltinToggle = document.getElementById("cloneBuiltinToggle");
-      const cloneDisplayName = document.getElementById("cloneDisplayName");
       const cloneGenderMale = document.getElementById("cloneGenderMale");
       const cloneGenderFemale = document.getElementById("cloneGenderFemale");
       const clonePreviewWrap = document.getElementById("clonePreviewWrap");
@@ -3587,6 +3584,18 @@
           return formatVoiceLabel(leaf);
         }
         return formatVoiceLabel(value);
+      }
+
+      function voiceStemFromValue(value) {
+        if (!value) {
+          return "";
+        }
+        const parts = String(value).split(/[\\/]/);
+        const leaf = parts[parts.length - 1] || "";
+        if (!leaf) {
+          return "";
+        }
+        return leaf.replace(/\.[^.]+$/, "");
       }
 
       function renderLocalVoiceGroups(local) {
@@ -5197,9 +5206,6 @@
         if (cloneName) {
           cloneName.disabled = busy;
         }
-        if (cloneDisplayName) {
-          cloneDisplayName.disabled = busy;
-        }
         if (cloneBuiltinToggle) {
           cloneBuiltinToggle.disabled = busy;
         }
@@ -5267,15 +5273,10 @@
           cloneDuration.value = "";
         }
         if (cloneName) {
-          cloneName.value = "";
-        }
-        if (cloneDisplayName) {
           if (mode === "edit" && selectedForEdit) {
-            cloneDisplayName.value =
-              state.voiceDisplayNameMap[selectedForEdit] ||
-              voiceLabelFromValue(selectedForEdit);
+            cloneName.value = voiceStemFromValue(selectedForEdit);
           } else {
-            cloneDisplayName.value = "";
+            cloneName.value = "";
           }
         }
         if (mode === "edit" && selectedForEdit) {
@@ -5289,7 +5290,12 @@
         setCloneBusy(false);
         cloneModal.hidden = false;
         if (mode === "edit") {
-          focusCloneGender();
+          if (cloneName) {
+            cloneName.focus();
+            cloneName.select();
+          } else {
+            focusCloneGender();
+          }
         } else if (cloneSource) {
           cloneSource.focus();
           cloneSource.select();
@@ -5314,7 +5320,6 @@
         const start = cloneStart ? cloneStart.value.trim() : "";
         const duration = cloneDuration ? cloneDuration.value.trim() : "";
         const name = cloneName ? cloneName.value.trim() : "";
-        const displayName = cloneDisplayName ? cloneDisplayName.value.trim() : "";
         const gender = getCloneGenderValue();
         if (!source) {
           setCloneStatus("Source is required.", "error");
@@ -5343,9 +5348,6 @@
         };
         if (name) {
           payload.name = name;
-        }
-        if (displayName) {
-          payload.display_name = displayName;
         }
         return payload;
       }
@@ -5396,28 +5398,35 @@
           return;
         }
         const gender = getCloneGenderValue();
-        const displayName = cloneDisplayName
-          ? cloneDisplayName.value.trim()
-          : "";
+        const voiceName = cloneName ? cloneName.value.trim() : "";
         if (!gender) {
           setCloneStatus("Select Male or Female.", "error");
           focusCloneGender();
           return;
         }
+        if (!voiceName) {
+          setCloneStatus("Voice name is required.", "error");
+          if (cloneName) {
+            cloneName.focus();
+          }
+          return;
+        }
         setCloneBusy(true);
         setCloneStatus("Saving metadata...");
         try {
-          await fetchJson("/api/voices/metadata", {
+          const data = await fetchJson("/api/voices/metadata", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               voice: voiceValue,
               gender,
-              name: displayName || null,
+              name: voiceName,
             }),
           });
           await loadVoices();
-          setSelectedVoice(voiceValue);
+          const nextVoice =
+            data && typeof data.voice === "string" ? data.voice : voiceValue;
+          setSelectedVoice(nextVoice);
           setStatus("Voice metadata updated.");
           closeCloneModal();
         } catch (err) {
@@ -6824,8 +6833,6 @@
       });
       cloneName.addEventListener("input", () => {
         state.cloneNameDirty = cloneName.value.trim().length > 0;
-      });
-      cloneDisplayName.addEventListener("input", () => {
         setCloneStatus("");
       });
       if (cloneBuiltinToggle) {

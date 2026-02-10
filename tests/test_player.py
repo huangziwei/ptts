@@ -95,7 +95,6 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
             "start": "1",
             "duration": "3.5",
             "name": "NARRATOR",
-            "display_name": "Narrator Prime",
             "gender": "female",
         },
     )
@@ -104,8 +103,8 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
     assert save_payload["status"] == "saved"
     assert save_payload["used_preview"] is True
     assert save_payload["gender"] == "female"
-    assert save_payload["display_name"] == "Narrator Prime"
-    assert save_payload["voice"] == {"label": "narrator", "value": "voices/narrator.wav"}
+    assert save_payload["display_name"] == "Narrator"
+    assert save_payload["voice"] == {"label": "Narrator", "value": "voices/narrator.wav"}
     assert len(calls) == 1
     assert (repo_root / "voices" / "narrator.wav").exists()
     voices_payload = client.get("/api/voices").json()
@@ -113,7 +112,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
         item for item in voices_payload["local"] if item["value"] == "voices/narrator.wav"
     )
     assert local_entry["gender"] == "female"
-    assert local_entry["label"] == "Narrator Prime"
+    assert local_entry["label"] == "Narrator"
 
     conflict = client.post(
         "/api/voices/clone/save",
@@ -200,72 +199,63 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
 
     save = client.post(
         "/api/voices/metadata",
-        json={"voice": "voices/sample.wav", "gender": "male", "name": "Sample Voice"},
+        json={"voice": "voices/sample.wav", "gender": "male", "name": "SamplePrime"},
     )
     assert save.status_code == 200
     assert save.json()["gender"] == "male"
-    assert save.json()["name"] == "Sample Voice"
+    assert save.json()["name"] == "Sampleprime"
+    assert save.json()["voice"] == "voices/sampleprime.wav"
+    assert not voice_path.exists()
+    assert (voices_dir / "sampleprime.wav").exists()
 
     listed = client.get("/api/voices")
     assert listed.status_code == 200
     local_entry = next(
-        item for item in listed.json()["local"] if item["value"] == "voices/sample.wav"
+        item
+        for item in listed.json()["local"]
+        if item["value"] == "voices/sampleprime.wav"
     )
     assert local_entry["gender"] == "male"
-    assert local_entry["label"] == "Sample Voice"
+    assert local_entry["label"] == "Sampleprime"
 
     rename = client.post(
         "/api/voices/metadata",
-        json={"voice": "voices/sample.wav", "name": "Sample Prime"},
+        json={"voice": "voices/sampleprime.wav", "name": "Sample2"},
     )
     assert rename.status_code == 200
     rename_payload = rename.json()
     assert rename_payload["gender"] == "male"
-    assert rename_payload["name"] == "Sample Prime"
+    assert rename_payload["name"] == "Sample2"
+    assert rename_payload["voice"] == "voices/sample2.wav"
+    assert not (voices_dir / "sampleprime.wav").exists()
+    assert (voices_dir / "sample2.wav").exists()
 
     listed_renamed = client.get("/api/voices")
     local_entry_renamed = next(
         item
         for item in listed_renamed.json()["local"]
-        if item["value"] == "voices/sample.wav"
+        if item["value"] == "voices/sample2.wav"
     )
     assert local_entry_renamed["gender"] == "male"
-    assert local_entry_renamed["label"] == "Sample Prime"
-
-    clear_name = client.post(
-        "/api/voices/metadata",
-        json={"voice": "voices/sample.wav", "name": None},
-    )
-    assert clear_name.status_code == 200
-    clear_name_payload = clear_name.json()
-    assert clear_name_payload["gender"] == "male"
-    assert clear_name_payload["name"] is None
-
-    listed_name_cleared = client.get("/api/voices")
-    local_entry_name_cleared = next(
-        item
-        for item in listed_name_cleared.json()["local"]
-        if item["value"] == "voices/sample.wav"
-    )
-    assert local_entry_name_cleared["gender"] == "male"
-    assert local_entry_name_cleared["label"] == "sample"
+    assert local_entry_renamed["label"] == "Sample2"
 
     clear = client.post(
         "/api/voices/metadata",
-        json={"voice": "voices/sample.wav", "gender": None},
+        json={"voice": "voices/sample2.wav", "gender": None},
     )
     assert clear.status_code == 200
     assert clear.json()["gender"] is None
-    assert clear.json()["name"] is None
+    assert clear.json()["name"] == "Sample2"
+    assert clear.json()["voice"] == "voices/sample2.wav"
 
     listed_after = client.get("/api/voices")
     local_entry_after = next(
         item
         for item in listed_after.json()["local"]
-        if item["value"] == "voices/sample.wav"
+        if item["value"] == "voices/sample2.wav"
     )
     assert "gender" not in local_entry_after
-    assert local_entry_after["label"] == "sample"
+    assert local_entry_after["label"] == "Sample2"
 
 
 def test_voice_metadata_rejects_invalid_gender(tmp_path: Path) -> None:
