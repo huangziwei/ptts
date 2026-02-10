@@ -3890,12 +3890,51 @@
           ? `Default (${defaultLabel})`
           : "Default";
         select.appendChild(defaultOption);
+        const buckets = {
+          female: [],
+          male: [],
+          unspecified: [],
+          builtin: [],
+        };
         state.voiceOptions.forEach((entry) => {
-          const option = document.createElement("option");
-          option.value = entry.value;
-          option.textContent = formatVoiceLabel(entry.label);
-          select.appendChild(option);
+          if (!entry || !entry.value) {
+            return;
+          }
+          if (isLocalVoice(entry.value)) {
+            const gender = normalizeVoiceGender(
+              entry.gender || state.voiceGenderMap[entry.value]
+            );
+            if (gender === "female") {
+              buckets.female.push(entry);
+            } else if (gender === "male") {
+              buckets.male.push(entry);
+            } else {
+              buckets.unspecified.push(entry);
+            }
+          } else {
+            buckets.builtin.push(entry);
+          }
         });
+
+        const appendOptionGroup = (label, items) => {
+          if (!items.length) {
+            return;
+          }
+          const group = document.createElement("optgroup");
+          group.label = label;
+          items.forEach((entry) => {
+            const option = document.createElement("option");
+            option.value = entry.value;
+            option.textContent = displayVoiceLabel(entry);
+            group.appendChild(option);
+          });
+          select.appendChild(group);
+        };
+
+        appendOptionGroup("Female local voices", buckets.female);
+        appendOptionGroup("Male local voices", buckets.male);
+        appendOptionGroup("Unspecified local voices", buckets.unspecified);
+        appendOptionGroup("Built-in voices", buckets.builtin);
       }
 
       function updateChapterVoice(chapterId, voiceValue) {
