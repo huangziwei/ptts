@@ -264,7 +264,6 @@ def format_title_chapter(metadata: dict) -> str:
     subtitle = ""
     if ":" in raw_title:
         title, subtitle = [part.strip() for part in raw_title.split(":", 1)]
-    year = str(metadata.get("year") or "").strip()
     authors = metadata.get("authors") or []
 
     headline = title or ""
@@ -275,7 +274,7 @@ def format_title_chapter(metadata: dict) -> str:
         author_line = f"by {author_line}"
 
     lines: List[str] = []
-    for block in (headline, year, author_line):
+    for block in (headline, author_line):
         if not block:
             continue
         if lines:
