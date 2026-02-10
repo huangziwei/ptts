@@ -656,6 +656,13 @@
         cursor: pointer;
       }
 
+      .voice-button.voice-add {
+        min-width: 30px;
+        padding: 6px 0;
+        font-size: 14px;
+        line-height: 1;
+      }
+
       .voice-button.active {
         background: var(--accent);
         border-color: var(--accent);
@@ -997,6 +1004,34 @@
 
       .meta-status[data-tone="error"] {
         color: var(--danger);
+      }
+
+      .clone-card {
+        width: min(560px, calc(100vw - 32px));
+      }
+
+      .clone-form {
+        gap: 8px;
+      }
+
+      .clone-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .clone-hint {
+        margin: 2px 0 0;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .clone-preview {
+        margin-top: 6px;
+      }
+
+      .clone-preview audio {
+        width: 100%;
       }
 
       .reader-body {
@@ -1699,6 +1734,10 @@
         .advanced-row .advanced-select {
           grid-column: 2 / -1;
         }
+
+        .clone-grid {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
     <script>
@@ -1897,6 +1936,45 @@
             </div>
           </div>
         </section>
+        <div class="meta-modal" id="cloneModal" hidden>
+          <div class="meta-card clone-card" role="dialog" aria-modal="true" aria-labelledby="cloneTitleLabel">
+            <div class="meta-header">
+              <h3 id="cloneTitleLabel">Clone local voice</h3>
+              <button class="btn circle" id="cloneClose" type="button" aria-label="Close">x</button>
+            </div>
+            <div class="meta-form clone-form">
+              <label for="cloneSource">Source URL or local path</label>
+              <input
+                id="cloneSource"
+                type="text"
+                placeholder="https://... or /absolute/path/to/audio.mp3"
+                autocomplete="off"
+              />
+              <div class="clone-grid">
+                <div>
+                  <label for="cloneStart">Start</label>
+                  <input id="cloneStart" type="text" placeholder="0 or 00:00:00 (default: 0)" />
+                </div>
+                <div>
+                  <label for="cloneDuration">Duration (seconds)</label>
+                  <input id="cloneDuration" type="number" min="0.1" step="0.1" placeholder="12 (default)" />
+                </div>
+              </div>
+              <label for="cloneName">Voice name (optional)</label>
+              <input id="cloneName" type="text" placeholder="Defaults to source name" autocomplete="off" />
+              <p class="clone-hint">Use URL or absolute local path, then tweak start/duration and preview until it sounds right.</p>
+              <div class="clone-preview" id="clonePreviewWrap" hidden>
+                <audio id="clonePreviewAudio" controls preload="metadata"></audio>
+              </div>
+            </div>
+            <div class="meta-actions">
+              <span class="meta-status" id="cloneStatus"></span>
+              <button class="btn" id="cloneCancel" type="button">Cancel</button>
+              <button class="btn" id="clonePreviewBtn" type="button">Preview</button>
+              <button class="btn primary" id="cloneSave" type="button">Save voice</button>
+            </div>
+          </div>
+        </div>
         <div class="meta-modal" id="metaModal" hidden>
           <div class="meta-card" role="dialog" aria-modal="true" aria-labelledby="metaTitleLabel">
             <div class="meta-header">
@@ -2084,6 +2162,8 @@
         boundaryLogBuffer: [],
         boundaryLogFlushTimer: null,
         boundaryLogInFlight: false,
+        cloneNameDirty: false,
+        cloneModalBusy: false,
       };
 
       const bookList = document.getElementById("bookList");
@@ -2127,6 +2207,18 @@
       const editMetaBtn = document.getElementById("editMetaBtn");
       const deleteM4bBtn = document.getElementById("deleteM4bBtn");
       const deleteBookBtn = document.getElementById("deleteBookBtn");
+      const cloneModal = document.getElementById("cloneModal");
+      const cloneClose = document.getElementById("cloneClose");
+      const cloneCancel = document.getElementById("cloneCancel");
+      const clonePreviewBtn = document.getElementById("clonePreviewBtn");
+      const cloneSave = document.getElementById("cloneSave");
+      const cloneStatus = document.getElementById("cloneStatus");
+      const cloneSource = document.getElementById("cloneSource");
+      const cloneStart = document.getElementById("cloneStart");
+      const cloneDuration = document.getElementById("cloneDuration");
+      const cloneName = document.getElementById("cloneName");
+      const clonePreviewWrap = document.getElementById("clonePreviewWrap");
+      const clonePreviewAudio = document.getElementById("clonePreviewAudio");
       const metaModal = document.getElementById("metaModal");
       const metaClose = document.getElementById("metaClose");
       const metaCancel = document.getElementById("metaCancel");
@@ -3144,8 +3236,9 @@
         return state.selectedVoice;
       }
 
-      function appendVoiceGroup(container, label, items) {
-        if (!items.length) {
+      function appendVoiceGroup(container, label, items, options = {}) {
+        const includeAddButton = !!options.includeAddButton;
+        if (!items.length && !includeAddButton) {
           return;
         }
         const group = document.createElement("div");
@@ -3166,6 +3259,16 @@
           });
           buttons.appendChild(button);
         });
+        if (includeAddButton) {
+          const addButton = document.createElement("button");
+          addButton.type = "button";
+          addButton.className = "voice-button voice-add";
+          addButton.textContent = "+";
+          addButton.title = "Clone local voice";
+          addButton.setAttribute("aria-label", "Clone local voice");
+          addButton.addEventListener("click", openCloneModal);
+          buttons.appendChild(addButton);
+        }
         group.appendChild(title);
         group.appendChild(buttons);
         container.appendChild(group);
@@ -3211,13 +3314,15 @@
 
           state.voiceOptions = [...local, ...builtin];
           voiceGroup.innerHTML = "";
-          appendVoiceGroup(voiceGroup, "Local voices", local);
+          appendVoiceGroup(voiceGroup, "Local voices", local, {
+            includeAddButton: true,
+          });
           appendVoiceGroup(voiceGroup, "Built-in voices", builtin);
 
           const available = state.voiceOptions.map((item) => item.value);
           if (!available.length) {
-            voiceGroup.innerHTML = "<div class=\"voice-empty\">No voices found.</div>";
             setSelectedVoice(null, false);
+            renderAdvancedPanel();
             return;
           }
 
@@ -4681,6 +4786,197 @@
         }
       }
 
+      function setCloneStatus(message, tone = "") {
+        if (!cloneStatus) {
+          return;
+        }
+        cloneStatus.textContent = message || "";
+        if (tone) {
+          cloneStatus.dataset.tone = tone;
+        } else {
+          delete cloneStatus.dataset.tone;
+        }
+      }
+
+      function resetClonePreview() {
+        if (!clonePreviewAudio || !clonePreviewWrap) {
+          return;
+        }
+        clonePreviewAudio.pause();
+        clonePreviewAudio.removeAttribute("src");
+        clonePreviewAudio.load();
+        clonePreviewWrap.hidden = true;
+      }
+
+      function setCloneBusy(busy) {
+        state.cloneModalBusy = busy;
+        if (cloneSource) {
+          cloneSource.disabled = busy;
+        }
+        if (cloneStart) {
+          cloneStart.disabled = busy;
+        }
+        if (cloneDuration) {
+          cloneDuration.disabled = busy;
+        }
+        if (cloneName) {
+          cloneName.disabled = busy;
+        }
+        if (clonePreviewBtn) {
+          clonePreviewBtn.disabled = busy;
+        }
+        if (cloneSave) {
+          cloneSave.disabled = busy;
+        }
+      }
+
+      function openCloneModal() {
+        if (!cloneModal) {
+          return;
+        }
+        if (cloneSource) {
+          cloneSource.value = "";
+        }
+        if (cloneStart) {
+          cloneStart.value = "";
+        }
+        if (cloneDuration) {
+          cloneDuration.value = "";
+        }
+        if (cloneName) {
+          cloneName.value = "";
+        }
+        state.cloneNameDirty = false;
+        setCloneStatus("");
+        setCloneBusy(false);
+        cloneModal.hidden = false;
+        if (cloneSource) {
+          cloneSource.focus();
+          cloneSource.select();
+        }
+      }
+
+      function closeCloneModal() {
+        if (!cloneModal) {
+          return;
+        }
+        cloneModal.hidden = true;
+        setCloneStatus("");
+        setCloneBusy(false);
+        resetClonePreview();
+      }
+
+      function clonePayload() {
+        const source = cloneSource ? cloneSource.value.trim() : "";
+        const start = cloneStart ? cloneStart.value.trim() : "";
+        const duration = cloneDuration ? cloneDuration.value.trim() : "";
+        const name = cloneName ? cloneName.value.trim() : "";
+        if (!source) {
+          setCloneStatus("Source is required.", "error");
+          if (cloneSource) {
+            cloneSource.focus();
+          }
+          return null;
+        }
+        if (!/^https?:\/\//i.test(source) && !source.startsWith("/") && !source.startsWith("~/")) {
+          setCloneStatus("Local source must be an absolute path.", "error");
+          if (cloneSource) {
+            cloneSource.focus();
+          }
+          return null;
+        }
+        const payload = {
+          source,
+          start: start || "0",
+          duration: duration || "12",
+        };
+        if (name) {
+          payload.name = name;
+        }
+        return payload;
+      }
+
+      async function previewCloneVoice() {
+        const payload = clonePayload();
+        if (!payload) {
+          return;
+        }
+        setCloneBusy(true);
+        setCloneStatus("Generating preview...");
+        try {
+          const data = await fetchJson("/api/voices/clone/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (cloneName && (!cloneName.value.trim() || !state.cloneNameDirty)) {
+            if (data.suggested_name) {
+              cloneName.value = data.suggested_name;
+              state.cloneNameDirty = false;
+            }
+          }
+          if (clonePreviewAudio && clonePreviewWrap && data.preview_url) {
+            clonePreviewAudio.src = data.preview_url;
+            clonePreviewWrap.hidden = false;
+            try {
+              await clonePreviewAudio.play();
+            } catch (err) {
+              // autoplay may be blocked by browser policy
+            }
+          }
+          setCloneStatus("Preview ready.");
+        } catch (err) {
+          setCloneStatus(err.message || "Preview failed.", "error");
+        } finally {
+          setCloneBusy(false);
+        }
+      }
+
+      async function saveCloneVoice() {
+        const basePayload = clonePayload();
+        if (!basePayload) {
+          return;
+        }
+        let overwrite = false;
+        while (true) {
+          setCloneBusy(true);
+          setCloneStatus(overwrite ? "Overwriting voice..." : "Saving voice...");
+          try {
+            const payload = { ...basePayload, overwrite };
+            const data = await fetchJson("/api/voices/clone/save", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            await loadVoices();
+            if (data && data.voice && data.voice.value) {
+              setSelectedVoice(data.voice.value);
+              const label = voiceLabelFromValue(data.voice.value) || data.voice.label;
+              setStatus(`Saved voice: ${label}.`);
+            } else {
+              setStatus("Saved cloned voice.");
+            }
+            closeCloneModal();
+            return;
+          } catch (err) {
+            if (err && err.status === 409 && !overwrite) {
+              setCloneBusy(false);
+              const confirmed = window.confirm(
+                `${err.message || "Voice already exists."} Overwrite it?`
+              );
+              if (confirmed) {
+                overwrite = true;
+                continue;
+              }
+            }
+            setCloneStatus(err.message || "Save failed.", "error");
+            return;
+          } finally {
+            setCloneBusy(false);
+          }
+        }
+      }
+
       function setMetaStatus(message, tone = "") {
         if (!metaStatus) {
           return;
@@ -6011,6 +6307,30 @@
       });
       deleteBookBtn.addEventListener("click", deleteBook);
       deleteM4bBtn.addEventListener("click", deleteM4b);
+      cloneClose.addEventListener("click", closeCloneModal);
+      cloneCancel.addEventListener("click", closeCloneModal);
+      clonePreviewBtn.addEventListener("click", previewCloneVoice);
+      cloneSave.addEventListener("click", saveCloneVoice);
+      cloneSource.addEventListener("input", () => {
+        resetClonePreview();
+        setCloneStatus("");
+      });
+      cloneStart.addEventListener("input", () => {
+        resetClonePreview();
+        setCloneStatus("");
+      });
+      cloneDuration.addEventListener("input", () => {
+        resetClonePreview();
+        setCloneStatus("");
+      });
+      cloneName.addEventListener("input", () => {
+        state.cloneNameDirty = cloneName.value.trim().length > 0;
+      });
+      cloneModal.addEventListener("click", (event) => {
+        if (event.target === cloneModal) {
+          closeCloneModal();
+        }
+      });
       metaClose.addEventListener("click", closeMetaModal);
       metaCancel.addEventListener("click", closeMetaModal);
       metaSave.addEventListener("click", saveMetadata);
@@ -6020,7 +6340,14 @@
         }
       });
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && metaModal && !metaModal.hidden) {
+        if (event.key !== "Escape") {
+          return;
+        }
+        if (cloneModal && !cloneModal.hidden) {
+          closeCloneModal();
+          return;
+        }
+        if (metaModal && !metaModal.hidden) {
           closeMetaModal();
         }
       });

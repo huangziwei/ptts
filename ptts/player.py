@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, List, Optional, Union
@@ -46,6 +49,170 @@ def _find_repo_root(start: Path) -> Path:
         if (candidate / "pyproject.toml").exists():
             return candidate
     return start
+
+
+_CLONE_TIME_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def _is_http_url(value: str) -> bool:
+    parsed = urllib.parse.urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _download_clone_source(url: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(url, headers={"User-Agent": "ptts clone"})
+    with urllib.request.urlopen(request) as response, dest.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+
+
+def _coerce_clone_voice_name(raw: Optional[str], source_name: str) -> str:
+    value = raw or source_name
+    base = Path(value).name.strip()
+    if not base:
+        return "voice"
+    suffix = Path(base).suffix.lower()
+    if suffix in {".mp3", ".wav"}:
+        base = Path(base).stem
+    base = base.strip()
+    return base or "voice"
+
+
+def _format_clone_seconds(seconds: float) -> str:
+    rounded = round(seconds, 3)
+    text = f"{rounded:.3f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _parse_clone_time(value: object, field_name: str, *, allow_zero: bool) -> str:
+    raw = "" if value is None else str(value).strip()
+    if not raw:
+        if allow_zero:
+            return "0"
+        raise ValueError(f"{field_name} is required.")
+
+    if ":" in raw:
+        parts = raw.split(":")
+        if len(parts) not in {2, 3}:
+            raise ValueError(
+                f"{field_name} must be seconds or timecode (MM:SS or HH:MM:SS)."
+            )
+        if any(not _CLONE_TIME_TOKEN_RE.fullmatch(part) for part in parts):
+            raise ValueError(
+                f"{field_name} must be seconds or timecode (MM:SS or HH:MM:SS)."
+            )
+        sec_part = float(parts[-1])
+        min_part = float(parts[-2])
+        hour_part = float(parts[-3]) if len(parts) == 3 else 0.0
+        if sec_part >= 60 or min_part >= 60:
+            raise ValueError(f"{field_name} timecode must keep MM/SS values below 60.")
+        seconds = hour_part * 3600 + min_part * 60 + sec_part
+    else:
+        try:
+            seconds = float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a number of seconds.") from exc
+
+    if seconds < 0:
+        raise ValueError(f"{field_name} must be >= 0 seconds.")
+    if not allow_zero and seconds <= 0:
+        raise ValueError(f"{field_name} must be > 0 seconds.")
+    return _format_clone_seconds(seconds)
+
+
+def _build_clone_ffmpeg_cmd(
+    input_path: Path,
+    output_path: Path,
+    start: str,
+    duration: str,
+) -> list[str]:
+    filter_chain = (
+        "aresample=24000,"
+        "silenceremove=start_periods=1:start_duration=0.20:start_threshold=-40dB,"
+        "areverse,silenceremove=start_periods=1:start_duration=0.20:start_threshold=-40dB,areverse,"
+        "highpass=f=80,lowpass=f=11900,afftdn=nr=12:nf=-45,"
+        "loudnorm=I=-18:TP=-1.5:LRA=11,alimiter=limit=0.98"
+    )
+    return [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        start,
+        "-t",
+        duration,
+        "-i",
+        str(input_path),
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-sn",
+        "-dn",
+        "-map_metadata",
+        "-1",
+        "-af",
+        filter_chain,
+        "-ac",
+        "1",
+        "-ar",
+        "24000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_path),
+    ]
+
+
+def _clone_cache_dir(repo_root: Path) -> Path:
+    return repo_root / ".cache" / "voice-clone"
+
+
+def _clone_preview_path(repo_root: Path) -> Path:
+    return _clone_cache_dir(repo_root) / "preview.wav"
+
+
+def _clone_source_cache_path(source: str, repo_root: Path) -> Path:
+    parsed = urllib.parse.urlparse(source)
+    suffix = Path(parsed.path).suffix.lower() or ".audio"
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
+    return _clone_cache_dir(repo_root) / "sources" / f"{digest}{suffix}"
+
+
+def _resolve_clone_source(source: str, repo_root: Path) -> tuple[Path, str, str]:
+    raw = str(source or "").strip()
+    if not raw:
+        raise ValueError("Source is required.")
+    if _is_http_url(raw):
+        cache_path = _clone_source_cache_path(raw, repo_root)
+        try:
+            if not cache_path.exists() or cache_path.stat().st_size <= 0:
+                _download_clone_source(raw, cache_path)
+        except Exception as exc:
+            raise ValueError(f"Download failed: {exc}") from exc
+        parsed = urllib.parse.urlparse(raw)
+        source_name = Path(parsed.path).stem or "voice"
+        return cache_path, source_name, raw
+
+    input_path = Path(raw).expanduser()
+    if not input_path.is_absolute():
+        raise ValueError(
+            "Local source path must be absolute (or start with '~/')."
+        )
+    input_path = input_path.resolve()
+    if not input_path.exists() or not input_path.is_file():
+        raise ValueError(f"Input file not found: {input_path}")
+    return input_path, input_path.stem, str(input_path)
+
+
+def _run_clone_ffmpeg(input_path: Path, output_path: Path, start: str, duration: str) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = _build_clone_ffmpeg_cmd(input_path, output_path, start, duration)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        return
+    detail = (result.stderr or result.stdout or "").strip()
+    if detail:
+        tail = detail.splitlines()[-1]
+        raise RuntimeError(f"ffmpeg failed to process the audio: {tail}")
+    raise RuntimeError("ffmpeg failed to process the audio.")
 
 
 def _template_rules_path() -> Path:
@@ -915,6 +1082,14 @@ class FfmpegJob:
     ended_at: Optional[float] = None
 
 
+@dataclass
+class VoiceClonePreview:
+    source_key: str
+    start: str
+    duration: str
+    path: Path
+
+
 class SynthRequest(BaseModel):
     book_id: str
     voice: Optional[str] = None
@@ -1000,6 +1175,20 @@ class MetadataPayload(BaseModel):
     year: Optional[str] = None
 
 
+class VoiceClonePreviewPayload(BaseModel):
+    source: str
+    start: Optional[str] = None
+    duration: Union[str, float, int] = 12
+
+
+class VoiceCloneSavePayload(BaseModel):
+    source: str
+    start: Optional[str] = None
+    duration: Union[str, float, int] = 12
+    name: Optional[str] = None
+    overwrite: bool = False
+
+
 def create_app(root_dir: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app = FastAPI()
@@ -1010,6 +1199,7 @@ def create_app(root_dir: Path) -> FastAPI:
     merge_jobs: dict[str, MergeJob] = {}
     ffmpeg_job: Optional[FfmpegJob] = None
     ffmpeg_error: Optional[str] = None
+    clone_preview: Optional[VoiceClonePreview] = None
 
     app.mount("/audio", StaticFiles(directory=str(root_dir)), name="audio")
 
@@ -1191,6 +1381,112 @@ def create_app(root_dir: Path) -> FastAPI:
         ]
         return _no_store(
             {"local": local, "builtin": builtin, "default": DEFAULT_VOICE}
+        )
+
+    @app.post("/api/voices/clone/preview")
+    def preview_clone_voice(payload: VoiceClonePreviewPayload) -> JSONResponse:
+        nonlocal clone_preview
+        if shutil.which("ffmpeg") is None:
+            raise HTTPException(status_code=400, detail="ffmpeg not found on PATH.")
+
+        try:
+            input_path, source_name, source_key = _resolve_clone_source(
+                payload.source, repo_root
+            )
+            start = _parse_clone_time(payload.start, "start", allow_zero=True)
+            duration = _parse_clone_time(payload.duration, "duration", allow_zero=False)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        preview_path = _clone_preview_path(repo_root)
+        try:
+            _run_clone_ffmpeg(input_path, preview_path, start, duration)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        clone_preview = VoiceClonePreview(
+            source_key=source_key,
+            start=start,
+            duration=duration,
+            path=preview_path,
+        )
+        return _no_store(
+            {
+                "status": "ready",
+                "preview_url": f"/api/voices/clone/preview-audio?ts={int(time.time() * 1000)}",
+                "suggested_name": _coerce_clone_voice_name(None, source_name),
+                "start": start,
+                "duration": duration,
+            }
+        )
+
+    @app.get("/api/voices/clone/preview-audio")
+    def preview_clone_voice_audio() -> FileResponse:
+        preview_path = _clone_preview_path(repo_root)
+        if not preview_path.exists() or preview_path.stat().st_size <= 0:
+            raise HTTPException(status_code=404, detail="No clone preview available.")
+        return FileResponse(
+            str(preview_path),
+            media_type="audio/wav",
+            filename="voice-preview.wav",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/voices/clone/save")
+    def save_clone_voice(payload: VoiceCloneSavePayload) -> JSONResponse:
+        nonlocal clone_preview
+        if shutil.which("ffmpeg") is None:
+            raise HTTPException(status_code=400, detail="ffmpeg not found on PATH.")
+
+        try:
+            input_path, source_name, source_key = _resolve_clone_source(
+                payload.source, repo_root
+            )
+            start = _parse_clone_time(payload.start, "start", allow_zero=True)
+            duration = _parse_clone_time(payload.duration, "duration", allow_zero=False)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        output_name = _coerce_clone_voice_name(payload.name, source_name)
+        voices_dir = repo_root / "voices"
+        voices_dir.mkdir(parents=True, exist_ok=True)
+        output_path = voices_dir / f"{output_name}.wav"
+        replaced = output_path.exists()
+        if replaced and not payload.overwrite:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Voice '{output_name}' already exists.",
+            )
+
+        can_reuse_preview = (
+            clone_preview is not None
+            and clone_preview.path.exists()
+            and clone_preview.source_key == source_key
+            and clone_preview.start == start
+            and clone_preview.duration == duration
+        )
+        try:
+            if can_reuse_preview:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(clone_preview.path, output_path)
+            else:
+                _run_clone_ffmpeg(input_path, output_path, start, duration)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Unable to write voice: {exc}") from exc
+
+        try:
+            value = output_path.relative_to(repo_root).as_posix()
+        except ValueError:
+            value = str(output_path)
+        return _no_store(
+            {
+                "status": "saved",
+                "voice": {"label": output_name, "value": value},
+                "overwrote": replaced,
+                "used_preview": can_reuse_preview,
+            }
         )
 
     @app.get("/api/chunk-status")
