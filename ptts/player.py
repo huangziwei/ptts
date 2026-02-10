@@ -1488,6 +1488,7 @@ def create_app(root_dir: Path) -> FastAPI:
                     display_name = _normalize_voice_display_name(metadata.get("name"))
                     if display_name:
                         entry["label"] = display_name
+                        entry["display_name"] = display_name
                     gender = metadata.get("gender")
                     if isinstance(gender, str) and gender in _VOICE_GENDERS:
                         entry["gender"] = gender

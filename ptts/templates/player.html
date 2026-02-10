@@ -679,6 +679,38 @@
         padding: 5px 10px;
       }
 
+      .local-voice-action-wrap {
+        position: relative;
+        display: inline-flex;
+      }
+
+      .voice-action-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        min-width: 190px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        box-shadow: var(--shadow-pop);
+        padding: 6px;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        z-index: 20;
+      }
+
+      .voice-action-menu.open {
+        display: flex;
+      }
+
+      .voice-action-menu .btn {
+        width: 100%;
+        border-radius: 8px;
+        padding: 7px 10px;
+        text-align: left;
+      }
+
       .voice-button {
         border: 1px solid var(--line-strong);
         background: var(--surface-2);
@@ -1088,6 +1120,51 @@
         margin: 2px 0 0;
         font-size: 11px;
         color: var(--muted);
+      }
+
+      .clone-gender-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .clone-gender-option {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        cursor: pointer;
+      }
+
+      .clone-gender-option input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .clone-gender-option span {
+        border: 1px solid var(--line-strong);
+        background: var(--surface-2);
+        color: var(--ink);
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .clone-gender-option input:checked + span {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      .clone-gender-option input:focus-visible + span {
+        outline: 2px solid var(--accent-2);
+        outline-offset: 2px;
+      }
+
+      .clone-gender-option input:disabled + span {
+        opacity: 0.6;
+        cursor: not-allowed;
       }
 
       .reader-body {
@@ -2026,12 +2103,17 @@
               </div>
               <label for="cloneDisplayName">Display name (optional)</label>
               <input id="cloneDisplayName" type="text" placeholder="Shown in voice list" autocomplete="off" />
-              <label for="cloneGender">Voice gender</label>
-              <select id="cloneGender">
-                <option value="">None</option>
-                <option value="female">Female</option>
-                <option value="male">Male</option>
-              </select>
+              <label>Voice gender</label>
+              <div class="clone-gender-toggle" role="radiogroup" aria-label="Voice gender">
+                <label class="clone-gender-option">
+                  <input id="cloneGenderMale" type="radio" name="cloneGender" value="male" />
+                  <span>Male</span>
+                </label>
+                <label class="clone-gender-option">
+                  <input id="cloneGenderFemale" type="radio" name="cloneGender" value="female" />
+                  <span>Female</span>
+                </label>
+              </div>
               <div class="clone-preview" id="clonePreviewWrap" hidden>
                 <audio id="clonePreviewAudio" controls preload="metadata"></audio>
               </div>
@@ -2296,7 +2378,8 @@
       const cloneDuration = document.getElementById("cloneDuration");
       const cloneName = document.getElementById("cloneName");
       const cloneDisplayName = document.getElementById("cloneDisplayName");
-      const cloneGender = document.getElementById("cloneGender");
+      const cloneGenderMale = document.getElementById("cloneGenderMale");
+      const cloneGenderFemale = document.getElementById("cloneGenderFemale");
       const clonePreviewWrap = document.getElementById("clonePreviewWrap");
       const clonePreviewAudio = document.getElementById("clonePreviewAudio");
       const metaModal = document.getElementById("metaModal");
@@ -3330,6 +3413,45 @@
         return "";
       }
 
+      function getCloneGenderValue() {
+        if (cloneGenderMale && cloneGenderMale.checked) {
+          return "male";
+        }
+        if (cloneGenderFemale && cloneGenderFemale.checked) {
+          return "female";
+        }
+        return "";
+      }
+
+      function setCloneGenderValue(value) {
+        const normalized = normalizeVoiceGender(value);
+        if (cloneGenderMale) {
+          cloneGenderMale.checked = normalized === "male";
+        }
+        if (cloneGenderFemale) {
+          cloneGenderFemale.checked = normalized === "female";
+        }
+      }
+
+      function setCloneGenderDisabled(disabled) {
+        if (cloneGenderMale) {
+          cloneGenderMale.disabled = disabled;
+        }
+        if (cloneGenderFemale) {
+          cloneGenderFemale.disabled = disabled;
+        }
+      }
+
+      function focusCloneGender() {
+        if (cloneGenderMale && !cloneGenderMale.disabled) {
+          cloneGenderMale.focus();
+          return;
+        }
+        if (cloneGenderFemale && !cloneGenderFemale.disabled) {
+          cloneGenderFemale.focus();
+        }
+      }
+
       function isLocalVoice(value) {
         if (!value) {
           return false;
@@ -3543,8 +3665,11 @@
             if (gender) {
               voiceGenderMap[value] = gender;
             }
-            if (typeof item.label === "string" && item.label.trim()) {
-              voiceDisplayNameMap[value] = item.label.trim();
+            if (
+              typeof item.display_name === "string" &&
+              item.display_name.trim()
+            ) {
+              voiceDisplayNameMap[value] = item.display_name.trim();
             }
           });
           state.voiceGenderMap = voiceGenderMap;
@@ -5062,9 +5187,7 @@
         if (cloneDisplayName) {
           cloneDisplayName.disabled = busy;
         }
-        if (cloneGender) {
-          cloneGender.disabled = busy;
-        }
+        setCloneGenderDisabled(busy);
         if (clonePreviewBtn) {
           clonePreviewBtn.disabled = busy;
         }
@@ -5135,19 +5258,17 @@
             cloneDisplayName.value = "";
           }
         }
-        if (cloneGender) {
-          if (mode === "edit" && selectedForEdit) {
-            cloneGender.value = state.voiceGenderMap[selectedForEdit] || "";
-          } else {
-            cloneGender.value = "";
-          }
+        if (mode === "edit" && selectedForEdit) {
+          setCloneGenderValue(state.voiceGenderMap[selectedForEdit] || "");
+        } else {
+          setCloneGenderValue("");
         }
         state.cloneNameDirty = false;
         setCloneStatus("");
         setCloneBusy(false);
         cloneModal.hidden = false;
-        if (mode === "edit" && cloneGender) {
-          cloneGender.focus();
+        if (mode === "edit") {
+          focusCloneGender();
         } else if (cloneSource) {
           cloneSource.focus();
           cloneSource.select();
@@ -5173,7 +5294,7 @@
         const duration = cloneDuration ? cloneDuration.value.trim() : "";
         const name = cloneName ? cloneName.value.trim() : "";
         const displayName = cloneDisplayName ? cloneDisplayName.value.trim() : "";
-        const gender = cloneGender ? normalizeVoiceGender(cloneGender.value) : "";
+        const gender = getCloneGenderValue();
         if (!source) {
           setCloneStatus("Source is required.", "error");
           if (cloneSource) {
@@ -5188,19 +5309,22 @@
           }
           return null;
         }
+        if (!gender) {
+          setCloneStatus("Select Male or Female.", "error");
+          focusCloneGender();
+          return null;
+        }
         const payload = {
           source,
           start: start || "0",
           duration: duration || "12",
+          gender,
         };
         if (name) {
           payload.name = name;
         }
         if (displayName) {
           payload.display_name = displayName;
-        }
-        if (gender) {
-          payload.gender = gender;
         }
         return payload;
       }
@@ -5250,10 +5374,15 @@
           setCloneStatus("Select a local voice to edit.", "error");
           return;
         }
-        const gender = cloneGender ? normalizeVoiceGender(cloneGender.value) : "";
+        const gender = getCloneGenderValue();
         const displayName = cloneDisplayName
           ? cloneDisplayName.value.trim()
           : "";
+        if (!gender) {
+          setCloneStatus("Select Male or Female.", "error");
+          focusCloneGender();
+          return;
+        }
         setCloneBusy(true);
         setCloneStatus("Saving metadata...");
         try {
@@ -5262,7 +5391,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               voice: voiceValue,
-              gender: gender || null,
+              gender,
               name: displayName || null,
             }),
           });
