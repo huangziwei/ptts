@@ -628,6 +628,65 @@ def _load_voice_map(book_dir: Path, repo_root: Path) -> dict:
     )
 
 
+def _normalize_reading_overrides(raw: object) -> List[dict]:
+    items = raw if isinstance(raw, list) else []
+    cleaned: List[dict] = []
+    for item in items:
+        base = ""
+        reading = ""
+        pattern = ""
+        regex = False
+        mode = ""
+        case_sensitive: Optional[bool] = None
+        if isinstance(item, dict):
+            base = str(item.get("base") or "").strip()
+            reading = str(
+                item.get("reading")
+                or item.get("replacement")
+                or item.get("to")
+                or item.get("value")
+                or ""
+            ).strip()
+            pattern = str(item.get("pattern") or "").strip()
+            regex = bool(item.get("regex"))
+            mode = str(item.get("mode") or "").strip()
+            raw_case = item.get("case_sensitive")
+            if isinstance(raw_case, bool):
+                case_sensitive = raw_case
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            base = str(item[0] or "").strip()
+            reading = str(item[1] or "").strip()
+        else:
+            continue
+        if not reading:
+            continue
+
+        entry: dict = {}
+        if pattern:
+            entry = {"pattern": pattern, "reading": reading}
+        elif regex and base:
+            entry = {"pattern": base, "reading": reading}
+        elif base:
+            lowered = base.lower()
+            if lowered.startswith("re:") or lowered.startswith("regex:"):
+                prefix_len = 3 if lowered.startswith("re:") else 6
+                regex_pattern = base[prefix_len:].strip()
+                if not regex_pattern:
+                    continue
+                entry = {"pattern": regex_pattern, "reading": reading}
+            else:
+                entry = {"base": base, "reading": reading}
+        else:
+            continue
+
+        if mode:
+            entry["mode"] = mode
+        if case_sensitive is not None:
+            entry["case_sensitive"] = case_sensitive
+        cleaned.append(entry)
+    return cleaned
+
+
 def _book_details(book_dir: Path, repo_root: Path) -> dict:
     toc = _load_json(book_dir / "clean" / "toc.json")
     metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
@@ -1239,6 +1298,11 @@ class CleanEditPayload(BaseModel):
     book_id: str
     chapter_index: int
     text: str
+
+
+class ReadingOverridesPayload(BaseModel):
+    book_id: str
+    overrides: List[dict] = []
 
 
 class PlaybackPayload(BaseModel):
@@ -2083,6 +2147,47 @@ def create_app(root_dir: Path) -> FastAPI:
         return _no_store(
             {"status": "ok", "chapter_index": payload.chapter_index, "tts_cleared": tts_cleared}
         )
+
+    @app.get("/api/reading-overrides")
+    def reading_overrides_get(book_id: str) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        try:
+            global_overrides, _ = tts_util._load_reading_overrides(book_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _no_store({"book_id": book_id, "overrides": global_overrides})
+
+    @app.post("/api/reading-overrides")
+    def reading_overrides_save(payload: ReadingOverridesPayload) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, payload.book_id)
+        synth_job = jobs.get(payload.book_id)
+        if synth_job and synth_job.process.poll() is None:
+            raise HTTPException(
+                status_code=409, detail="Stop TTS before editing readings."
+            )
+        merge_job = merge_jobs.get(payload.book_id)
+        if merge_job and merge_job.process.poll() is None:
+            raise HTTPException(
+                status_code=409, detail="Stop merge before editing readings."
+            )
+
+        overrides = _normalize_reading_overrides(payload.overrides)
+        overrides_path = book_dir / tts_util.READING_OVERRIDES_FILENAME
+        data: dict = {}
+        if overrides_path.exists():
+            try:
+                data = _load_json(overrides_path)
+            except Exception:
+                data = {}
+        if not isinstance(data, dict):
+            data = {}
+        now = int(time.time())
+        data.setdefault("created_unix", now)
+        data["updated_unix"] = now
+        data["global"] = overrides
+        overrides_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(overrides_path, data)
+        return _no_store({"status": "ok", "overrides": overrides, "tts_cleared": False})
 
     @app.get("/api/synth/status")
     def synth_status(book_id: str) -> JSONResponse:

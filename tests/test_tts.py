@@ -129,6 +129,69 @@ def test_prepare_tts_text_normalizes_roman_decimal() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_applies_reading_overrides() -> None:
+    text = "Sutta and sati appear in this sentence."
+    overrides = [
+        {"base": "sutta", "reading": "soot-ta"},
+        {"base": "sati", "reading": "sah-tee"},
+    ]
+    expected = "soot-ta and sah-tee appear in this sentence."
+    assert tts.prepare_tts_text(text, overrides) == expected
+
+
+def test_prepare_tts_text_reading_overrides_word_boundary_default() -> None:
+    text = "Sati appears, but satisfaction should not change."
+    overrides = [{"base": "sati", "reading": "sah-tee"}]
+    expected = "sah-tee appears, but satisfaction should not change."
+    assert tts.prepare_tts_text(text, overrides) == expected
+
+
+def test_apply_reading_overrides_first_mode() -> None:
+    text = "sutta sutta sutta"
+    overrides = [{"base": "sutta", "reading": "soot-ta", "mode": "first"}]
+    assert tts.apply_reading_overrides(text, overrides) == "soot-ta sutta sutta"
+
+
+def test_merge_reading_overrides_prefers_chapter() -> None:
+    global_overrides = [{"base": "sati", "reading": "sah-tee"}]
+    chapter_overrides = [{"base": "sati", "reading": "sah-ti"}]
+    merged = tts._merge_reading_overrides(global_overrides, chapter_overrides)
+    assert tts.apply_reading_overrides("sati", merged) == "sah-ti"
+
+
+def test_load_reading_overrides(tmp_path: Path) -> None:
+    payload = {
+        "global": [
+            {"base": "sutta", "reading": "soot-ta"},
+            {"pattern": r"satipatth?ana", "reading": "sah-tee-pat-ta-na"},
+        ],
+        "chapters": {
+            "0001-intro": {
+                "replacements": [
+                    {"base": "sati", "reading": "sah-tee"},
+                ]
+            }
+        },
+    }
+    path = tmp_path / "reading-overrides.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    global_overrides, chapter_overrides = tts._load_reading_overrides(tmp_path)
+    assert global_overrides == [
+        {"base": "sutta", "reading": "soot-ta", "mode": "word", "case_sensitive": False},
+        {
+            "pattern": r"satipatth?ana",
+            "reading": "sah-tee-pat-ta-na",
+            "mode": "all",
+            "case_sensitive": False,
+        },
+    ]
+    assert chapter_overrides == {
+        "0001-intro": [
+            {"base": "sati", "reading": "sah-tee", "mode": "word", "case_sensitive": False}
+        ]
+    }
+
+
 def test_make_chunks_skips_us_initial_split() -> None:
     text = "The U.S. Army is here."
     chunks = tts.make_chunks(text, max_chars=200)

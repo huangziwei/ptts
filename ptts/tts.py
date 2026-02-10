@@ -361,6 +361,18 @@ _SCALE_WORDS = (
     (1_000_000, "million"),
     (1_000, "thousand"),
 )
+READING_OVERRIDES_FILENAME = "reading-overrides.json"
+_READING_MODES = {"all", "first", "word", "word_first"}
+_READING_MODE_ALIASES = {
+    "": "word",
+    "all": "all",
+    "first": "first",
+    "word": "word",
+    "word_first": "word_first",
+    "once": "first",
+    "substring": "all",
+    "substring_first": "first",
+}
 
 
 @dataclass
@@ -1051,10 +1063,258 @@ def _normalize_roman_numerals(text: str) -> str:
     return f"{_int_to_words(number)}{suffix}"
 
 
-def prepare_tts_text(text: str) -> str:
+def _normalize_reading_mode(value: object, *, default: str) -> str:
+    cleaned = str(value or "").strip().lower()
+    if not cleaned:
+        return default
+    mode = _READING_MODE_ALIASES.get(cleaned)
+    if mode is None or mode not in _READING_MODES:
+        raise ValueError(
+            "Reading override mode must be one of: "
+            "all, first, word, word_first."
+        )
+    return mode
+
+
+def _normalize_reading_override_entry(raw: object) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+
+    reading = str(
+        raw.get("reading")
+        or raw.get("replacement")
+        or raw.get("to")
+        or raw.get("value")
+        or ""
+    ).strip()
+    if not reading:
+        return None
+
+    pattern = str(raw.get("pattern") or "").strip()
+    base = str(raw.get("base") or raw.get("from") or raw.get("key") or "").strip()
+    is_regex = bool(raw.get("regex"))
+    case_sensitive = bool(raw.get("case_sensitive"))
+    mode_raw = raw.get("mode")
+
+    if pattern or (is_regex and base):
+        if not pattern:
+            pattern = base
+        mode = _normalize_reading_mode(mode_raw, default="all")
+        return {
+            "pattern": pattern,
+            "reading": reading,
+            "mode": mode,
+            "case_sensitive": case_sensitive,
+        }
+
+    if not base:
+        return None
+
+    mode = _normalize_reading_mode(mode_raw, default="word")
+    return {
+        "base": base,
+        "reading": reading,
+        "mode": mode,
+        "case_sensitive": case_sensitive,
+    }
+
+
+def _parse_reading_entry_line(line: str) -> Optional[Dict[str, Any]]:
+    raw = str(line or "").strip()
+    if not raw or raw.startswith("#"):
+        return None
+    if "＝" in raw:
+        base, reading = raw.split("＝", 1)
+    elif "=" in raw:
+        base, reading = raw.split("=", 1)
+    else:
+        return None
+    return _normalize_reading_override_entry(
+        {"base": base.strip(), "reading": reading.strip()}
+    )
+
+
+def _parse_reading_entries(raw: object) -> List[Dict[str, Any]]:
+    if isinstance(raw, dict):
+        list_like = raw.get("replacements")
+        if list_like is None:
+            list_like = raw.get("entries")
+        if list_like is None:
+            list_like = [
+                {"base": key, "reading": value}
+                for key, value in raw.items()
+                if isinstance(value, str)
+            ]
+    elif isinstance(raw, list):
+        list_like = raw
+    else:
+        list_like = []
+
+    entries: List[Dict[str, Any]] = []
+    for item in list_like:
+        entry: Optional[Dict[str, Any]] = None
+        if isinstance(item, dict):
+            entry = _normalize_reading_override_entry(item)
+        elif isinstance(item, (tuple, list)) and len(item) >= 2:
+            entry = _normalize_reading_override_entry(
+                {"base": item[0], "reading": item[1]}
+            )
+        elif isinstance(item, str):
+            entry = _parse_reading_entry_line(item)
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def _split_reading_overrides_data(
+    data: object,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+    global_entries: List[Dict[str, Any]] = []
+    chapters: Dict[str, List[Dict[str, Any]]] = {}
+    chapters_raw: object = {}
+
+    if isinstance(data, list):
+        global_entries = _parse_reading_entries(data)
+    elif isinstance(data, dict):
+        has_scoped_keys = any(
+            key in data
+            for key in ("global", "default", "*", "chapters", "replacements", "entries")
+        )
+        if "global" in data:
+            global_entries = _parse_reading_entries(data.get("global"))
+        elif "default" in data:
+            global_entries = _parse_reading_entries(data.get("default"))
+        elif "*" in data:
+            global_entries = _parse_reading_entries(data.get("*"))
+        elif "replacements" in data or "entries" in data:
+            global_entries = _parse_reading_entries(data)
+        elif not has_scoped_keys:
+            global_entries = _parse_reading_entries(data)
+
+        if "chapters" in data:
+            chapters_raw = data.get("chapters") or {}
+
+    if isinstance(chapters_raw, dict):
+        for chapter_id, raw_entries in chapters_raw.items():
+            chapter_entries = _parse_reading_entries(raw_entries)
+            if chapter_entries:
+                chapters[str(chapter_id)] = chapter_entries
+
+    return global_entries, chapters
+
+
+def _reading_overrides_path(book_dir: Path) -> Path:
+    return book_dir / READING_OVERRIDES_FILENAME
+
+
+def _load_reading_overrides(
+    book_dir: Path,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+    path = _reading_overrides_path(book_dir)
+    if not path.exists():
+        return [], {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+    global_entries, chapter_entries = _split_reading_overrides_data(data)
+    return global_entries, chapter_entries
+
+
+def _merge_reading_overrides(
+    global_overrides: Sequence[Dict[str, Any]],
+    chapter_overrides: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not global_overrides and not chapter_overrides:
+        return []
+
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    def key_for(entry: Dict[str, Any]) -> str:
+        pattern = str(entry.get("pattern") or "").strip()
+        if pattern:
+            case_key = "cs1" if bool(entry.get("case_sensitive")) else "cs0"
+            mode = str(entry.get("mode") or "all")
+            return f"re:{pattern}:{mode}:{case_key}"
+        base = str(entry.get("base") or "").strip()
+        case_sensitive = bool(entry.get("case_sensitive"))
+        mode = str(entry.get("mode") or "word")
+        if not case_sensitive:
+            base = base.lower()
+        case_key = "cs1" if case_sensitive else "cs0"
+        return f"lit:{base}:{mode}:{case_key}"
+
+    def add_items(items: Sequence[Dict[str, Any]]) -> None:
+        for item in items:
+            entry = _normalize_reading_override_entry(item)
+            if not entry:
+                continue
+            merged[key_for(entry)] = entry
+
+    add_items(global_overrides)
+    add_items(chapter_overrides)
+    return list(merged.values())
+
+
+def _literal_override_pattern(base: str, mode: str) -> str:
+    escaped = re.escape(base)
+    if mode not in {"word", "word_first"}:
+        return escaped
+    # Word boundary based on ASCII word chars; this keeps punctuation-delimited tokens replaceable.
+    return rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
+
+
+def apply_reading_overrides(text: str, overrides: Sequence[Dict[str, Any]]) -> str:
+    if not text or not overrides:
+        return text
+
+    literals: List[Dict[str, Any]] = []
+    regex_entries: List[Dict[str, Any]] = []
+    for item in overrides:
+        entry = _normalize_reading_override_entry(item)
+        if not entry:
+            continue
+        if entry.get("pattern"):
+            regex_entries.append(entry)
+        else:
+            literals.append(entry)
+
+    out = text
+    for item in sorted(literals, key=lambda e: len(str(e.get("base") or "")), reverse=True):
+        base = str(item.get("base") or "")
+        reading = str(item.get("reading") or "")
+        mode = str(item.get("mode") or "word")
+        if not base or not reading:
+            continue
+        pattern = _literal_override_pattern(base, mode)
+        flags = 0 if bool(item.get("case_sensitive")) else re.IGNORECASE
+        count = 1 if mode in {"first", "word_first"} else 0
+        out = re.sub(pattern, lambda _m, value=reading: value, out, count=count, flags=flags)
+
+    for item in regex_entries:
+        pattern = str(item.get("pattern") or "")
+        reading = str(item.get("reading") or "")
+        mode = str(item.get("mode") or "all")
+        if not pattern or not reading:
+            continue
+        flags = 0 if bool(item.get("case_sensitive")) else re.IGNORECASE
+        count = 1 if mode in {"first", "word_first"} else 0
+        try:
+            out = re.sub(pattern, reading, out, count=count, flags=flags)
+        except re.error:
+            continue
+
+    return out
+
+
+def prepare_tts_text(
+    text: str,
+    reading_overrides: Optional[Sequence[Dict[str, Any]]] = None,
+) -> str:
     text = _strip_double_quotes(text)
     text = _strip_single_quotes(text)
     text = _transliterate_pali_sanskrit(text)
+    text = apply_reading_overrides(text, reading_overrides or [])
     text = normalize_abbreviations(text)
     text = _normalize_roman_numerals(text)
     text = normalize_numbers_for_tts(text)
@@ -1481,6 +1741,7 @@ def synthesize(
     wipe_segments: Optional[bool] = None,
     only_chapter_ids: Optional[set[str]] = None,
     voice_map_path: Optional[Path] = None,
+    reading_overrides_dir: Optional[Path] = None,
     base_dir: Optional[Path] = None,
 ) -> int:
     _require_tts()
@@ -1499,6 +1760,16 @@ def synthesize(
     try:
         voice_map = _load_voice_map(voice_map_path)
     except (FileNotFoundError, ValueError) as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    try:
+        global_reading_overrides: List[Dict[str, Any]] = []
+        chapter_reading_overrides: Dict[str, List[Dict[str, Any]]] = {}
+        if reading_overrides_dir is not None:
+            global_reading_overrides, chapter_reading_overrides = _load_reading_overrides(
+                reading_overrides_dir
+            )
+    except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
 
@@ -1548,6 +1819,14 @@ def synthesize(
         for entry in manifest.get("chapters", []):
             chapter_id = entry.get("id") or "chapter"
             chapter_voice_map[chapter_id] = default_voice
+
+    chapter_reading_map: Dict[str, List[Dict[str, Any]]] = {}
+    for entry in manifest.get("chapters", []):
+        chapter_id = entry.get("id") or "chapter"
+        chapter_entries = chapter_reading_overrides.get(chapter_id, [])
+        chapter_reading_map[chapter_id] = _merge_reading_overrides(
+            global_reading_overrides, chapter_entries
+        )
 
     voice_prompts: Dict[str, str] = {}
     try:
@@ -1649,7 +1928,9 @@ def synthesize(
                     progress.advance(overall_task, 1)
                     continue
 
-                tts_text = prepare_tts_text(chunk_text)
+                tts_text = prepare_tts_text(
+                    chunk_text, chapter_reading_map.get(chapter_id, [])
+                )
                 if not tts_text.strip():
                     sys.stderr.write(
                         f"Skipping empty chunk {chapter_id} ({chunk_idx}/{chapter_total}).\n"
@@ -1860,7 +2141,17 @@ def synthesize_chunk(
     pad_samples = base_pad_samples * pause_multiplier
     pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
 
-    tts_text = prepare_tts_text(chunk_text)
+    overrides_dir = out_dir
+    if not _reading_overrides_path(overrides_dir).exists():
+        overrides_dir = out_dir.parent
+    global_reading_overrides, chapter_reading_overrides = _load_reading_overrides(
+        overrides_dir
+    )
+    merged_reading_overrides = _merge_reading_overrides(
+        global_reading_overrides,
+        chapter_reading_overrides.get(chapter_id, []),
+    )
+    tts_text = prepare_tts_text(chunk_text, merged_reading_overrides)
     seg_path = out_dir / "segments" / chapter_id / f"{chunk_index + 1:06d}.wav"
     seg_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1929,6 +2220,7 @@ def synthesize_text(
         chunk_mode=chunk_mode,
         rechunk=rechunk,
         voice_map_path=voice_map_path,
+        reading_overrides_dir=None,
         base_dir=base_dir,
     )
 
@@ -1961,6 +2253,7 @@ def synthesize_book(
         chunk_mode=chunk_mode,
         rechunk=rechunk,
         voice_map_path=voice_map_path,
+        reading_overrides_dir=book_dir,
         base_dir=base_dir,
     )
 
@@ -2021,6 +2314,7 @@ def synthesize_book_sample(
         wipe_segments=False,
         only_chapter_ids={sample_id},
         voice_map_path=voice_map_path,
+        reading_overrides_dir=book_dir,
         base_dir=base_dir,
     )
 

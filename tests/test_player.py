@@ -23,6 +23,26 @@ def test_parse_clone_time_accepts_seconds_and_timecode() -> None:
     assert player._parse_clone_time("00:01:02.5", "start", allow_zero=True) == "62.5"
 
 
+def test_normalize_reading_overrides() -> None:
+    raw = [
+        {"base": "sutta", "reading": "soot-ta"},
+        {"base": "", "reading": "ignored"},
+        ["sati", "sah-tee"],
+        {"base": "re:satipatth?ana", "reading": "sah-tee-pat-ta-na"},
+        {"pattern": r"samyutta", "reading": "samyukta", "mode": "first"},
+        {"base": "Sati", "reading": "sah-tee", "case_sensitive": True},
+        "invalid",
+    ]
+    cleaned = player._normalize_reading_overrides(raw)
+    assert cleaned == [
+        {"base": "sutta", "reading": "soot-ta"},
+        {"base": "sati", "reading": "sah-tee"},
+        {"pattern": "satipatth?ana", "reading": "sah-tee-pat-ta-na"},
+        {"pattern": r"samyutta", "reading": "samyukta", "mode": "first"},
+        {"base": "Sati", "reading": "sah-tee", "case_sensitive": True},
+    ]
+
+
 @pytest.mark.parametrize(
     "raw,allow_zero,message",
     [

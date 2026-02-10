@@ -71,6 +71,22 @@ uv run --with pocket-tts ptts synth --book out/some-book --voice alba
 uv run --with pocket-tts ptts synth --book out/some-book --voice voices/ray.wav
 ```
 
+Optional: add per-book pronunciation overrides at
+`out/some-book/reading-overrides.json`:
+
+```json
+{
+  "global": [
+    { "base": "sutta", "reading": "soot-ta" },
+    { "base": "sati", "reading": "sah-tee" },
+    { "base": "satipatthana", "reading": "sah-tee-pat-ta-na" }
+  ]
+}
+```
+
+`base` uses whole-word matching by default (case-insensitive). Chapter-specific
+overrides are also supported under `"chapters": { "<chapter-id>": { "replacements": [...] } }`.
+
 #### 4) Merge to M4B
 ```bash
 uv run ptts merge \

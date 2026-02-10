@@ -1435,6 +1435,24 @@
         border-radius: 3px;
       }
 
+      .edit-overrides .edit-meta {
+        margin: 4px 0 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .edit-overrides textarea {
+        width: 100%;
+        min-height: 96px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        background: var(--surface);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        color: var(--ink);
+      }
+
       .edit-rules label {
         display: block;
         font-size: 12px;
@@ -2024,6 +2042,14 @@
                   </div>
                 </div>
               </div>
+              <div class="panel edit-overrides">
+                <div class="edit-section-title" id="editOverridesTitle">Reading overrides (global)</div>
+                <p class="edit-meta" id="editOverridesHelp">One line each: `base=reading` or `re:pattern=reading`. Applied only at TTS time.</p>
+                <textarea id="readingOverrides"></textarea>
+                <div class="edit-clean-actions">
+                  <button class="btn small" id="saveOverridesBtn" type="button">Save overrides</button>
+                </div>
+              </div>
               <div class="panel edit-rules">
                 <div class="edit-section-title">Rules</div>
                 <label for="rulesParagraphs">Paragraph breaks</label>
@@ -2284,6 +2310,8 @@
         cleanEditing: false,
         cleanEditOriginal: "",
         cleanEditChapter: null,
+        readingOverridesDirty: false,
+        readingOverridesOriginal: "",
         bookVoice: null,
         playTransitioning: false,
         pendingBoundary: null,
@@ -2336,6 +2364,10 @@
       const editCleanActions = document.getElementById("editCleanActions");
       const saveCleanBtn = document.getElementById("saveCleanBtn");
       const cancelCleanBtn = document.getElementById("cancelCleanBtn");
+      const editOverridesTitle = document.getElementById("editOverridesTitle");
+      const editOverridesHelp = document.getElementById("editOverridesHelp");
+      const readingOverrides = document.getElementById("readingOverrides");
+      const saveOverridesBtn = document.getElementById("saveOverridesBtn");
       const bookMenuBtn = document.getElementById("bookMenuBtn");
       const bookMenuPanel = document.getElementById("bookMenuPanel");
       const editMetaBtn = document.getElementById("editMetaBtn");
@@ -4101,6 +4133,11 @@
         state.previewChapterIndex = null;
         state.previewSelectedTitle = "";
         state.previewSelectedKind = "";
+        state.readingOverridesDirty = false;
+        state.readingOverridesOriginal = "";
+        if (readingOverrides) {
+          readingOverrides.value = "";
+        }
         updateUrl(null, null);
         updateMergeButtonState();
         updateClearButtonState();
@@ -4410,6 +4447,7 @@
           startSynthPolling();
           if (state.editOpen) {
             await loadPreview(state.previewChapterIndex);
+            await loadReadingOverrides(true);
           }
           scrollToBookSection();
         } catch (err) {
@@ -6280,6 +6318,123 @@
           .filter((line) => line.length > 0);
       }
 
+      function overridesToText(entries) {
+        if (!Array.isArray(entries) || entries.length === 0) {
+          return "";
+        }
+        return entries
+          .map((entry) => {
+            const rawBase = entry.pattern
+              ? `re:${entry.pattern}`
+              : (entry.base || "");
+            return `${rawBase}=${entry.reading || ""}`.trim();
+          })
+          .filter((line) => line !== "=")
+          .join("\n");
+      }
+
+      function parseOverrideLines(text) {
+        const entries = [];
+        const invalid = [];
+        const separators = ["＝", "=", "\t"];
+        (text || "")
+          .split("\n")
+          .map((line) => line.trim())
+          .forEach((line) => {
+            if (!line) {
+              return;
+            }
+            let sepIndex = -1;
+            let sepLen = 1;
+            separators.forEach((sep) => {
+              const idx = line.indexOf(sep);
+              if (idx !== -1 && (sepIndex === -1 || idx < sepIndex)) {
+                sepIndex = idx;
+                sepLen = sep.length;
+              }
+            });
+            if (sepIndex === -1) {
+              invalid.push(line);
+              return;
+            }
+            const base = line.slice(0, sepIndex).trim();
+            const reading = line.slice(sepIndex + sepLen).trim();
+            if (!base || !reading) {
+              invalid.push(line);
+              return;
+            }
+            const lowered = base.toLowerCase();
+            if (lowered.startsWith("re:") || lowered.startsWith("regex:")) {
+              const prefixLen = lowered.startsWith("re:") ? 3 : 6;
+              const pattern = base.slice(prefixLen).trim();
+              if (!pattern) {
+                invalid.push(line);
+                return;
+              }
+              entries.push({ pattern, reading, regex: true });
+              return;
+            }
+            entries.push({ base, reading });
+          });
+        return { entries, invalid };
+      }
+
+      async function loadReadingOverrides(force = false) {
+        if (!state.book || !readingOverrides) {
+          return;
+        }
+        if (state.readingOverridesDirty && !force) {
+          const discard = window.confirm("Discard unsaved reading overrides?");
+          if (!discard) {
+            return;
+          }
+        }
+        editStatus.textContent = "Loading reading overrides...";
+        try {
+          const params = new URLSearchParams();
+          params.set("book_id", state.book.id);
+          const data = await fetchJson(`/api/reading-overrides?${params.toString()}`);
+          const text = overridesToText(data.overrides || []);
+          readingOverrides.value = text;
+          state.readingOverridesOriginal = text;
+          state.readingOverridesDirty = false;
+          editStatus.textContent = "";
+        } catch (err) {
+          editStatus.textContent = err.message || "Failed to load reading overrides.";
+        }
+      }
+
+      async function saveReadingOverrides() {
+        if (!state.book || !readingOverrides) {
+          return;
+        }
+        const { entries, invalid } = parseOverrideLines(readingOverrides.value || "");
+        editStatus.textContent = "Saving reading overrides...";
+        try {
+          const data = await fetchJson("/api/reading-overrides", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              book_id: state.book.id,
+              overrides: entries,
+            }),
+          });
+          const text = overridesToText(data.overrides || entries);
+          readingOverrides.value = text;
+          state.readingOverridesOriginal = text;
+          state.readingOverridesDirty = false;
+          const ignored = invalid.length
+            ? ` Ignored ${invalid.length} invalid line(s).`
+            : "";
+          editStatus.textContent = data.tts_cleared
+            ? `Saved overrides. TTS cache cleared.${ignored}`
+            : `Saved overrides.${ignored}`;
+          await selectBook(state.book.id, state.currentChapterId);
+        } catch (err) {
+          editStatus.textContent = err.message || "Failed to save reading overrides.";
+        }
+      }
+
       function rulesFromForm() {
         return {
           paragraph_breaks: rulesParagraphs.value || "double",
@@ -6442,6 +6597,7 @@
         editToggle.textContent = state.editOpen ? "Close" : "Edit";
         if (state.editOpen) {
           loadPreview(state.previewChapterIndex);
+          loadReadingOverrides();
           editPanel.scrollIntoView({ behavior: "smooth", block: "start" });
         } else if (state.cleanEditing) {
           setCleanEditMode(false);
@@ -6947,11 +7103,19 @@
       });
       editToggle.addEventListener("click", toggleEditPanel);
       sanitizeBtn.addEventListener("click", runSanitize);
-      editReload.addEventListener("click", () => loadPreview(state.previewChapterIndex));
+      editReload.addEventListener("click", () => {
+        loadPreview(state.previewChapterIndex);
+        loadReadingOverrides();
+      });
       dropChapterBtn.addEventListener("click", dropSelectedChapter);
       editCleanBtn.addEventListener("click", startCleanEdit);
       saveCleanBtn.addEventListener("click", saveCleanText);
       cancelCleanBtn.addEventListener("click", cancelCleanEdit);
+      readingOverrides.addEventListener("input", () => {
+        state.readingOverridesDirty =
+          readingOverrides.value !== state.readingOverridesOriginal;
+      });
+      saveOverridesBtn.addEventListener("click", saveReadingOverrides);
       rulesDrop.addEventListener("input", scheduleRulesSave);
       rulesCutoff.addEventListener("input", scheduleRulesSave);
       rulesRemove.addEventListener("input", scheduleRulesSave);
