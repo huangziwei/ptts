@@ -6428,7 +6428,7 @@
             : "";
           editStatus.textContent = data.tts_cleared
             ? `Saved overrides. TTS cache cleared.${ignored}`
-            : `Saved overrides.${ignored}`;
+            : `Saved overrides. Existing audio kept; regenerate chunks to apply.${ignored}`;
           await selectBook(state.book.id, state.currentChapterId);
         } catch (err) {
           editStatus.textContent = err.message || "Failed to save reading overrides.";

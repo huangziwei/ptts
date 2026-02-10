@@ -334,3 +334,57 @@ def test_voice_delete_removes_file_and_metadata(tmp_path: Path) -> None:
         json={"voice": "voices/sample.wav"},
     )
     assert missing.status_code == 404
+
+
+def _make_book(root_dir: Path, book_id: str) -> Path:
+    book_dir = root_dir / book_id
+    (book_dir / "clean").mkdir(parents=True, exist_ok=True)
+    (book_dir / "clean" / "toc.json").write_text(
+        '{"metadata": {"title": "Book"}, "chapters": []}\n',
+        encoding="utf-8",
+    )
+    return book_dir
+
+
+def test_reading_overrides_save_and_get(tmp_path: Path) -> None:
+    _repo_root, root_dir = _make_repo(tmp_path)
+    book_dir = _make_book(root_dir, "book-a")
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    save = client.post(
+        "/api/reading-overrides",
+        json={
+            "book_id": "book-a",
+            "overrides": [
+                {"base": "sutta", "reading": "soot-ta"},
+                {"base": "re:sati", "reading": "sah-tee"},
+                {"pattern": "satipatth?ana", "reading": "sah-tee-pat-ta-na"},
+            ],
+        },
+    )
+    assert save.status_code == 200
+    payload = save.json()
+    assert payload["status"] == "ok"
+    assert payload["tts_cleared"] is False
+    assert payload["overrides"] == [
+        {"base": "sutta", "reading": "soot-ta"},
+        {"pattern": "sati", "reading": "sah-tee"},
+        {"pattern": "satipatth?ana", "reading": "sah-tee-pat-ta-na"},
+    ]
+
+    stored = player._load_json(book_dir / "reading-overrides.json")
+    assert stored.get("global") == payload["overrides"]
+
+    loaded = client.get("/api/reading-overrides", params={"book_id": "book-a"})
+    assert loaded.status_code == 200
+    assert loaded.json()["overrides"] == [
+        {"base": "sutta", "reading": "soot-ta", "mode": "word", "case_sensitive": False},
+        {"pattern": "sati", "reading": "sah-tee", "mode": "all", "case_sensitive": False},
+        {
+            "pattern": "satipatth?ana",
+            "reading": "sah-tee-pat-ta-na",
+            "mode": "all",
+            "case_sensitive": False,
+        },
+    ]
