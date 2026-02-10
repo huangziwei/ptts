@@ -94,7 +94,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
             "source": source_path,
             "start": "1",
             "duration": "3.5",
-            "name": "narrator",
+            "name": "NARRATOR",
         },
     )
     assert save.status_code == 200

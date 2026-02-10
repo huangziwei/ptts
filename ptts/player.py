@@ -74,7 +74,7 @@ def _coerce_clone_voice_name(raw: Optional[str], source_name: str) -> str:
     suffix = Path(base).suffix.lower()
     if suffix in {".mp3", ".wav"}:
         base = Path(base).stem
-    base = base.strip()
+    base = base.strip().lower()
     return base or "voice"
 
 
