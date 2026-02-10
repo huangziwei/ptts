@@ -711,11 +711,15 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             chunk_spans = entry.get("chunk_spans", [])
             if not isinstance(chunk_spans, list):
                 chunk_spans = []
+            pause_multipliers = entry.get("pause_multipliers", [])
+            if not isinstance(pause_multipliers, list):
+                pause_multipliers = []
             chapters.append(
                 {
                     "id": entry.get("id") or "",
                     "title": entry.get("title") or entry.get("id") or "Chapter",
                     "chunk_spans": chunk_spans,
+                    "pause_multipliers": pause_multipliers,
                     "chunk_count": len(chunk_spans),
                 }
             )

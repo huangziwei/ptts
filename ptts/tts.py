@@ -311,6 +311,10 @@ _TITLE_BREAK_NEWLINES = 5
 _SECTION_BREAK_PAD_MULTIPLIER = 3
 _TITLE_BREAK_PAD_MULTIPLIER = 5
 _CHAPTER_BREAK_PAD_MULTIPLIER = _TITLE_BREAK_PAD_MULTIPLIER
+_HEADING_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’.\-][A-Za-z0-9]+)*")
+_ROMAN_TOKEN_RE = re.compile(r"^[IVXLCDM]+$", re.IGNORECASE)
+_HEADING_MAX_WORDS = 14
+_HEADING_MAX_CHARS = 100
 _WORD_ONES = (
     "zero",
     "one",
@@ -480,18 +484,122 @@ def _pause_multiplier_from_gap(gap: str) -> int:
     return 1
 
 
+def _heading_word_count(text: str) -> int:
+    return len(_HEADING_TOKEN_RE.findall(text))
+
+
+def _clean_heading_token(token: str) -> str:
+    cleaned = token.strip().strip("\"'“”‘’()[]{}<>")
+    return cleaned.rstrip(".,:;!?)]")
+
+
+def _is_heading_number_token(token: str) -> bool:
+    cleaned = _clean_heading_token(token)
+    if not cleaned:
+        return False
+    if re.fullmatch(r"\d+(?:\.\d+)*", cleaned):
+        return True
+    if _ROMAN_TOKEN_RE.fullmatch(cleaned):
+        return True
+    return False
+
+
+def _looks_like_numeric_heading(text: str) -> bool:
+    tokens = _HEADING_TOKEN_RE.findall(text)
+    if not tokens or len(tokens) > 6:
+        return False
+    return all(_is_heading_number_token(token) for token in tokens)
+
+
+def _looks_like_heading_chunk(chunk: str) -> bool:
+    stripped = " ".join(part.strip() for part in chunk.splitlines() if part.strip())
+    if not stripped:
+        return False
+    if _looks_like_numeric_heading(stripped):
+        return True
+    if len(stripped) > _HEADING_MAX_CHARS:
+        return False
+    tokens = _HEADING_TOKEN_RE.findall(stripped)
+    if not tokens or len(tokens) > _HEADING_MAX_WORDS:
+        return False
+    if _ends_with_sentence_punct(stripped):
+        return False
+    if stripped.count(",") + stripped.count(";") >= 2:
+        return False
+    alpha_tokens = [token for token in tokens if any(ch.isalpha() for ch in token)]
+    if not alpha_tokens:
+        return False
+    upper_or_title = 0
+    lower_initial = 0
+    for token in alpha_tokens:
+        first = token[0]
+        if first.isupper() or token.isupper():
+            upper_or_title += 1
+        elif first.islower():
+            lower_initial += 1
+    if upper_or_title >= max(1, int(len(alpha_tokens) * 0.6)):
+        return True
+    if lower_initial <= 1 and len(tokens) <= 4:
+        return True
+    return False
+
+
+def _looks_like_contextual_heading(chunk: str, prev_words: int, next_words: int) -> bool:
+    if _looks_like_heading_chunk(chunk):
+        return True
+    stripped = " ".join(part.strip() for part in chunk.splitlines() if part.strip())
+    if not stripped or _ends_with_sentence_punct(stripped):
+        return False
+    words = _heading_word_count(stripped)
+    if words <= 0 or words > 8:
+        return False
+    return max(prev_words, next_words) >= words + 6
+
+
+def _gap_has_symbolic_separator(gap: str) -> bool:
+    for line in gap.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if any(ch.isalnum() for ch in stripped):
+            continue
+        return True
+    return False
+
+
 def compute_chunk_pause_multipliers(
     text: str, spans: Sequence[Tuple[int, int]]
 ) -> List[int]:
     if not spans:
         return []
     multipliers = [1] * len(spans)
+    chunk_texts = [text[int(start) : int(end)] for start, end in spans]
+    chunk_word_counts = [_heading_word_count(chunk) for chunk in chunk_texts]
+    heading_like = [False] * len(spans)
+    for idx, chunk in enumerate(chunk_texts):
+        prev_words = chunk_word_counts[idx - 1] if idx > 0 else 0
+        next_words = chunk_word_counts[idx + 1] if idx + 1 < len(chunk_texts) else 0
+        heading_like[idx] = _looks_like_contextual_heading(chunk, prev_words, next_words)
+    first_body_idx = next(
+        (idx for idx, is_heading in enumerate(heading_like) if not is_heading),
+        len(heading_like),
+    )
     for idx in range(len(spans) - 1):
         end = int(spans[idx][1])
         next_start = int(spans[idx + 1][0])
         if next_start < end:
             continue
-        multipliers[idx] = _pause_multiplier_from_gap(text[end:next_start])
+        gap = text[end:next_start]
+        pause = _pause_multiplier_from_gap(gap)
+        if "\n" in gap:
+            if _gap_has_symbolic_separator(gap):
+                pause = max(pause, _SECTION_BREAK_PAD_MULTIPLIER)
+            if heading_like[idx] or heading_like[idx + 1]:
+                heading_pause = _SECTION_BREAK_PAD_MULTIPLIER
+                if heading_like[idx] and idx < first_body_idx:
+                    heading_pause = _TITLE_BREAK_PAD_MULTIPLIER
+                pause = max(pause, heading_pause)
+        multipliers[idx] = pause
     return multipliers
 
 

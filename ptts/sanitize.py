@@ -465,6 +465,14 @@ def _normalize_break_runs(text: str) -> str:
     return re.sub(r"\n{3,}", repl, text)
 
 
+def _promote_single_paragraph_break_runs(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        count = len(match.group(0))
+        return "\n" * (count + 1)
+
+    return re.sub(r"\n+", repl, text)
+
+
 def normalize_small_caps(text: str, extra_words: Optional[Iterable[str]] = None) -> str:
     if not text:
         return text
@@ -655,7 +663,7 @@ def normalize_text(
     text = re.sub(r"\.[ \t]*\.[ \t]*\.", "...", text)
 
     if paragraph_breaks == "single":
-        text = re.sub(r"(?<!\n)\n(?!\n)", "\n\n", text)
+        text = _promote_single_paragraph_break_runs(text)
 
     text = _normalize_break_runs(text)
     return text.strip()

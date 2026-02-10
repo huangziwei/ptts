@@ -292,6 +292,37 @@ def test_compute_chunk_pause_multipliers_from_break_strength() -> None:
     assert tts.compute_chunk_pause_multipliers(text, spans) == [5, 3, 1]
 
 
+def test_compute_chunk_pause_multipliers_infers_symbol_separator_lines() -> None:
+    text = "First paragraph.\n\n***\n\nSecond paragraph."
+    spans = tts.make_chunk_spans(text, max_chars=200)
+    assert [text[start:end] for start, end in spans] == [
+        "First paragraph.",
+        "Second paragraph.",
+    ]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [3, 1]
+
+
+def test_compute_chunk_pause_multipliers_infers_numbered_section_heading() -> None:
+    text = "First paragraph.\n\n1.\n\nSecond paragraph."
+    spans = tts.make_chunk_spans(text, max_chars=200)
+    assert [text[start:end] for start, end in spans] == [
+        "First paragraph.",
+        "1.",
+        "Second paragraph.",
+    ]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [3, 3, 1]
+
+
+def test_compute_chunk_pause_multipliers_infers_title_heading_at_start() -> None:
+    text = "Prologue\n\nFirst paragraph."
+    spans = tts.make_chunk_spans(text, max_chars=200)
+    assert [text[start:end] for start, end in spans] == [
+        "Prologue",
+        "First paragraph.",
+    ]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [5, 1]
+
+
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
     chunk_dir = tmp_path / "chunks"
     chunks = ["One.", "Two."]

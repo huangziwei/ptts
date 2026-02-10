@@ -50,6 +50,15 @@ def test_normalize_text_preserves_section_breaks() -> None:
     assert sanitize.normalize_text(text) == "First paragraph.\n\n\nSecond paragraph."
 
 
+def test_normalize_text_single_breaks_preserve_section_strength() -> None:
+    text = "First paragraph.\nSecond paragraph.\n\nSection start.\nThird paragraph."
+    assert sanitize.normalize_text(
+        text, unwrap_lines=False, paragraph_breaks="single"
+    ) == (
+        "First paragraph.\n\nSecond paragraph.\n\n\nSection start.\n\nThird paragraph."
+    )
+
+
 def test_normalize_small_caps_handles_long_all_caps_sentence_start() -> None:
     text = (
         "THIS IS A WORK OF NONFICTION, AND I HAVE USED REAL NAMES WITH one "

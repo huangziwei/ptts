@@ -1,5 +1,6 @@
-from pathlib import Path
 import shutil
+from pathlib import Path
+import json
 
 from fastapi.testclient import TestClient
 import pytest
@@ -344,6 +345,40 @@ def _make_book(root_dir: Path, book_id: str) -> Path:
         encoding="utf-8",
     )
     return book_dir
+
+
+def test_book_details_includes_pause_multipliers(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    book_dir = _make_book(root_dir, "book-a")
+    tts_dir = book_dir / "tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "voice": "alba",
+        "pad_ms": 300,
+        "chapters": [
+            {
+                "id": "0001-intro",
+                "title": "Intro",
+                "chunk_spans": [[0, 10], [11, 20], [21, 30]],
+                "pause_multipliers": [3, 1, 5],
+                "durations_ms": [None, None, None],
+            }
+        ],
+    }
+    (tts_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
+
+    details = player._book_details(book_dir, repo_root)
+    assert details["chapters"] == [
+        {
+            "id": "0001-intro",
+            "title": "Intro",
+            "chunk_spans": [[0, 10], [11, 20], [21, 30]],
+            "pause_multipliers": [3, 1, 5],
+            "chunk_count": 3,
+        }
+    ]
 
 
 def test_reading_overrides_save_and_get(tmp_path: Path) -> None:

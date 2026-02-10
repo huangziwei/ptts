@@ -4566,6 +4566,27 @@
         return chapter.clean_text.slice(span[0], span[1]);
       }
 
+      function getChunkPauseMultiplier(chapter, chunkIndex) {
+        if (!chapter || !Array.isArray(chapter.pause_multipliers)) {
+          return 1;
+        }
+        const value = Number(chapter.pause_multipliers[chunkIndex]);
+        if (!Number.isFinite(value) || value < 1) {
+          return 1;
+        }
+        return Math.max(1, Math.round(value));
+      }
+
+      function classifyPauseBreak(multiplier) {
+        if (multiplier >= 5) {
+          return "title";
+        }
+        if (multiplier >= 3) {
+          return "section";
+        }
+        return null;
+      }
+
       function splitParagraphSpans(text) {
         const spans = [];
         const re = /\n(?:[ \t]*\n)+/g;
@@ -6087,6 +6108,12 @@
           return;
         }
         state.chapters.forEach((chapter) => {
+          const chunkTotal =
+            Number.isInteger(chapter.chunk_count) && chapter.chunk_count > 0
+              ? chapter.chunk_count
+              : Array.isArray(chapter.chunk_spans)
+                ? chapter.chunk_spans.length
+                : 0;
           const item = document.createElement("div");
           item.className = "toc-item";
           if (chapter.id === state.currentChapterId) {
@@ -6094,7 +6121,7 @@
           }
           item.innerHTML = `
             <div>${chapter.title}</div>
-            <small>${chapter.chunk_count} chunks</small>
+            <small>${chunkTotal} chunks</small>
           `;
           item.addEventListener("click", () => {
             renderChapter(chapter.id);
@@ -6145,6 +6172,7 @@
             const paraEnd = paragraph.end;
             const p = document.createElement("p");
             let cursor = paraStart;
+            let lastChunkIndexInParagraph = -1;
 
             while (spanIndex < spans.length && spans[spanIndex][1] <= paraStart) {
               spanIndex += 1;
@@ -6152,6 +6180,7 @@
 
             while (spanIndex < spans.length && spans[spanIndex][0] < paraEnd) {
               const spanEntry = spans[spanIndex];
+              const chunkIndexInChapter = spanIndex;
               const spanStart = spanEntry[0];
               const spanEnd = spanEntry[1];
               if (spanStart > cursor) {
@@ -6165,6 +6194,7 @@
               span.textContent = cleanText.slice(spanStart, spanEnd);
               p.appendChild(span);
               cursor = spanEnd;
+              lastChunkIndexInParagraph = chunkIndexInChapter;
               spanIndex += 1;
             }
 
@@ -6174,13 +6204,22 @@
               );
             }
             chapterText.appendChild(p);
+            let pauseMultiplier = 1;
             if (
-              paragraph.breakAfter === "section" ||
-              paragraph.breakAfter === "title"
+              lastChunkIndexInParagraph >= 0 &&
+              lastChunkIndexInParagraph < spans.length - 1
             ) {
+              pauseMultiplier = getChunkPauseMultiplier(
+                chapter,
+                lastChunkIndexInParagraph
+              );
+            }
+            const pauseBreak = classifyPauseBreak(pauseMultiplier);
+            const visualBreak = pauseBreak || paragraph.breakAfter;
+            if (visualBreak === "section" || visualBreak === "title") {
               const rule = document.createElement("hr");
               rule.className =
-                paragraph.breakAfter === "title"
+                visualBreak === "title"
                   ? "section-break title-break"
                   : "section-break";
               chapterText.appendChild(rule);
