@@ -679,38 +679,6 @@
         padding: 5px 10px;
       }
 
-      .local-voice-action-wrap {
-        position: relative;
-        display: inline-flex;
-      }
-
-      .voice-action-menu {
-        position: absolute;
-        top: calc(100% + 6px);
-        right: 0;
-        min-width: 190px;
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        box-shadow: var(--shadow-pop);
-        padding: 6px;
-        display: none;
-        flex-direction: column;
-        gap: 6px;
-        z-index: 20;
-      }
-
-      .voice-action-menu.open {
-        display: flex;
-      }
-
-      .voice-action-menu .btn {
-        width: 100%;
-        border-radius: 8px;
-        padding: 7px 10px;
-        text-align: left;
-      }
-
       .voice-button {
         border: 1px solid var(--line-strong);
         background: var(--surface-2);
@@ -1120,6 +1088,11 @@
         margin: 2px 0 0;
         font-size: 11px;
         color: var(--muted);
+      }
+
+      .clone-inline-actions {
+        display: flex;
+        justify-content: flex-start;
       }
 
       .clone-gender-toggle {
@@ -2119,6 +2092,11 @@
               </div>
             </div>
             <div class="meta-actions">
+              <div class="clone-inline-actions" id="cloneBuiltinWrap">
+                <button class="btn small" id="cloneBuiltinToggle" type="button">
+                  Hide built-in voices
+                </button>
+              </div>
               <span class="meta-status" id="cloneStatus"></span>
               <button class="btn" id="cloneCancel" type="button">Cancel</button>
               <button class="btn" id="clonePreviewBtn" type="button">Preview</button>
@@ -2320,6 +2298,7 @@
         cloneEditVoice: null,
         cloneNameDirty: false,
         cloneModalBusy: false,
+        showBuiltinVoices: true,
       };
 
       const bookList = document.getElementById("bookList");
@@ -2377,6 +2356,8 @@
       const cloneStart = document.getElementById("cloneStart");
       const cloneDuration = document.getElementById("cloneDuration");
       const cloneName = document.getElementById("cloneName");
+      const cloneBuiltinWrap = document.getElementById("cloneBuiltinWrap");
+      const cloneBuiltinToggle = document.getElementById("cloneBuiltinToggle");
       const cloneDisplayName = document.getElementById("cloneDisplayName");
       const cloneGenderMale = document.getElementById("cloneGenderMale");
       const cloneGenderFemale = document.getElementById("cloneGenderFemale");
@@ -3463,6 +3444,29 @@
         return isLocalVoice(state.selectedVoice) ? state.selectedVoice : null;
       }
 
+      function updateCloneBuiltinToggleLabel() {
+        if (!cloneBuiltinToggle) {
+          return;
+        }
+        cloneBuiltinToggle.textContent = state.showBuiltinVoices
+          ? "Hide built-in voices"
+          : "Show built-in voices";
+      }
+
+      function setBuiltinVoicesVisible(visible) {
+        const normalized = !!visible;
+        if (state.showBuiltinVoices === normalized) {
+          return;
+        }
+        state.showBuiltinVoices = normalized;
+        localStorage.setItem(
+          "ptts.showBuiltinVoices",
+          state.showBuiltinVoices ? "1" : "0"
+        );
+        updateCloneBuiltinToggleLabel();
+        void loadVoices();
+      }
+
       function updateLocalVoiceActionButton() {
         if (!localVoiceActionButton) {
           return;
@@ -3649,6 +3653,7 @@
           const data = await fetchJson("/api/voices");
           const local = Array.isArray(data.local) ? data.local : [];
           const builtin = Array.isArray(data.builtin) ? data.builtin : [];
+          const visibleBuiltin = state.showBuiltinVoices ? builtin : [];
           const defaultVoice = data.default || "";
 
           state.localVoiceValues = local
@@ -3679,7 +3684,7 @@
           voiceGroup.innerHTML = "";
           localVoiceActionButton = null;
           renderLocalVoiceGroups(local);
-          appendVoiceGroup(voiceGroup, "Built-in voices", builtin);
+          appendVoiceGroup(voiceGroup, "Built-in voices", visibleBuiltin);
 
           const available = state.voiceOptions.map((item) => item.value);
           if (!available.length) {
@@ -3696,8 +3701,10 @@
               selected = local[0].value;
             } else if (defaultVoice && available.includes(defaultVoice)) {
               selected = defaultVoice;
-            } else {
+            } else if (builtin.length) {
               selected = builtin[0].value;
+            } else {
+              selected = null;
             }
           }
           setSelectedVoice(selected, false);
@@ -4101,6 +4108,8 @@
       function loadSettings() {
         state.voicePreference = localStorage.getItem("ptts.voice");
         state.advancedMode = localStorage.getItem("ptts.advancedMode") === "1";
+        state.showBuiltinVoices =
+          localStorage.getItem("ptts.showBuiltinVoices") !== "0";
         state.libraryShelf = normalizeShelf(
           localStorage.getItem("ptts.libraryShelf")
         );
@@ -4126,6 +4135,10 @@
           localStorage.setItem("ptts.voice", state.voicePreference);
         }
         localStorage.setItem("ptts.advancedMode", state.advancedMode ? "1" : "0");
+        localStorage.setItem(
+          "ptts.showBuiltinVoices",
+          state.showBuiltinVoices ? "1" : "0"
+        );
       }
 
       function filterBooksForShelf() {
@@ -5187,6 +5200,9 @@
         if (cloneDisplayName) {
           cloneDisplayName.disabled = busy;
         }
+        if (cloneBuiltinToggle) {
+          cloneBuiltinToggle.disabled = busy;
+        }
         setCloneGenderDisabled(busy);
         if (clonePreviewBtn) {
           clonePreviewBtn.disabled = busy;
@@ -5217,11 +5233,15 @@
         if (cloneEditNote) {
           cloneEditNote.hidden = !editing;
         }
+        if (cloneBuiltinWrap) {
+          cloneBuiltinWrap.hidden = editing;
+        }
         if (cloneEditVoiceLabel) {
           cloneEditVoiceLabel.textContent = editing
             ? voiceLabelFromValue(editVoiceValue || "")
             : "";
         }
+        updateCloneBuiltinToggleLabel();
         if (editing) {
           resetClonePreview();
         }
@@ -5264,6 +5284,7 @@
           setCloneGenderValue("");
         }
         state.cloneNameDirty = false;
+        updateCloneBuiltinToggleLabel();
         setCloneStatus("");
         setCloneBusy(false);
         cloneModal.hidden = false;
@@ -6807,6 +6828,11 @@
       cloneDisplayName.addEventListener("input", () => {
         setCloneStatus("");
       });
+      if (cloneBuiltinToggle) {
+        cloneBuiltinToggle.addEventListener("click", () => {
+          setBuiltinVoicesVisible(!state.showBuiltinVoices);
+        });
+      }
       cloneModal.addEventListener("click", (event) => {
         if (event.target === cloneModal) {
           closeCloneModal();
@@ -6830,6 +6856,7 @@
         }
         if (metaModal && !metaModal.hidden) {
           closeMetaModal();
+          return;
         }
       });
       editToggle.addEventListener("click", toggleEditPanel);
