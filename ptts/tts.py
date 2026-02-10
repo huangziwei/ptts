@@ -311,10 +311,9 @@ _TITLE_BREAK_NEWLINES = 5
 _SECTION_BREAK_PAD_MULTIPLIER = 3
 _TITLE_BREAK_PAD_MULTIPLIER = 5
 _CHAPTER_BREAK_PAD_MULTIPLIER = _TITLE_BREAK_PAD_MULTIPLIER
-_HEADING_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’.\-][A-Za-z0-9]+)*")
+_HEADING_TOKEN_RE = re.compile(r"[^\W_]+(?:['’.\-][^\W_]+)*")
 _ROMAN_TOKEN_RE = re.compile(r"^[IVXLCDM]+$", re.IGNORECASE)
-_HEADING_MAX_WORDS = 14
-_HEADING_MAX_CHARS = 100
+_SENTENCE_END_RE = re.compile(r"[.!?](?:[\"')\]\}\u201d\u2019»])*(?=\s|$)")
 _WORD_ONES = (
     "zero",
     "one",
@@ -511,37 +510,38 @@ def _looks_like_numeric_heading(text: str) -> bool:
     return all(_is_heading_number_token(token) for token in tokens)
 
 
+def _looks_like_paragraph_chunk(stripped: str) -> bool:
+    words = _heading_word_count(stripped)
+    if words <= 0:
+        return False
+    sentence_endings = len(_SENTENCE_END_RE.findall(stripped))
+    clause_breaks = stripped.count(",") + stripped.count(";")
+    if sentence_endings >= 2:
+        return True
+    if sentence_endings >= 1 and words >= 6:
+        return True
+    if clause_breaks >= 2 and words >= 12:
+        return True
+    return False
+
+
 def _looks_like_heading_chunk(chunk: str) -> bool:
     stripped = " ".join(part.strip() for part in chunk.splitlines() if part.strip())
     if not stripped:
         return False
     if _looks_like_numeric_heading(stripped):
         return True
-    if len(stripped) > _HEADING_MAX_CHARS:
-        return False
     tokens = _HEADING_TOKEN_RE.findall(stripped)
-    if not tokens or len(tokens) > _HEADING_MAX_WORDS:
+    if not tokens:
         return False
     if _ends_with_sentence_punct(stripped):
         return False
-    if stripped.count(",") + stripped.count(";") >= 2:
+    if _looks_like_paragraph_chunk(stripped):
         return False
     alpha_tokens = [token for token in tokens if any(ch.isalpha() for ch in token)]
     if not alpha_tokens:
         return False
-    upper_or_title = 0
-    lower_initial = 0
-    for token in alpha_tokens:
-        first = token[0]
-        if first.isupper() or token.isupper():
-            upper_or_title += 1
-        elif first.islower():
-            lower_initial += 1
-    if upper_or_title >= max(1, int(len(alpha_tokens) * 0.6)):
-        return True
-    if lower_initial <= 1 and len(tokens) <= 4:
-        return True
-    return False
+    return True
 
 
 def _looks_like_contextual_heading(chunk: str, prev_words: int, next_words: int) -> bool:
@@ -550,10 +550,13 @@ def _looks_like_contextual_heading(chunk: str, prev_words: int, next_words: int)
     stripped = " ".join(part.strip() for part in chunk.splitlines() if part.strip())
     if not stripped or _ends_with_sentence_punct(stripped):
         return False
-    words = _heading_word_count(stripped)
-    if words <= 0 or words > 8:
+    if _looks_like_paragraph_chunk(stripped):
         return False
-    return max(prev_words, next_words) >= words + 6
+    words = _heading_word_count(stripped)
+    if words <= 0:
+        return False
+    surrounding = max(prev_words, next_words)
+    return surrounding >= max(words + 2, int(words * 1.5))
 
 
 def _gap_has_symbolic_separator(gap: str) -> bool:

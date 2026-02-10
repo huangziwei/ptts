@@ -323,6 +323,36 @@ def test_compute_chunk_pause_multipliers_infers_title_heading_at_start() -> None
     assert tts.compute_chunk_pause_multipliers(text, spans) == [5, 1]
 
 
+def test_compute_chunk_pause_multipliers_infers_diacritic_numbered_heading() -> None:
+    text = (
+        "Opening context paragraph.\n\n"
+        "I.2 A survey of the four satipaṭṭhānas\n\n"
+        "Following body paragraph."
+    )
+    spans = tts.make_chunk_spans(text, max_chars=400)
+    assert [text[start:end] for start, end in spans] == [
+        "Opening context paragraph.",
+        "I.2 A survey of the four satipaṭṭhānas",
+        "Following body paragraph.",
+    ]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [3, 3, 1]
+
+
+def test_compute_chunk_pause_multipliers_keeps_paragraph_sentence_as_non_heading() -> None:
+    text = (
+        "Opening context paragraph.\n\n"
+        "This is a regular paragraph sentence.\n\n"
+        "Following body paragraph."
+    )
+    spans = tts.make_chunk_spans(text, max_chars=400)
+    assert [text[start:end] for start, end in spans] == [
+        "Opening context paragraph.",
+        "This is a regular paragraph sentence.",
+        "Following body paragraph.",
+    ]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [1, 1, 1]
+
+
 def test_write_chunk_files_creates_files(tmp_path: Path) -> None:
     chunk_dir = tmp_path / "chunks"
     chunks = ["One.", "Two."]
