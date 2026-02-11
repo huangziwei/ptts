@@ -266,6 +266,10 @@ def _join_item_text(
 
 
 _NOTE_MARKER_RE = re.compile(r"^\d{1,4}[a-z]?[.)]?$", re.IGNORECASE)
+_NOTE_ID_RE = re.compile(
+    r"^(?:fn|footnote|endnote|note|noteref|fnref|en)[a-z0-9._:-]*$",
+    re.IGNORECASE,
+)
 
 
 def _normalize_id(value: str) -> str:
@@ -285,6 +289,16 @@ def _looks_like_note_marker(text: str) -> bool:
     if not text:
         return False
     return bool(_NOTE_MARKER_RE.match(text.strip()))
+
+
+def _looks_like_note_id(value: str) -> bool:
+    cleaned = _normalize_id(value)
+    if not cleaned:
+        return False
+    if _NOTE_ID_RE.fullmatch(cleaned):
+        return True
+    # Some EPUBs use compact IDs such as n12/en9 for notes.
+    return bool(re.fullmatch(r"(?:n|en)\d+[a-z]?", cleaned))
 
 
 def _normalize_break_runs(text: str) -> str:
@@ -318,12 +332,14 @@ def _collect_footnote_index(
     book: epub.EpubBook,
 ) -> dict[str, set[str]]:
     note_ids: set[str] = set()
-    backref_ids: set[str] = set()
+    backref_candidates: set[tuple[str, str]] = set()
+    note_sources: set[str] = set()
 
     for item in book.get_items_of_type(ITEM_DOCUMENT):
         content = item.get_content()
         if not content:
             continue
+        source_href = normalize_href(_item_name(item))
         head = content.lstrip()[:512].lower()
         parser = (
             "lxml-xml"
@@ -331,14 +347,17 @@ def _collect_footnote_index(
             else "lxml"
         )
         soup = BeautifulSoup(content, parser)
+        is_note_source = False
         for tag in soup.find_all(attrs={"epub:type": "footnote"}):
             note_id = _normalize_id(str(tag.get("id") or ""))
             if note_id:
                 note_ids.add(note_id)
+                is_note_source = True
         for tag in soup.find_all(attrs={"role": "doc-footnote"}):
             note_id = _normalize_id(str(tag.get("id") or ""))
             if note_id:
                 note_ids.add(note_id)
+                is_note_source = True
         for tag in soup.find_all(["p", "section", "div", "aside", "ol", "ul", "li", "td"]):
             attrs = getattr(tag, "attrs", None)
             if attrs is None:
@@ -352,18 +371,21 @@ def _collect_footnote_index(
                 note_id = _normalize_id(id_text)
                 if note_id:
                     note_ids.add(note_id)
+                is_note_source = True
             if id_text.lower().startswith(("fn", "footnote", "endnote")):
                 note_id = _normalize_id(id_text)
                 if note_id:
                     note_ids.add(note_id)
+                    is_note_source = True
 
         for anchor in soup.find_all("a"):
             text = anchor.get_text(strip=True)
             if not _looks_like_note_marker(text):
                 continue
-            fragment = _normalize_id(_href_fragment(str(anchor.get("href") or "")))
+            href = str(anchor.get("href") or "")
+            fragment = _normalize_id(_href_fragment(href))
             if fragment:
-                backref_ids.add(fragment)
+                backref_candidates.add((normalize_href(href), fragment))
             parent = anchor.parent
             if parent and getattr(parent, "attrs", None):
                 parent_id = _normalize_id(str(parent.get("id") or ""))
@@ -371,6 +393,17 @@ def _collect_footnote_index(
                     parent_text = parent.get_text(strip=True)
                     if parent_text == text:
                         note_ids.add(parent_id)
+
+        if is_note_source and source_href:
+            note_sources.add(source_href)
+
+    backref_ids = {
+        fragment
+        for base_href, fragment in backref_candidates
+        if fragment in note_ids
+        or _looks_like_note_id(fragment)
+        or (base_href and base_href in note_sources)
+    }
 
     return {"note_ids": note_ids, "backref_ids": backref_ids}
 
@@ -404,7 +437,11 @@ def html_to_text(
                 if not attrs:
                     continue
                 tag_id = _normalize_id(str(attrs.get("id") or ""))
-                if tag_id and tag_id in backref_ids:
+                if (
+                    tag_id
+                    and tag_id in backref_ids
+                    and (_looks_like_note_id(tag_id) or getattr(tag, "name", "") in {"a", "sup"})
+                ):
                     tag.decompose()
             for anchor in soup.find_all("a"):
                 text = anchor.get_text(strip=True)

@@ -65,6 +65,25 @@ def test_html_to_text_removes_footnotes() -> None:
     assert epub_util.html_to_text(html) == "Sentence."
 
 
+def test_html_to_text_keeps_chapter_ids_when_backrefs_include_numeric_crossrefs() -> None:
+    html = (
+        b"<html><body>"
+        b"<div id='ch01'>"
+        b"<h1>Chapter One</h1>"
+        b"<p>Body text<a id='fn1r' href='notes.xhtml#fn1'>1</a>.</p>"
+        b"</div>"
+        b"</body></html>"
+    )
+    # Regression guard: chapter IDs must not be removed even if mistakenly listed
+    # as backrefs, while real note markers should still be stripped.
+    text = epub_util.html_to_text(
+        html,
+        footnote_index={"note_ids": {"fn1"}, "backref_ids": {"ch01", "fn1"}},
+    )
+    assert "Chapter One" in text
+    assert "Body text." in text
+
+
 def test_html_to_text_normalizes_modifier_apostrophe() -> None:
     html = "<html><body><p>It\u02bcs fine.</p></body></html>".encode("utf-8")
     assert epub_util.html_to_text(html) == "It's fine."
