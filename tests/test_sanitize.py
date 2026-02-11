@@ -59,6 +59,39 @@ def test_normalize_text_single_breaks_preserve_section_strength() -> None:
     )
 
 
+def test_normalize_text_single_breaks_idempotent_without_single_runs() -> None:
+    text = "First paragraph.\nSecond paragraph.\n\nSection start.\nThird paragraph."
+    once = sanitize.normalize_text(text, unwrap_lines=False, paragraph_breaks="single")
+    twice = sanitize.normalize_text(once, unwrap_lines=False, paragraph_breaks="single")
+    assert twice == once
+
+
+def test_infer_paragraph_breaks_detects_single_newline_paragraphs() -> None:
+    text = (
+        "First paragraph ends here.\n"
+        "Second paragraph ends here.\n"
+        "Third paragraph ends here.\n"
+        "\n"
+        "Section heading\n"
+        "Fourth paragraph ends here.\n"
+        "Fifth paragraph ends here."
+    )
+    assert sanitize.infer_paragraph_breaks(text) == "single"
+
+
+def test_infer_paragraph_breaks_detects_hard_wrapped_lines() -> None:
+    text = (
+        "this line keeps going without punctuation and\n"
+        "continues with lowercase words to mimic hard wrapping in the source\n"
+        "while the thought still has not ended and remains on this line\n"
+        "until it finally closes here.\n"
+        "\n"
+        "another wrapped paragraph begins without an ending punctuation\n"
+        "and continues to the next lowercased line before ending now."
+    )
+    assert sanitize.infer_paragraph_breaks(text) == "double"
+
+
 def test_normalize_small_caps_handles_long_all_caps_sentence_start() -> None:
     text = (
         "THIS IS A WORK OF NONFICTION, AND I HAVE USED REAL NAMES WITH one "
@@ -161,6 +194,68 @@ def test_sanitize_book_adds_title_chapter(tmp_path: Path) -> None:
     clean_toc = json.loads((book_dir / "clean" / "toc.json").read_text())
     assert len(clean_toc["chapters"]) == 3
     assert clean_toc["chapters"][0]["kind"] == "title"
+
+
+def test_sanitize_book_auto_infers_single_newline_paragraphs(tmp_path: Path) -> None:
+    book_dir = tmp_path / "book"
+    raw_dir = book_dir / "raw" / "chapters"
+    raw_dir.mkdir(parents=True)
+
+    raw_text = (
+        "First paragraph ends.\n"
+        "Second paragraph ends.\n"
+        "Third paragraph ends.\n"
+        "\n"
+        "Section heading\n"
+        "Fourth paragraph ends.\n"
+        "Fifth paragraph ends."
+    )
+    (raw_dir / "0001-ch1.txt").write_text(raw_text, encoding="utf-8")
+
+    toc = {
+        "source_epub": "book.epub",
+        "metadata": {"title": "Sample", "authors": ["Author"], "year": "2024"},
+        "chapters": [
+            {"index": 1, "title": "Chapter 1", "path": "raw/chapters/0001-ch1.txt"}
+        ],
+    }
+    (book_dir / "toc.json").write_text(
+        json.dumps(toc, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (book_dir / "sanitize-rules.json").write_text(
+        json.dumps(
+            {
+                "replace_defaults": True,
+                "drop_chapter_title_patterns": [],
+                "section_cutoff_patterns": [],
+                "remove_patterns": [],
+                "paragraph_breaks": "auto",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    written = sanitize.sanitize_book(book_dir, overwrite=True)
+    assert written == 2
+
+    clean_chapter = (book_dir / "clean" / "chapters" / "0001-ch1.txt").read_text(
+        encoding="utf-8"
+    ).strip()
+    assert clean_chapter == (
+        "First paragraph ends.\n\n"
+        "Second paragraph ends.\n\n"
+        "Third paragraph ends.\n\n\n"
+        "Section heading\n\n"
+        "Fourth paragraph ends.\n\n"
+        "Fifth paragraph ends."
+    )
+
+    report = json.loads((book_dir / "clean" / "report.json").read_text(encoding="utf-8"))
+    assert report["stats"]["inferred_paragraph_breaks"] == {"single": 1, "double": 0}
 
 
 def test_sanitize_book_skips_title_for_txt(tmp_path: Path) -> None:

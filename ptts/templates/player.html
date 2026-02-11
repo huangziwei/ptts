@@ -2054,7 +2054,8 @@
                 <div class="edit-section-title">Rules</div>
                 <label for="rulesParagraphs">Paragraph breaks</label>
                 <select id="rulesParagraphs">
-                  <option value="double">Double newline (default)</option>
+                  <option value="auto">Auto infer (default)</option>
+                  <option value="double">Double newline</option>
                   <option value="single">Single newline (treat line breaks as paragraphs)</option>
                 </select>
                 <label for="rulesDrop">Drop chapter title patterns</label>
@@ -6476,7 +6477,7 @@
 
       function rulesFromForm() {
         return {
-          paragraph_breaks: rulesParagraphs.value || "double",
+          paragraph_breaks: rulesParagraphs.value || "auto",
           drop_chapter_title_patterns: parseRuleLines(rulesDrop.value || ""),
           section_cutoff_patterns: parseRuleLines(rulesCutoff.value || ""),
           remove_patterns: parseRuleLines(rulesRemove.value || ""),
@@ -6486,7 +6487,7 @@
 
       function applyRulesToForm(rules) {
         state.rulesLoading = true;
-        rulesParagraphs.value = rules.paragraph_breaks || "double";
+        rulesParagraphs.value = rules.paragraph_breaks || "auto";
         rulesDrop.value = (rules.drop_chapter_title_patterns || []).join("\n");
         rulesCutoff.value = (rules.section_cutoff_patterns || []).join("\n");
         rulesRemove.value = (rules.remove_patterns || []).join("\n");

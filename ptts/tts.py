@@ -358,6 +358,43 @@ _GROUPED_INT_DOT_RE = re.compile(r"\b\d{1,3}(?:\.\d{3})+\b")
 _DECIMAL_RE = re.compile(r"\b\d+\.\d+\b")
 _PLAIN_INT_RE = re.compile(r"\b\d+\b")
 _ROMAN_DECIMAL_RE = re.compile(r"\b(?P<roman>[IVXLCDM]+)\.(?P<num>\d+(?:\.\d+)*)\b")
+_CURRENCY_SYMBOL_UNITS = {
+    "$": ("dollar", "dollars"),
+    "€": ("euro", "euros"),
+    "£": ("pound", "pounds"),
+    "¥": ("yen", "yen"),
+    "₹": ("rupee", "rupees"),
+    "₽": ("ruble", "rubles"),
+    "₩": ("won", "won"),
+    "₪": ("shekel", "shekels"),
+    "₫": ("dong", "dong"),
+    "₴": ("hryvnia", "hryvnias"),
+    "₦": ("naira", "naira"),
+    "฿": ("baht", "baht"),
+    "₺": ("lira", "lira"),
+    "₱": ("peso", "pesos"),
+}
+_CURRENCY_SYMBOL_CLASS = "".join(re.escape(symbol) for symbol in _CURRENCY_SYMBOL_UNITS)
+_CURRENCY_PREFIX_RE = re.compile(
+    rf"(?<!\w)(?P<sym>[{_CURRENCY_SYMBOL_CLASS}])\s*"
+    r"(?P<amount>[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))"
+)
+_CURRENCY_SUFFIX_RE = re.compile(
+    r"(?P<amount>[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))\s*"
+    rf"(?P<sym>[{_CURRENCY_SYMBOL_CLASS}])(?!\w)"
+)
+_ERA_DOTTED_REPLACEMENTS = (
+    (re.compile(r"\bB\s*\.\s*C\s*\.\s*E\s*\.?", re.IGNORECASE), "B-C-E"),
+    (re.compile(r"\bA\s*\.\s*D\s*\.?", re.IGNORECASE), "A-D"),
+    (re.compile(r"\bC\s*\.\s*E\s*\.?", re.IGNORECASE), "C-E"),
+    (re.compile(r"\bB\s*\.\s*C\s*\.(?!\s*E\s*\.?)", re.IGNORECASE), "B-C"),
+)
+_ERA_PLAIN_WITH_YEAR_RE = re.compile(
+    r"(?P<year>\b\d{1,4}(?:\s*[–-]\s*\d{1,4})?)\s+(?P<era>BCE|CE|BC|AD)\b"
+)
+_ERA_PLAIN_BEFORE_YEAR_RE = re.compile(
+    r"\b(?P<era>BCE|CE|BC|AD)\s+(?P<year>\d{1,4}(?:\s*[–-]\s*\d{1,4})?)\b"
+)
 _SCALE_WORDS = (
     (1_000_000_000_000, "trillion"),
     (1_000_000_000, "billion"),
@@ -1097,6 +1134,75 @@ def _normalize_roman_decimal_numbers(text: str) -> str:
     return _ROMAN_DECIMAL_RE.sub(replace, text)
 
 
+def _is_singular_currency_amount(amount: str) -> bool:
+    value = amount.replace(",", "").lstrip("+-")
+    if not value:
+        return False
+    if "." not in value:
+        return value == "1"
+    left, right = value.split(".", 1)
+    if not left:
+        left = "0"
+    return left == "1" and (not right or all(ch == "0" for ch in right))
+
+
+def _normalize_currency_amount(amount: str) -> str:
+    value = amount.replace(",", "")
+    sign = ""
+    if value.startswith(("+", "-")):
+        sign, value = value[0], value[1:]
+    if "." not in value:
+        return sign + value
+    left, right = value.split(".", 1)
+    if right and all(ch == "0" for ch in right):
+        return sign + left
+    return sign + value
+
+
+def _normalize_currency_symbols(text: str) -> str:
+    if not text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        symbol = match.group("sym")
+        amount = match.group("amount")
+        unit = _CURRENCY_SYMBOL_UNITS.get(symbol)
+        if not unit:
+            return match.group(0)
+        normalized_amount = _normalize_currency_amount(amount)
+        singular, plural = unit
+        noun = singular if _is_singular_currency_amount(amount) else plural
+        return f"{normalized_amount} {noun}"
+
+    text = _CURRENCY_PREFIX_RE.sub(replace, text)
+    return _CURRENCY_SUFFIX_RE.sub(replace, text)
+
+
+def _normalize_era_abbreviations(text: str) -> str:
+    if not text:
+        return text
+
+    for pattern, replacement in _ERA_DOTTED_REPLACEMENTS:
+        text = pattern.sub(replacement, text)
+
+    def hyphenate_era_letters(era: str) -> str:
+        return "-".join(ch for ch in era if ch.isalpha())
+
+    def replace_plain_with_year(match: re.Match[str]) -> str:
+        year = match.group("year")
+        era = match.group("era")
+        return f"{year} {hyphenate_era_letters(era)}"
+
+    text = _ERA_PLAIN_WITH_YEAR_RE.sub(replace_plain_with_year, text)
+
+    def replace_plain_before_year(match: re.Match[str]) -> str:
+        era = match.group("era")
+        year = match.group("year")
+        return f"{hyphenate_era_letters(era)} {year}"
+
+    return _ERA_PLAIN_BEFORE_YEAR_RE.sub(replace_plain_before_year, text)
+
+
 def normalize_numbers_for_tts(text: str) -> str:
     text = _normalize_roman_decimal_numbers(text)
     text = _normalize_label_numbers(text)
@@ -1430,7 +1536,9 @@ def prepare_tts_text(
     # or transliterated forms used by Pocket-TTS.
     text = apply_reading_overrides(text, reading_overrides or [])
     text = normalize_abbreviations(text)
+    text = _normalize_era_abbreviations(text)
     text = _normalize_roman_numerals(text)
+    text = _normalize_currency_symbols(text)
     text = normalize_numbers_for_tts(text)
     text = re.sub(r"\s+", " ", text).strip()
     if text and text[-1] not in ".!?":

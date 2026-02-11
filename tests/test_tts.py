@@ -75,6 +75,75 @@ def test_prepare_tts_text_normalizes_large_numbers() -> None:
     )
 
 
+def test_prepare_tts_text_normalizes_currency_symbols_corpus_examples() -> None:
+    # Corpus-derived samples from `out/**/chapters/*.txt` and `out/**/tts/*.txt`.
+    assert tts.prepare_tts_text("That'll be $3.85.") == "That'll be three point eight five dollars."
+    assert (
+        tts.prepare_tts_text("He can buy $50.00 worth of groceries for $6.98.")
+        == "He can buy 50 dollars worth of groceries for six point nine eight dollars."
+    )
+    assert (
+        tts.prepare_tts_text("The unused portion was $5000.")
+        == "The unused portion was 5000 dollars."
+    )
+    assert (
+        tts.prepare_tts_text("I was paid $2978.25 for services.")
+        == "I was paid two thousand nine hundred seventy eight point two five dollars for services."
+    )
+    assert (
+        tts.prepare_tts_text("The whole town smells of $1.89 fried shrimp dinners.")
+        == "The whole town smells of one point eight nine dollars fried shrimp dinners."
+    )
+
+
+def test_prepare_tts_text_normalizes_additional_currency_symbols() -> None:
+    cases = [
+        ("€1", "1 euro."),
+        ("£2", "2 pounds."),
+        ("¥1", "1 yen."),
+        ("₹3", "3 rupees."),
+        ("₽4", "4 rubles."),
+        ("₩2", "2 won."),
+        ("₪5", "5 shekels."),
+        ("₫6", "6 dong."),
+        ("₴7", "7 hryvnias."),
+        ("₦8", "8 naira."),
+        ("฿9", "9 baht."),
+        ("₺10", "10 lira."),
+        ("₱11", "11 pesos."),
+        ("The fee is 3€.", "The fee is 3 euros."),
+        (
+            "Budget is €1,234.50.",
+            "Budget is one thousand two hundred thirty four point five zero euros.",
+        ),
+    ]
+    for text, expected in cases:
+        assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_normalizes_era_abbreviations_corpus_examples() -> None:
+    assert (
+        tts.prepare_tts_text("For example, the year 586 B.C.E. is equivalent to the year 586 B.C.")
+        == "For example, the year 586 B-C-E is equivalent to the year 586 B-C."
+    )
+    assert (
+        tts.prepare_tts_text(
+            "The abbreviations C.E. and B.C.E. correspond to B.C. and A.D."
+        )
+        == "The abbreviations C-E and B-C-E correspond to B-C and A-D."
+    )
+    assert (
+        tts.prepare_tts_text("The date range is 1250–1050 BCE.")
+        == "The date range is 1250–1050 B-C-E."
+    )
+
+
+def test_prepare_tts_text_normalizes_era_abbreviations_extrapolated_forms() -> None:
+    assert tts.prepare_tts_text("The city fell in AD 70.") == "The city fell in A-D 70."
+    assert tts.prepare_tts_text("The city fell in 70 AD.") == "The city fell in 70 A-D."
+    assert tts.prepare_tts_text("Use BC and AD labels.") == "Use BC and AD labels."
+
+
 def test_prepare_tts_text_transliterates_pali_sanskrit() -> None:
     text = "Saṃyukta-āgama, Dīrgha-āgama, Saḷāyatanavibhaṅga-sutta, and Nibbāna."
     expected = "Samyukta-aagama, Diirgha-aagama, Salaayatanavibhangga-sutta, and Nibbaana."

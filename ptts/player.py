@@ -342,9 +342,12 @@ def _effective_rules_payload(book_dir: Path) -> dict:
 
 
 def _write_rules_payload(rules_path: Path, payload: dict) -> None:
-    paragraph_breaks = str(payload.get("paragraph_breaks", "double") or "double").strip().lower()
+    default_breaks = sanitize.DEFAULT_PARAGRAPH_BREAKS
+    paragraph_breaks = str(
+        payload.get("paragraph_breaks", default_breaks) or default_breaks
+    ).strip().lower()
     if paragraph_breaks not in sanitize.PARAGRAPH_BREAK_OPTIONS:
-        paragraph_breaks = "double"
+        paragraph_breaks = default_breaks
     data = {
         "replace_defaults": bool(payload.get("replace_defaults", False)),
         "drop_chapter_title_patterns": list(
@@ -1279,7 +1282,7 @@ class RulesPayload(BaseModel):
     drop_chapter_title_patterns: List[str] = []
     section_cutoff_patterns: List[str] = []
     remove_patterns: List[str] = []
-    paragraph_breaks: str = "double"
+    paragraph_breaks: str = sanitize.DEFAULT_PARAGRAPH_BREAKS
     replace_defaults: bool = False
 
 
