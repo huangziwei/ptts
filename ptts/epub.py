@@ -15,6 +15,11 @@ _SECTION_BREAK = "\n\n\n"
 _TITLE_BREAK = "\n\n\n\n\n"
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _NUMERIC_HEADING_RE = re.compile(r"^[\W_]*(?:\d+|[ivxlcdm]+)[\W_]*$", re.IGNORECASE)
+_FILENAME_TITLE_EXTENSIONS = {".htm", ".html", ".xhtml", ".xml"}
+_SPLIT_FILENAME_RE = re.compile(
+    r".+(?:_split_|-split-)\d+\.(?:htm|html|xhtml|xml)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -328,6 +333,77 @@ def _break_after_block(text: str, tag_name: str, is_first_block: bool) -> str:
     return _PARAGRAPH_BREAK
 
 
+def _normalize_title_candidate(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "")).strip()
+
+
+def _is_filename_like_title(title: str, href: str, item: object | None = None) -> bool:
+    normalized = _normalize_title_candidate(title)
+    if not normalized:
+        return True
+
+    lowered = normalized.lower()
+    if _SPLIT_FILENAME_RE.fullmatch(lowered):
+        return True
+
+    suffix = Path(lowered).suffix.lower()
+    if suffix in _FILENAME_TITLE_EXTENSIONS:
+        return True
+
+    references: set[str] = set()
+    for raw in (href, _item_name(item) if item else ""):
+        ref = normalize_href(raw).strip().lower()
+        if not ref:
+            continue
+        references.add(ref)
+        references.add(Path(ref).name)
+
+    return lowered in references
+
+
+def _title_from_text_fallback(text: str, max_words: int = 10, max_chars: int = 80) -> str:
+    for line in text.splitlines():
+        normalized = _normalize_title_candidate(line)
+        if not normalized:
+            continue
+        if _NUMERIC_HEADING_RE.fullmatch(normalized):
+            continue
+
+        words = normalized.split()
+        if not words:
+            continue
+        was_truncated = len(normalized) > max_chars or len(words) > max_words
+        if was_truncated:
+            normalized = " ".join(words[:max_words])
+
+        normalized = normalized.strip(" \"'`[](){}<>-")
+        normalized = re.sub(r"[,:;.!?]+$", "", normalized).strip()
+        if normalized and not _NUMERIC_HEADING_RE.fullmatch(normalized):
+            if was_truncated and not normalized.endswith("..."):
+                normalized = f"{normalized}..."
+            return normalized
+    return ""
+
+
+def _resolve_chapter_title(
+    entry_title: str,
+    item: object | None,
+    href: str,
+    text: str,
+) -> str:
+    for candidate in (entry_title, _item_title(item) if item else ""):
+        normalized = _normalize_title_candidate(candidate)
+        if normalized and not _is_filename_like_title(normalized, href, item):
+            return normalized
+
+    inferred = _title_from_text_fallback(text)
+    if inferred:
+        return inferred
+
+    fallback = Path(href).stem.strip()
+    return fallback or "chapter"
+
+
 def _collect_footnote_index(
     book: epub.EpubBook,
 ) -> dict[str, set[str]]:
@@ -563,7 +639,7 @@ def _chapters_from_entries(
         if not text:
             continue
 
-        title = entry.title or _item_title(item) or Path(base_href).stem
+        title = _resolve_chapter_title(entry.title, item, base_href, text)
         chapters.append(
             Chapter(title=title, href=entry.href, source=base_href, text=text)
         )
@@ -639,7 +715,7 @@ def _chapters_from_toc_entries(
         if not text:
             continue
 
-        title = entry.title or _item_title(item_for_title) or Path(base_href).stem
+        title = _resolve_chapter_title(entry.title, item_for_title, base_href, text)
         chapters.append(
             Chapter(title=title, href=entry.href, source=base_href, text=text)
         )

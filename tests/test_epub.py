@@ -10,6 +10,36 @@ CHANDLER_EPUB = EPUB_DIR / "Collected Stories of Raymond Chandler - Raymond Chan
 NEWS_EPUB = EPUB_DIR / "The News_ A User's Manual - Alain de Botton.epub"
 
 
+class _FakeDocumentItem:
+    def __init__(self, name: str, title: str, html: bytes) -> None:
+        self.file_name = name
+        self.title = title
+        self._content = html
+
+    def get_name(self) -> str:
+        return self.file_name
+
+    def get_title(self) -> str:
+        return self.title
+
+    def get_type(self) -> int:
+        return epub_util.ITEM_DOCUMENT
+
+    def get_content(self) -> bytes:
+        return self._content
+
+
+class _FakeBook:
+    def __init__(self, items: list[_FakeDocumentItem]) -> None:
+        self._by_href = {item.get_name(): item for item in items}
+
+    def get_item_with_href(self, href: str):
+        return self._by_href.get(href)
+
+    def get_item_with_id(self, _item_id: str):
+        return None
+
+
 def _load_book(path: Path) -> epub_util.epub.EpubBook:
     if not path.exists():
         pytest.skip(f"Missing test epub: {path}")
@@ -106,6 +136,75 @@ def test_html_to_text_preserves_heading_break_strength() -> None:
     text = epub_util.html_to_text(html)
     assert "Main Title\n\n\n\n\nFirst paragraph." in text
     assert "2.\n\n\nSecond paragraph." in text
+
+
+def test_chapters_from_entries_infers_title_from_text_when_metadata_is_filename() -> None:
+    href = "CR!chunk_split_002.html"
+    item = _FakeDocumentItem(
+        name=href,
+        title=href,
+        html=(
+            b"<html><body>"
+            b"<p>Title fallback should use the first few words from text.</p>"
+            b"</body></html>"
+        ),
+    )
+    chapters = epub_util._chapters_from_entries(
+        _FakeBook([item]),
+        [epub_util.TocEntry(title=href, href=href)],
+    )
+    assert chapters[0].title == "Title fallback should use the first few words from text"
+
+
+def test_chapters_from_entries_infers_title_from_heading_when_metadata_is_filename() -> None:
+    href = "chapter-001.xhtml"
+    item = _FakeDocumentItem(
+        name=href,
+        title=href,
+        html=(
+            b"<html><body>"
+            b"<h1>A Real Chapter Title</h1>"
+            b"<p>Body text.</p>"
+            b"</body></html>"
+        ),
+    )
+    chapters = epub_util._chapters_from_entries(
+        _FakeBook([item]),
+        [epub_util.TocEntry(title=href, href=href)],
+    )
+    assert chapters[0].title == "A Real Chapter Title"
+
+
+def test_chapters_from_entries_keeps_meaningful_entry_title() -> None:
+    href = "chapter-001.xhtml"
+    item = _FakeDocumentItem(
+        name=href,
+        title=href,
+        html=b"<html><body><p>Body text.</p></body></html>",
+    )
+    chapters = epub_util._chapters_from_entries(
+        _FakeBook([item]),
+        [epub_util.TocEntry(title="Chapter 1", href=href)],
+    )
+    assert chapters[0].title == "Chapter 1"
+
+
+def test_chapters_from_entries_appends_ellipsis_when_text_fallback_is_truncated() -> None:
+    href = "chapter-002.xhtml"
+    item = _FakeDocumentItem(
+        name=href,
+        title=href,
+        html=(
+            b"<html><body>"
+            b"<p>One two three four five six seven eight nine ten eleven twelve.</p>"
+            b"</body></html>"
+        ),
+    )
+    chapters = epub_util._chapters_from_entries(
+        _FakeBook([item]),
+        [epub_util.TocEntry(title=href, href=href)],
+    )
+    assert chapters[0].title == "One two three four five six seven eight nine ten..."
 
 
 def test_extract_chapters_preserves_multi_toc_split_series() -> None:
