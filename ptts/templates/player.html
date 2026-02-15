@@ -1210,10 +1210,16 @@
         font-size: 18px;
         line-height: 1.7;
         white-space: pre-line;
+        -webkit-hyphens: auto;
+        hyphens: auto;
+        word-break: normal;
+        overflow-wrap: normal;
       }
 
       .chapter-text p {
         margin: 0 0 16px;
+        -webkit-hyphens: inherit;
+        hyphens: inherit;
       }
 
       .chapter-text hr.section-break {
@@ -1241,6 +1247,8 @@
         padding: 2px 1px;
         border-radius: 6px;
         transition: background 0.2s ease, color 0.2s ease;
+        -webkit-hyphens: inherit;
+        hyphens: inherit;
       }
 
       .chunk.last-played {
