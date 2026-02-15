@@ -18,8 +18,6 @@ RULE_KEYS = (
     "section_cutoff_patterns",
     "remove_patterns",
 )
-PARAGRAPH_BREAK_OPTIONS = ("auto", "double", "single")
-DEFAULT_PARAGRAPH_BREAKS = "auto"
 RULES_FILENAME = "sanitize-rules.json"
 _PARAGRAPH_BREAK = "\n\n"
 _SECTION_BREAK = "\n\n\n"
@@ -91,8 +89,6 @@ def book_rules_path(book_dir: Path) -> Path:
 
 _WORD_RE = re.compile(r"[^\W\d_](?:[^\W\d_]|['\u2019\-]|\u0300-\u036F)*")
 _ROMAN_NUMERAL_RE = re.compile(r"^[IVXLCDM]+$")
-_LINE_SENTENCE_END_RE = re.compile(r"[.!?][\"')\]\}\u201d\u2019»]*$")
-_HEADING_MARKER_RE = re.compile(r"^(?:[0-9]+(?:\.[0-9]+)*[.)]?|[IVXLCDM]+[.)]?|[-*])\s*")
 _SMALL_CAPS_MIN_WORDS = 2
 _ALL_CAPS_HEADING_MAX_WORDS = 8
 _SMALL_CAPS_ACRONYMS = {
@@ -199,7 +195,6 @@ class Ruleset:
     drop_chapter_title_patterns: List[str]
     section_cutoff_patterns: List[str]
     remove_patterns: List[str]
-    paragraph_breaks: str = DEFAULT_PARAGRAPH_BREAKS
     source_path: Optional[Path] = None
     replace_defaults: bool = False
 
@@ -223,7 +218,6 @@ def load_rules(
     rules = deepcopy(DEFAULT_RULES)
     source_path = None
     replace_defaults = False
-    paragraph_breaks = DEFAULT_PARAGRAPH_BREAKS
 
     if rules_path is None:
         candidate = template_rules_path()
@@ -234,13 +228,6 @@ def load_rules(
         source_path = rules_path
         data = json.loads(rules_path.read_text(encoding="utf-8"))
         replace_defaults = bool(data.get("replace_defaults", False))
-        paragraph_value = data.get("paragraph_breaks", DEFAULT_PARAGRAPH_BREAKS)
-        paragraph_cleaned = str(paragraph_value).strip().lower()
-        if paragraph_cleaned not in PARAGRAPH_BREAK_OPTIONS:
-            raise ValueError(
-                "Rules key 'paragraph_breaks' must be 'auto', 'double', or 'single'."
-            )
-        paragraph_breaks = paragraph_cleaned
         if replace_defaults:
             rules = {key: [] for key in RULE_KEYS}
         for key in RULE_KEYS:
@@ -254,7 +241,6 @@ def load_rules(
         drop_chapter_title_patterns=rules["drop_chapter_title_patterns"],
         section_cutoff_patterns=rules["section_cutoff_patterns"],
         remove_patterns=rules["remove_patterns"],
-        paragraph_breaks=paragraph_breaks,
         source_path=source_path,
         replace_defaults=replace_defaults,
     )
@@ -466,93 +452,6 @@ def _normalize_break_runs(text: str) -> str:
     return re.sub(r"\n{3,}", repl, text)
 
 
-def _promote_single_paragraph_break_runs(text: str) -> str:
-    if not re.search(r"(?<!\n)\n(?!\n)", text):
-        return text
-
-    def repl(match: re.Match[str]) -> str:
-        count = len(match.group(0))
-        return "\n" * (count + 1)
-
-    return re.sub(r"\n+", repl, text)
-
-
-def _line_ends_sentence(line: str) -> bool:
-    return bool(_LINE_SENTENCE_END_RE.search(line.rstrip()))
-
-
-def _first_alpha_char(text: str) -> Optional[str]:
-    for ch in text:
-        if ch.isalpha():
-            return ch
-    return None
-
-
-def infer_paragraph_breaks(text: str) -> str:
-    if not text:
-        return "double"
-
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-    lines = normalized.split("\n")
-
-    line_lengths = [len(line.strip()) for line in lines if line.strip()]
-    single_breaks = 0
-    paragraph_like = 0
-    wrapped_like = 0
-    double_breaks = len(list(re.finditer(r"\n{2,}", normalized)))
-
-    for idx in range(len(lines) - 1):
-        left = lines[idx].strip()
-        right = lines[idx + 1].strip()
-        if not left or not right:
-            continue
-        single_breaks += 1
-
-        left_sentence_end = _line_ends_sentence(left)
-        right_alpha = _first_alpha_char(right)
-        right_is_lower = bool(right_alpha and right_alpha.islower())
-        right_is_upper = bool(right_alpha and right_alpha.isupper())
-        right_heading_like = bool(_HEADING_MARKER_RE.match(right))
-
-        if not left_sentence_end and right_is_lower and len(left) >= 30:
-            wrapped_like += 1
-            continue
-        if left_sentence_end and (right_is_upper or right_heading_like):
-            paragraph_like += 1
-            continue
-        if left.endswith(":") and (right_is_upper or right_heading_like):
-            paragraph_like += 1
-
-    if single_breaks < 4:
-        return "double"
-
-    median_len = sorted(line_lengths)[len(line_lengths) // 2] if line_lengths else 0
-    if median_len >= 110 and paragraph_like >= wrapped_like:
-        return "single"
-
-    paragraph_ratio = paragraph_like / single_breaks
-    wrapped_ratio = wrapped_like / single_breaks
-    if paragraph_ratio >= 0.55 and wrapped_ratio <= 0.25:
-        return "single"
-    if wrapped_ratio >= 0.45 and wrapped_like >= paragraph_like:
-        return "double"
-
-    if double_breaks == 0:
-        return "single" if paragraph_like >= wrapped_like else "double"
-    if single_breaks >= double_breaks * 6 and paragraph_like > wrapped_like:
-        return "single"
-    return "double"
-
-
-def resolve_paragraph_breaks(text: str, configured: str) -> str:
-    mode = str(configured or DEFAULT_PARAGRAPH_BREAKS).strip().lower()
-    if mode not in PARAGRAPH_BREAK_OPTIONS:
-        mode = DEFAULT_PARAGRAPH_BREAKS
-    if mode == "auto":
-        return infer_paragraph_breaks(text)
-    return mode
-
-
 def normalize_small_caps(text: str, extra_words: Optional[Iterable[str]] = None) -> str:
     if not text:
         return text
@@ -702,7 +601,6 @@ def _case_context_words(metadata: dict, chapter_title: str) -> List[str]:
 def normalize_text(
     text: str,
     unwrap_lines: bool = True,
-    paragraph_breaks: str = DEFAULT_PARAGRAPH_BREAKS,
 ) -> str:
     text = (
         text.replace("\u02bc", "'")
@@ -741,9 +639,6 @@ def normalize_text(
         text = re.sub(r"[ \t]{2,}", " ", text)
 
     text = re.sub(r"\.[ \t]*\.[ \t]*\.", "...", text)
-
-    if paragraph_breaks == "single":
-        text = _promote_single_paragraph_break_runs(text)
 
     text = _normalize_break_runs(text)
     return text.strip()
@@ -819,7 +714,6 @@ def sanitize_book(
     pattern_stats: Dict[str, int] = {}
     dropped = 0
     clean_entries: List[dict] = []
-    inferred_break_stats = {"single": 0, "double": 0}
 
     source_epub = str(toc.get("source_epub", "")) if isinstance(toc, dict) else ""
     source_suffix = Path(source_epub).suffix.lower()
@@ -882,20 +776,15 @@ def sanitize_book(
             continue
 
         raw_text = raw_path.read_text(encoding="utf-8")
-        paragraph_breaks = resolve_paragraph_breaks(raw_text, rules.paragraph_breaks)
-        if rules.paragraph_breaks == "auto":
-            inferred_break_stats[paragraph_breaks] += 1
         raw_text = normalize_text(
             raw_text,
-            unwrap_lines=paragraph_breaks != "single",
-            paragraph_breaks=paragraph_breaks,
+            unwrap_lines=False,
         )
         cutoff_text, cutoff_reason = apply_section_cutoff(raw_text, cutoff_patterns)
         cleaned, stats = apply_remove_patterns(cutoff_text, remove_patterns)
         cleaned = normalize_text(
             cleaned,
-            unwrap_lines=paragraph_breaks != "single",
-            paragraph_breaks=paragraph_breaks,
+            unwrap_lines=False,
         )
         case_words = _case_context_words(metadata, title)
         cleaned = normalize_small_caps(cleaned, extra_words=case_words)
@@ -939,16 +828,12 @@ def sanitize_book(
             "drop_chapter_title_patterns": rules.drop_chapter_title_patterns,
             "section_cutoff_patterns": rules.section_cutoff_patterns,
             "remove_patterns": rules.remove_patterns,
-            "paragraph_breaks": rules.paragraph_breaks,
         },
         "stats": {
             "total_chapters": len(report_entries),
             "dropped_chapters": dropped,
             "removed_by_pattern": pattern_stats,
             "added_title_chapter": bool(title_text),
-            "inferred_paragraph_breaks": (
-                inferred_break_stats if rules.paragraph_breaks == "auto" else {}
-            ),
         },
         "title_chapter": {
             "text": title_text,
@@ -1218,18 +1103,15 @@ def restore_chapter(
         raise ValueError("Chapter title still matches drop rules.")
 
     raw_text = raw_path.read_text(encoding="utf-8")
-    paragraph_breaks = resolve_paragraph_breaks(raw_text, rules.paragraph_breaks)
     raw_text = normalize_text(
         raw_text,
-        unwrap_lines=paragraph_breaks != "single",
-        paragraph_breaks=paragraph_breaks,
+        unwrap_lines=False,
     )
     cutoff_text, cutoff_reason = apply_section_cutoff(raw_text, cutoff_patterns)
     cleaned, _stats = apply_remove_patterns(cutoff_text, remove_patterns)
     cleaned = normalize_text(
         cleaned,
-        unwrap_lines=paragraph_breaks != "single",
-        paragraph_breaks=paragraph_breaks,
+        unwrap_lines=False,
     )
     metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
     case_words = _case_context_words(metadata, raw_title)

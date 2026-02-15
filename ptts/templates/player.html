@@ -2052,12 +2052,6 @@
               </div>
               <div class="panel edit-rules">
                 <div class="edit-section-title">Rules</div>
-                <label for="rulesParagraphs">Paragraph breaks</label>
-                <select id="rulesParagraphs">
-                  <option value="auto">Auto infer (default)</option>
-                  <option value="double">Double newline</option>
-                  <option value="single">Single newline (treat line breaks as paragraphs)</option>
-                </select>
                 <label for="rulesDrop">Drop chapter title patterns</label>
                 <textarea id="rulesDrop"></textarea>
                 <label for="rulesCutoff">Section cutoff patterns</label>
@@ -2406,7 +2400,6 @@
       const rulesDrop = document.getElementById("rulesDrop");
       const rulesCutoff = document.getElementById("rulesCutoff");
       const rulesRemove = document.getElementById("rulesRemove");
-      const rulesParagraphs = document.getElementById("rulesParagraphs");
       const rulesReplace = document.getElementById("rulesReplace");
       const status = document.getElementById("status");
       const playBtn = document.getElementById("playBtn");
@@ -6477,7 +6470,6 @@
 
       function rulesFromForm() {
         return {
-          paragraph_breaks: rulesParagraphs.value || "auto",
           drop_chapter_title_patterns: parseRuleLines(rulesDrop.value || ""),
           section_cutoff_patterns: parseRuleLines(rulesCutoff.value || ""),
           remove_patterns: parseRuleLines(rulesRemove.value || ""),
@@ -6487,7 +6479,6 @@
 
       function applyRulesToForm(rules) {
         state.rulesLoading = true;
-        rulesParagraphs.value = rules.paragraph_breaks || "auto";
         rulesDrop.value = (rules.drop_chapter_title_patterns || []).join("\n");
         rulesCutoff.value = (rules.section_cutoff_patterns || []).join("\n");
         rulesRemove.value = (rules.remove_patterns || []).join("\n");
@@ -7159,7 +7150,6 @@
       rulesDrop.addEventListener("input", scheduleRulesSave);
       rulesCutoff.addEventListener("input", scheduleRulesSave);
       rulesRemove.addEventListener("input", scheduleRulesSave);
-      rulesParagraphs.addEventListener("change", scheduleRulesSave);
       rulesReplace.addEventListener("change", scheduleRulesSave);
       bookmarkBtn.addEventListener("click", () => {
         if (bookmarkPanel.classList.contains("open")) {

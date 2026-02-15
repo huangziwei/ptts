@@ -23,6 +23,5 @@
     "^Colophon$"
   ],
   "section_cutoff_patterns": [],
-  "remove_patterns": [],
-  "paragraph_breaks": "auto"
+  "remove_patterns": []
 }
