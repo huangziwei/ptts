@@ -14,6 +14,35 @@ _PARAGRAPH_BREAK = "\n\n"
 _SECTION_BREAK = "\n\n\n"
 _TITLE_BREAK = "\n\n\n\n\n"
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_STRUCTURAL_HEADING_CLASS_TOKENS = {
+    "book",
+    "chapter",
+    "heading",
+    "part",
+    "section",
+    "subheading",
+    "subtitle",
+    "title",
+}
+_STRUCTURAL_HEADING_CLASS_RE = re.compile(
+    r"(?:^|[-_:])(?:(?:chapter|section|part|book)?(?:sub)?title|(?:sub)?heading)(?:$|[-_:])",
+    re.IGNORECASE,
+)
+_STRUCTURAL_HEADING_ROLE_TOKENS = {
+    "bridgehead",
+    "doc-subtitle",
+    "doc-title",
+    "heading",
+    "subtitle",
+    "title",
+}
+_STRUCTURAL_HEADING_EPUB_TYPE_TOKENS = {
+    "bridgehead",
+    "chapter",
+    "part",
+    "subtitle",
+    "title",
+}
 _NUMERIC_HEADING_RE = re.compile(r"^[\W_]*(?:\d+|[ivxlcdm]+)[\W_]*$", re.IGNORECASE)
 _FILENAME_TITLE_EXTENSIONS = {".htm", ".html", ".xhtml", ".xml"}
 _SPLIT_FILENAME_RE = re.compile(
@@ -325,8 +354,52 @@ def _is_title_heading(text: str) -> bool:
     return not bool(_NUMERIC_HEADING_RE.fullmatch(cleaned))
 
 
-def _break_after_block(text: str, tag_name: str, is_first_block: bool) -> str:
+def _semantic_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", (value or "").lower())
+        if token
+    }
+
+
+def _is_structural_heading_block(elem: object) -> bool:
+    tag_name = (getattr(elem, "name", "") or "").lower()
     if tag_name in _HEADING_TAGS:
+        return True
+
+    attrs = getattr(elem, "attrs", None)
+    if not isinstance(attrs, dict):
+        return False
+
+    role_tokens = _semantic_tokens(str(attrs.get("role") or ""))
+    if role_tokens & _STRUCTURAL_HEADING_ROLE_TOKENS:
+        return True
+
+    epub_type_tokens = _semantic_tokens(str(attrs.get("epub:type") or ""))
+    if epub_type_tokens & _STRUCTURAL_HEADING_EPUB_TYPE_TOKENS:
+        return True
+
+    class_tokens: set[str] = set()
+    raw_classes = attrs.get("class", [])
+    if isinstance(raw_classes, str):
+        raw_classes = [raw_classes]
+    if isinstance(raw_classes, list):
+        for class_name in raw_classes:
+            class_text = str(class_name or "")
+            class_tokens.update(_semantic_tokens(class_text))
+            if _STRUCTURAL_HEADING_CLASS_RE.search(class_text):
+                return True
+    class_tokens.update(_semantic_tokens(str(attrs.get("id") or "")))
+    if _STRUCTURAL_HEADING_CLASS_RE.search(str(attrs.get("id") or "")):
+        return True
+    if class_tokens & _STRUCTURAL_HEADING_CLASS_TOKENS:
+        return True
+
+    return False
+
+
+def _break_after_block(text: str, is_heading: bool, is_first_block: bool) -> str:
+    if is_heading:
         if is_first_block and _is_title_heading(text):
             return _TITLE_BREAK
         return _SECTION_BREAK
@@ -549,9 +622,11 @@ def html_to_text(
             tag.decompose()
     root = soup.body if soup.body else soup
 
-    block_tags = {"p", "div", "li", "blockquote", "pre", *_HEADING_TAGS}
+    # Keep semantic text blocks; skip container divs so nested headings/paragraphs
+    # retain their own boundaries.
+    block_tags = {"p", "li", "blockquote", "pre", *_HEADING_TAGS}
 
-    blocks: List[tuple[str, str]] = []
+    blocks: List[tuple[str, bool]] = []
     for elem in root.find_all(block_tags):
         if any(getattr(parent, "name", None) in block_tags for parent in elem.parents):
             continue
@@ -564,16 +639,16 @@ def html_to_text(
         text = re.sub(r"[ \t]{2,}", " ", text)
         text = text.strip()
         if text:
-            blocks.append((text, (elem.name or "").lower()))
+            blocks.append((text, _is_structural_heading_block(elem)))
 
     if blocks:
         parts: List[str] = []
-        for idx, (block_text, tag_name) in enumerate(blocks):
+        for idx, (block_text, is_heading) in enumerate(blocks):
             parts.append(block_text)
             if idx + 1 < len(blocks):
                 parts.append(
                     _break_after_block(
-                        block_text, tag_name, is_first_block=idx == 0
+                        block_text, is_heading=is_heading, is_first_block=idx == 0
                     )
                 )
         return normalize_text("".join(parts))

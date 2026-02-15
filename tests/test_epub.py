@@ -138,6 +138,54 @@ def test_html_to_text_preserves_heading_break_strength() -> None:
     assert "2.\n\n\nSecond paragraph." in text
 
 
+def test_html_to_text_infers_structural_heading_from_semantic_class() -> None:
+    html = (
+        b"<html><body>"
+        b"<p class='chapter-title'>Chapter One</p>"
+        b"<p>Body paragraph.</p>"
+        b"</body></html>"
+    )
+    text = epub_util.html_to_text(html)
+    assert "Chapter One\n\n\n\n\nBody paragraph." in text
+
+
+def test_html_to_text_infers_structural_heading_from_semantic_role() -> None:
+    html = (
+        b"<html><body>"
+        b"<p>Opening paragraph.</p>"
+        b"<p role='doc-subtitle'>Subheading</p>"
+        b"<p>Body paragraph.</p>"
+        b"</body></html>"
+    )
+    text = epub_util.html_to_text(html)
+    assert "Opening paragraph.\n\nSubheading\n\n\nBody paragraph." in text
+
+
+def test_html_to_text_preserves_heading_breaks_inside_wrapper_div() -> None:
+    html = (
+        b"<html><body>"
+        b"<div>"
+        b"<h1>Wrapped Heading</h1>"
+        b"<p>Body paragraph.</p>"
+        b"</div>"
+        b"</body></html>"
+    )
+    text = epub_util.html_to_text(html)
+    assert "Wrapped Heading\n\n\n\n\nBody paragraph." in text
+
+
+def test_html_to_text_infers_structural_heading_from_compound_title_classes() -> None:
+    html = (
+        b"<html><body>"
+        b"<p class='chaptertitle'>1</p>"
+        b"<p class='chaptersubtitle'>Introduction</p>"
+        b"<p class='paraaftertitle'>Body paragraph.</p>"
+        b"</body></html>"
+    )
+    text = epub_util.html_to_text(html)
+    assert "1\n\n\nIntroduction\n\n\nBody paragraph." in text
+
+
 def test_chapters_from_entries_infers_title_from_text_when_metadata_is_filename() -> None:
     href = "CR!chunk_split_002.html"
     item = _FakeDocumentItem(

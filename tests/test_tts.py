@@ -371,7 +371,7 @@ def test_compute_chunk_pause_multipliers_infers_symbol_separator_lines() -> None
     assert tts.compute_chunk_pause_multipliers(text, spans) == [3, 1]
 
 
-def test_compute_chunk_pause_multipliers_infers_numbered_section_heading() -> None:
+def test_compute_chunk_pause_multipliers_does_not_infer_numbered_heading_from_plain_text() -> None:
     text = "First paragraph.\n\n1.\n\nSecond paragraph."
     spans = tts.make_chunk_spans(text, max_chars=200)
     assert [text[start:end] for start, end in spans] == [
@@ -379,20 +379,20 @@ def test_compute_chunk_pause_multipliers_infers_numbered_section_heading() -> No
         "1.",
         "Second paragraph.",
     ]
-    assert tts.compute_chunk_pause_multipliers(text, spans) == [3, 3, 1]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [1, 1, 1]
 
 
-def test_compute_chunk_pause_multipliers_infers_title_heading_at_start() -> None:
+def test_compute_chunk_pause_multipliers_does_not_infer_title_heading_from_plain_text() -> None:
     text = "Prologue\n\nFirst paragraph."
     spans = tts.make_chunk_spans(text, max_chars=200)
     assert [text[start:end] for start, end in spans] == [
         "Prologue",
         "First paragraph.",
     ]
-    assert tts.compute_chunk_pause_multipliers(text, spans) == [5, 1]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [1, 1]
 
 
-def test_compute_chunk_pause_multipliers_infers_diacritic_numbered_heading() -> None:
+def test_compute_chunk_pause_multipliers_does_not_infer_diacritic_heading_from_plain_text() -> None:
     text = (
         "Opening context paragraph.\n\n"
         "I.2 A survey of the four satipaṭṭhānas\n\n"
@@ -404,7 +404,7 @@ def test_compute_chunk_pause_multipliers_infers_diacritic_numbered_heading() -> 
         "I.2 A survey of the four satipaṭṭhānas",
         "Following body paragraph.",
     ]
-    assert tts.compute_chunk_pause_multipliers(text, spans) == [3, 3, 1]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [1, 1, 1]
 
 
 def test_compute_chunk_pause_multipliers_keeps_paragraph_sentence_as_non_heading() -> None:
@@ -419,6 +419,17 @@ def test_compute_chunk_pause_multipliers_keeps_paragraph_sentence_as_non_heading
         "This is a regular paragraph sentence.",
         "Following body paragraph.",
     ]
+    assert tts.compute_chunk_pause_multipliers(text, spans) == [1, 1, 1]
+
+
+def test_compute_chunk_pause_multipliers_keeps_colon_line_as_normal_paragraph() -> None:
+    text = (
+        "Without the slightest outward appearance of agitation, she put the "
+        '"painful question" in these extraordinary words:\n\n'
+        "She lives at—\n\n"
+        "The address followed."
+    )
+    spans = tts.make_chunk_spans(text, max_chars=400)
     assert tts.compute_chunk_pause_multipliers(text, spans) == [1, 1, 1]
 
 
