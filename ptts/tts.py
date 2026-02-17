@@ -1197,6 +1197,33 @@ def _normalize_roman_numerals(text: str) -> str:
     return f"{_int_to_words(number)}{suffix}"
 
 
+def _normalize_linebreak_pauses(text: str) -> str:
+    if "\n" not in text:
+        return text
+
+    boundary_punct = _SENT_PUNCT | _CLAUSE_PUNCT | set(_CLOSING_PUNCT)
+
+    def replace(match: re.Match[str]) -> str:
+        start = match.start()
+        end = match.end()
+        prev_char = text[start - 1] if start > 0 else ""
+        next_char = text[end] if end < len(text) else ""
+        if not prev_char or not next_char:
+            return " "
+
+        newline_count = match.group(0).count("\n")
+        if newline_count >= _SECTION_BREAK_NEWLINES:
+            if prev_char in _SENT_PUNCT:
+                return " "
+            return ". "
+
+        if prev_char in boundary_punct or next_char in boundary_punct:
+            return " "
+        return ", "
+
+    return re.sub(r"[ \t]*\n+[ \t]*", replace, text)
+
+
 def _normalize_reading_mode(value: object, *, default: str) -> str:
     cleaned = str(value or "").strip().lower()
     if not cleaned:
@@ -1457,6 +1484,7 @@ def prepare_tts_text(
     text = _normalize_roman_numerals(text)
     text = _normalize_currency_symbols(text)
     text = normalize_numbers_for_tts(text)
+    text = _normalize_linebreak_pauses(text)
     text = re.sub(r"\s+", " ", text).strip()
     if text and text[-1] not in ".!?":
         text += "."
