@@ -26,6 +26,11 @@ def test_prepare_tts_text_normalizes_roman_title() -> None:
     assert tts.prepare_tts_text("I") == "one."
 
 
+def test_prepare_tts_text_normalizes_multiline_roman_title() -> None:
+    text = "I\nOn Anticipation"
+    assert tts.prepare_tts_text(text) == "one On Anticipation."
+
+
 def test_prepare_tts_text_skips_roman_i_pronoun() -> None:
     text = "In this chapter I continue to investigate."
     assert tts.prepare_tts_text(text) == text
