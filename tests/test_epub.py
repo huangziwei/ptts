@@ -124,6 +124,25 @@ def test_html_to_text_normalizes_curly_apostrophe() -> None:
     assert epub_util.html_to_text(html) == "It's fine."
 
 
+def test_html_to_text_collapses_source_soft_wraps_inside_paragraph() -> None:
+    html = (
+        b"<html><body>"
+        b"<p>First line of text\n"
+        b" wrapped in source.\n"
+        b" Still same paragraph.</p>"
+        b"</body></html>"
+    )
+    assert (
+        epub_util.html_to_text(html)
+        == "First line of text wrapped in source. Still same paragraph."
+    )
+
+
+def test_html_to_text_preserves_explicit_br_linebreaks() -> None:
+    html = b"<html><body><p>Line one<br/>Line two</p></body></html>"
+    assert epub_util.html_to_text(html) == "Line one\nLine two"
+
+
 def test_html_to_text_preserves_heading_break_strength() -> None:
     html = (
         b"<html><body>"

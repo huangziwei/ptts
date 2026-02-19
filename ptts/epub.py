@@ -13,6 +13,7 @@ from ebooklib import ITEM_DOCUMENT, ITEM_IMAGE, epub
 _PARAGRAPH_BREAK = "\n\n"
 _SECTION_BREAK = "\n\n\n"
 _TITLE_BREAK = "\n\n\n\n\n"
+_INLINE_BREAK_PLACEHOLDER = "__PTTS_BR__"
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _STRUCTURAL_HEADING_CLASS_TOKENS = {
     "book",
@@ -347,6 +348,28 @@ def _normalize_break_runs(text: str) -> str:
     return re.sub(r"\n{3,}", repl, text)
 
 
+def _normalize_block_text(
+    raw_text: str, *, preserve_source_newlines: bool = False
+) -> str:
+    text = raw_text.replace("\xa0", " ")
+    if preserve_source_newlines:
+        text = text.replace(_INLINE_BREAK_PLACEHOLDER, "\n")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = _normalize_break_runs(text)
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        return text.strip()
+
+    # EPUB XHTML often wraps text nodes for formatting; those newlines are not
+    # semantic paragraph breaks and should collapse to spaces.
+    segments = text.split(_INLINE_BREAK_PLACEHOLDER)
+    normalized_segments: List[str] = []
+    for segment in segments:
+        normalized_segments.append(re.sub(r"\s+", " ", segment).strip())
+    text = "\n".join(normalized_segments)
+    text = _normalize_break_runs(text)
+    return text.strip()
+
+
 def _is_title_heading(text: str) -> bool:
     cleaned = re.sub(r"\s+", " ", (text or "")).strip()
     if not cleaned:
@@ -631,13 +654,11 @@ def html_to_text(
         if any(getattr(parent, "name", None) in block_tags for parent in elem.parents):
             continue
         for br in elem.find_all("br"):
-            br.replace_with("\n")
+            br.replace_with(_INLINE_BREAK_PLACEHOLDER)
         text = elem.get_text(separator="", strip=False)
-        text = text.replace("\xa0", " ")
-        text = re.sub(r"[ \t]+\n", "\n", text)
-        text = _normalize_break_runs(text)
-        text = re.sub(r"[ \t]{2,}", " ", text)
-        text = text.strip()
+        text = _normalize_block_text(
+            text, preserve_source_newlines=(getattr(elem, "name", "") == "pre")
+        )
         if text:
             blocks.append((text, _is_structural_heading_block(elem)))
 
