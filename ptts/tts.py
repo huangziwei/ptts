@@ -8,6 +8,7 @@ import logging
 import re
 import shutil
 import sys
+import threading
 import time
 import unicodedata
 import wave
@@ -38,6 +39,8 @@ except Exception:  # pragma: no cover - optional runtime dependency
 
 _TTS_WARNING_CONTEXT = contextvars.ContextVar("_TTS_WARNING_CONTEXT", default=None)
 _TTS_WARNING_FILTER_INSTALLED = False
+_TTS_WARNING_CONTEXT_LOCK = threading.Lock()
+_TTS_WARNING_CONTEXT_STACK: List[dict[str, Any]] = []
 
 
 @contextmanager
@@ -48,19 +51,35 @@ def _tts_warning_context(
     sub_idx: Optional[int] = None,
     sub_total: Optional[int] = None,
 ) -> Iterator[None]:
-    token = _TTS_WARNING_CONTEXT.set(
-        {
-            "chapter_id": chapter_id,
-            "chunk_idx": chunk_idx,
-            "chunk_total": chunk_total,
-            "sub_idx": sub_idx,
-            "sub_total": sub_total,
-        }
-    )
+    ctx = {
+        "chapter_id": chapter_id,
+        "chunk_idx": chunk_idx,
+        "chunk_total": chunk_total,
+        "sub_idx": sub_idx,
+        "sub_total": sub_total,
+    }
+    token = _TTS_WARNING_CONTEXT.set(ctx)
+    with _TTS_WARNING_CONTEXT_LOCK:
+        _TTS_WARNING_CONTEXT_STACK.append(ctx)
     try:
         yield
     finally:
+        with _TTS_WARNING_CONTEXT_LOCK:
+            for idx in range(len(_TTS_WARNING_CONTEXT_STACK) - 1, -1, -1):
+                if _TTS_WARNING_CONTEXT_STACK[idx] is ctx:
+                    _TTS_WARNING_CONTEXT_STACK.pop(idx)
+                    break
         _TTS_WARNING_CONTEXT.reset(token)
+
+
+def _active_tts_warning_context() -> Optional[dict]:
+    ctx = _TTS_WARNING_CONTEXT.get()
+    if ctx:
+        return ctx
+    with _TTS_WARNING_CONTEXT_LOCK:
+        if _TTS_WARNING_CONTEXT_STACK:
+            return _TTS_WARNING_CONTEXT_STACK[-1]
+    return None
 
 
 class _TTSWarningContextFilter(logging.Filter):
@@ -72,7 +91,7 @@ class _TTSWarningContextFilter(logging.Filter):
         msg = record.getMessage()
         if "Maximum generation length reached without EOS" not in msg:
             return True
-        ctx = _TTS_WARNING_CONTEXT.get()
+        ctx = _active_tts_warning_context()
         if not ctx:
             return True
         details = (

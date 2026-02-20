@@ -1,4 +1,6 @@
 import json
+import logging
+import threading
 from pathlib import Path
 
 from ptts import tts
@@ -223,6 +225,31 @@ def test_prepare_tts_text_reading_overrides_word_boundary_default() -> None:
     overrides = [{"base": "sati", "reading": "sah-tee"}]
     expected = "sah-tee appears, but satisfaction should not change."
     assert tts.prepare_tts_text(text, overrides) == expected
+
+
+def test_tts_warning_filter_adds_chunk_context_for_cross_thread_warning(caplog) -> None:
+    tts._install_tts_warning_filter()
+    logger = logging.getLogger("pocket_tts.models.tts_model")
+    message = (
+        "Maximum generation length reached without EOS, "
+        "this very often indicates an error."
+    )
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        with tts._tts_warning_context(
+            chapter_id="0003-foreword",
+            chunk_idx=48,
+            chunk_total=793,
+            sub_idx=1,
+            sub_total=1,
+        ):
+            thread = threading.Thread(target=lambda: logger.warning(message))
+            thread.start()
+            thread.join()
+    assert any(
+        "[chapter=0003-foreword chunk=48/793 sub=1/1]" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_prepare_tts_text_applies_diacritic_pattern_before_transliteration() -> None:
