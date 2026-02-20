@@ -167,6 +167,21 @@ def test_prepare_tts_text_normalizes_all_remaining_digits() -> None:
     assert not any(ch.isdigit() for ch in out)
 
 
+def test_prepare_tts_text_normalizes_decade_numbers() -> None:
+    assert (
+        tts.prepare_tts_text("It lasted through the early 1850s.")
+        == "It lasted through the early eighteen fifties."
+    )
+    assert (
+        tts.prepare_tts_text("By the 1990s and '80s, things changed.")
+        == "By the nineteen nineties and eighties, things changed."
+    )
+    assert (
+        tts.prepare_tts_text("The 1850's debates still matter.")
+        == "The eighteen fifties debates still matter."
+    )
+
+
 def test_prepare_tts_text_transliterates_pali_sanskrit() -> None:
     text = "Saṃyukta-āgama, Dīrgha-āgama, Saḷāyatanavibhaṅga-sutta, and Nibbāna."
     expected = "Samyukta-aagama, Diirgha-aagama, Salaayatanavibhangga-sutta, and Nibbaana."

@@ -402,6 +402,7 @@ _YEAR_RANGE_RE = re.compile(
 )
 _YEAR_RE = re.compile(r"\b(?P<year>1\d{3}|20\d{2})\b")
 _ORDINAL_RE = re.compile(r"\b(?P<num>\d+)(?P<suffix>st|nd|rd|th)\b", re.IGNORECASE)
+_PLURAL_NUMBER_S_RE = re.compile(r"(?<!\w)(?:['’])?(?P<num>\d{1,4})(?:['’])?s\b")
 _RESIDUAL_DIGITS_RE = re.compile(r"\d+")
 _ROMAN_DECIMAL_RE = re.compile(r"\b(?P<roman>[IVXLCDM]+)\.(?P<num>\d+(?:\.\d+)*)\b")
 _CURRENCY_SYMBOL_UNITS = {
@@ -1187,6 +1188,40 @@ def _normalize_ordinals(text: str) -> str:
     return _ORDINAL_RE.sub(replace, text)
 
 
+def _pluralize_spoken_word(word: str) -> str:
+    if not word:
+        return word
+    if word.endswith("y") and len(word) > 1 and word[-2] not in "aeiou":
+        return f"{word[:-1]}ies"
+    if word.endswith(("s", "x", "z", "ch", "sh")):
+        return f"{word}es"
+    return f"{word}s"
+
+
+def _pluralize_spoken_phrase(phrase: str) -> str:
+    parts = phrase.split()
+    if not parts:
+        return phrase
+    parts[-1] = _pluralize_spoken_word(parts[-1])
+    return " ".join(parts)
+
+
+def _normalize_plural_number_s(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        token = match.group("num")
+        try:
+            value = int(token)
+        except ValueError:
+            return match.group(0)
+        if len(token) == 4 and not token.startswith("0") and 1000 <= value <= 2099:
+            spoken = _year_to_words(value)
+        else:
+            spoken = _number_run_to_words(token)
+        return _pluralize_spoken_phrase(spoken)
+
+    return _PLURAL_NUMBER_S_RE.sub(replace, text)
+
+
 def _number_run_to_words(token: str) -> str:
     if not token:
         return token
@@ -1319,6 +1354,7 @@ def normalize_numbers_for_tts(text: str) -> str:
     text = _normalize_decimal_numbers(text)
     text = _normalize_plain_large_numbers(text)
     text = _normalize_signed_integers(text)
+    text = _normalize_plural_number_s(text)
     text = _normalize_year_ranges(text)
     text = _normalize_plain_years(text)
     text = _normalize_ordinals(text)
