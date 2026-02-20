@@ -191,6 +191,32 @@ def test_prepare_tts_text_expands_latin_abbrev() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_expands_additional_latin_abbrev() -> None:
+    text = "Artifacts dated ca. 1826 are discussed by Smith et al.; cf. ibid."
+    expected = (
+        "Artifacts dated circa eighteen twenty six are discussed by Smith and others; "
+        "compare in the same place."
+    )
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_expands_latin_reference_abbrev() -> None:
+    text = "Use op. cit., loc. cit., n.b., and q.v. here."
+    expected = "Use in the work cited, in the place cited, note well, and which see here."
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_expands_et_seq_forms() -> None:
+    assert (
+        tts.prepare_tts_text("Read chapters 2 et seq. for details.")
+        == "Read chapters two and the following for details."
+    )
+    assert (
+        tts.prepare_tts_text("Read chapters 2 et seqq. for details.")
+        == "Read chapters two and the following for details."
+    )
+
+
 def test_prepare_tts_text_expands_vs_viz() -> None:
     text = "Compare A vs. B; viz. the minimal case."
     expected = "Compare A versus B; namely the minimal case."
@@ -364,6 +390,12 @@ def test_make_chunks_skips_punct_only_paragraph() -> None:
 
 def test_make_chunks_skips_common_abbrev_split() -> None:
     text = "This is e.g. a test."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
+def test_make_chunks_skips_ca_split() -> None:
+    text = "The manuscript dates to ca. 1872 and was revised later."
     chunks = tts.make_chunks(text, max_chars=200)
     assert chunks == [text]
 
