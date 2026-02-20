@@ -92,11 +92,11 @@ def test_prepare_tts_text_normalizes_currency_symbols_corpus_examples() -> None:
     assert tts.prepare_tts_text("That'll be $3.85.") == "That'll be three point eight five dollars."
     assert (
         tts.prepare_tts_text("He can buy $50.00 worth of groceries for $6.98.")
-        == "He can buy 50 dollars worth of groceries for six point nine eight dollars."
+        == "He can buy fifty dollars worth of groceries for six point nine eight dollars."
     )
     assert (
         tts.prepare_tts_text("The unused portion was $5000.")
-        == "The unused portion was 5000 dollars."
+        == "The unused portion was five thousand dollars."
     )
     assert (
         tts.prepare_tts_text("I was paid $2978.25 for services.")
@@ -110,20 +110,20 @@ def test_prepare_tts_text_normalizes_currency_symbols_corpus_examples() -> None:
 
 def test_prepare_tts_text_normalizes_additional_currency_symbols() -> None:
     cases = [
-        ("€1", "1 euro."),
-        ("£2", "2 pounds."),
-        ("¥1", "1 yen."),
-        ("₹3", "3 rupees."),
-        ("₽4", "4 rubles."),
-        ("₩2", "2 won."),
-        ("₪5", "5 shekels."),
-        ("₫6", "6 dong."),
-        ("₴7", "7 hryvnias."),
-        ("₦8", "8 naira."),
-        ("฿9", "9 baht."),
-        ("₺10", "10 lira."),
-        ("₱11", "11 pesos."),
-        ("The fee is 3€.", "The fee is 3 euros."),
+        ("€1", "one euro."),
+        ("£2", "two pounds."),
+        ("¥1", "one yen."),
+        ("₹3", "three rupees."),
+        ("₽4", "four rubles."),
+        ("₩2", "two won."),
+        ("₪5", "five shekels."),
+        ("₫6", "six dong."),
+        ("₴7", "seven hryvnias."),
+        ("₦8", "eight naira."),
+        ("฿9", "nine baht."),
+        ("₺10", "ten lira."),
+        ("₱11", "eleven pesos."),
+        ("The fee is 3€.", "The fee is three euros."),
         (
             "Budget is €1,234.50.",
             "Budget is one thousand two hundred thirty four point five zero euros.",
@@ -136,7 +136,7 @@ def test_prepare_tts_text_normalizes_additional_currency_symbols() -> None:
 def test_prepare_tts_text_normalizes_era_abbreviations_corpus_examples() -> None:
     assert (
         tts.prepare_tts_text("For example, the year 586 B.C.E. is equivalent to the year 586 B.C.")
-        == "For example, the year 586 B-C-E is equivalent to the year 586 B-C."
+        == "For example, the year five hundred eighty six B-C-E is equivalent to the year five hundred eighty six B-C."
     )
     assert (
         tts.prepare_tts_text(
@@ -146,14 +146,25 @@ def test_prepare_tts_text_normalizes_era_abbreviations_corpus_examples() -> None
     )
     assert (
         tts.prepare_tts_text("The date range is 1250–1050 BCE.")
-        == "The date range is 1250–1050 B-C-E."
+        == "The date range is twelve fifty to ten fifty B-C-E."
     )
 
 
 def test_prepare_tts_text_normalizes_era_abbreviations_extrapolated_forms() -> None:
-    assert tts.prepare_tts_text("The city fell in AD 70.") == "The city fell in A-D 70."
-    assert tts.prepare_tts_text("The city fell in 70 AD.") == "The city fell in 70 A-D."
+    assert tts.prepare_tts_text("The city fell in AD 70.") == "The city fell in A-D seventy."
+    assert tts.prepare_tts_text("The city fell in 70 AD.") == "The city fell in seventy A-D."
     assert tts.prepare_tts_text("Use BC and AD labels.") == "Use BC and AD labels."
+
+
+def test_prepare_tts_text_normalizes_all_remaining_digits() -> None:
+    text = "Model X2 was released in 2026, ranked 21st, scored +17, ratio 3/4, and ticket 007."
+    expected = (
+        "Model X two was released in twenty twenty six, ranked twenty first, scored plus seventeen, "
+        "ratio three/four, and ticket zero zero seven."
+    )
+    out = tts.prepare_tts_text(text)
+    assert out == expected
+    assert not any(ch.isdigit() for ch in out)
 
 
 def test_prepare_tts_text_transliterates_pali_sanskrit() -> None:

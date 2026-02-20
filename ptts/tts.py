@@ -378,6 +378,13 @@ _GROUPED_INT_COMMA_RE = re.compile(r"\b\d{1,3}(?:,\d{3})+\b")
 _GROUPED_INT_DOT_RE = re.compile(r"\b\d{1,3}(?:\.\d{3})+\b")
 _DECIMAL_RE = re.compile(r"\b\d+\.\d+\b")
 _PLAIN_INT_RE = re.compile(r"\b\d+\b")
+_SIGNED_INT_RE = re.compile(r"(?<!\w)(?P<sign>[+-])(?P<num>\d+)\b")
+_YEAR_RANGE_RE = re.compile(
+    r"\b(?P<start>1\d{3}|20\d{2})\s*[–-]\s*(?P<end>\d{2,4})\b(?!\s*[–-]\s*\d)"
+)
+_YEAR_RE = re.compile(r"\b(?P<year>1\d{3}|20\d{2})\b")
+_ORDINAL_RE = re.compile(r"\b(?P<num>\d+)(?P<suffix>st|nd|rd|th)\b", re.IGNORECASE)
+_RESIDUAL_DIGITS_RE = re.compile(r"\d+")
 _ROMAN_DECIMAL_RE = re.compile(r"\b(?P<roman>[IVXLCDM]+)\.(?P<num>\d+(?:\.\d+)*)\b")
 _CURRENCY_SYMBOL_UNITS = {
     "$": ("dollar", "dollars"),
@@ -980,6 +987,72 @@ def _digits_to_words(value: str) -> str:
     return " ".join(parts)
 
 
+def _int_to_ordinal_words(value: int) -> str:
+    if value < 0:
+        return f"minus {_int_to_ordinal_words(abs(value))}"
+    if value == 0:
+        return "zeroth"
+
+    cardinal = _int_to_words(value)
+    parts = cardinal.split()
+    if not parts:
+        return cardinal
+
+    last = parts[-1]
+    irregular = {
+        "one": "first",
+        "two": "second",
+        "three": "third",
+        "five": "fifth",
+        "eight": "eighth",
+        "nine": "ninth",
+        "twelve": "twelfth",
+    }
+    if last in irregular:
+        parts[-1] = irregular[last]
+    elif last.endswith("y"):
+        parts[-1] = f"{last[:-1]}ieth"
+    elif last.endswith("e"):
+        parts[-1] = f"{last}th"
+    else:
+        parts[-1] = f"{last}th"
+    return " ".join(parts)
+
+
+def _year_to_words(value: int) -> str:
+    if value < 1000 or value > 2099:
+        return _int_to_words(value)
+    if value < 2000:
+        century = value // 100
+        suffix = value % 100
+        prefix = _int_to_words(century)
+        if suffix == 0:
+            return f"{prefix} hundred"
+        if suffix < 10:
+            return f"{prefix} oh {_int_to_words(suffix)}"
+        return f"{prefix} {_int_to_words(suffix)}"
+    if value == 2000:
+        return "two thousand"
+    suffix = value - 2000
+    if suffix < 10:
+        return f"two thousand {_int_to_words(suffix)}"
+    return f"twenty {_int_to_words(suffix)}"
+
+
+def _expand_year_range_end(start: int, end_raw: str) -> Optional[int]:
+    token = end_raw.strip()
+    if not token.isdigit():
+        return None
+    if len(token) == 2:
+        year = (start // 100) * 100 + int(token)
+        if year < start:
+            year += 100
+        return year
+    if len(token) == 4:
+        return int(token)
+    return None
+
+
 def _normalize_label_numbers(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         label = match.group("label")
@@ -1041,6 +1114,96 @@ def _normalize_plain_large_numbers(text: str) -> str:
         return _int_to_words(value)
 
     return _PLAIN_INT_RE.sub(replace, text)
+
+
+def _normalize_signed_integers(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        sign = match.group("sign")
+        token = match.group("num")
+        try:
+            value = int(token)
+        except ValueError:
+            return match.group(0)
+        words = _int_to_words(value)
+        if sign == "-":
+            return f"minus {words}"
+        return f"plus {words}"
+
+    return _SIGNED_INT_RE.sub(replace, text)
+
+
+def _normalize_year_ranges(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        try:
+            start = int(match.group("start"))
+        except ValueError:
+            return match.group(0)
+        end = _expand_year_range_end(start, match.group("end"))
+        if end is None or not (1000 <= end <= 2099):
+            return match.group(0)
+        return f"{_year_to_words(start)} to {_year_to_words(end)}"
+
+    return _YEAR_RANGE_RE.sub(replace, text)
+
+
+def _normalize_plain_years(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        try:
+            year = int(match.group("year"))
+        except ValueError:
+            return match.group(0)
+        return _year_to_words(year)
+
+    return _YEAR_RE.sub(replace, text)
+
+
+def _normalize_ordinals(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        token = match.group("num")
+        try:
+            value = int(token)
+        except ValueError:
+            return match.group(0)
+        return _int_to_ordinal_words(value)
+
+    return _ORDINAL_RE.sub(replace, text)
+
+
+def _number_run_to_words(token: str) -> str:
+    if not token:
+        return token
+    if len(token) > 1 and token.startswith("0"):
+        return _digits_to_words(token)
+    try:
+        value = int(token)
+    except ValueError:
+        return _digits_to_words(token)
+    return _int_to_words(value)
+
+
+def _normalize_residual_digits(text: str) -> str:
+    if not text:
+        return text
+    parts: List[str] = []
+    cursor = 0
+    text_len = len(text)
+    for match in _RESIDUAL_DIGITS_RE.finditer(text):
+        start, end = match.span()
+        if cursor < start:
+            parts.append(text[cursor:start])
+        left = text[start - 1] if start > 0 else ""
+        right = text[end] if end < text_len else ""
+        replacement = _number_run_to_words(match.group(0))
+        if left and left.isalpha():
+            if not parts or not parts[-1].endswith(" "):
+                parts.append(" ")
+        parts.append(replacement)
+        if right and right.isalpha():
+            parts.append(" ")
+        cursor = end
+    if cursor < text_len:
+        parts.append(text[cursor:])
+    return "".join(parts)
 
 
 def _normalize_roman_decimal_numbers(text: str) -> str:
@@ -1137,6 +1300,11 @@ def normalize_numbers_for_tts(text: str) -> str:
     text = _normalize_grouped_numbers(text)
     text = _normalize_decimal_numbers(text)
     text = _normalize_plain_large_numbers(text)
+    text = _normalize_signed_integers(text)
+    text = _normalize_year_ranges(text)
+    text = _normalize_plain_years(text)
+    text = _normalize_ordinals(text)
+    text = _normalize_residual_digits(text)
     return text
 
 
