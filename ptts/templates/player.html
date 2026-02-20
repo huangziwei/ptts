@@ -4716,6 +4716,7 @@
             <span>Furthest: ${label}</span>
             <div class="bookmark-actions">
               <button class="btn small" data-action="play-furthest" data-index="${furthestIndex}">Play</button>
+              <button class="btn small danger" data-action="clear-furthest" data-index="${furthestIndex}">Reset</button>
             </div>
           `;
           bookmarkList.appendChild(item);
@@ -4987,6 +4988,65 @@
         const bookmarks = getBookmarks();
         const next = bookmarks.filter((entry) => entry.index !== index);
         saveBookmarks(next);
+      }
+
+      async function clearFurthestPlayed() {
+        if (!state.book) {
+          return;
+        }
+        const furthestIndex = getFurthestPlayed();
+        if (furthestIndex === null) {
+          setStatus("No furthest chunk to reset.");
+          return;
+        }
+        const previousLast = getLastPlayed();
+        const entry = state.books.find((book) => book.id === state.book.id) || null;
+        const previousBookComplete = !!state.book.playback_complete;
+        const previousEntryComplete = entry ? !!entry.playback_complete : false;
+        const label = state.book.title || state.book.id;
+        const confirmed = window.confirm(
+          `Reset furthest chunk for "${label}"? This also clears the last-played marker.`
+        );
+        if (!confirmed) {
+          return;
+        }
+        if (state.playbackSaveTimer) {
+          clearTimeout(state.playbackSaveTimer);
+          state.playbackSaveTimer = null;
+        }
+        state.playback.lastPlayed = null;
+        state.playback.furthestPlayed = null;
+        if (entry) {
+          entry.playback_complete = false;
+          renderBooks();
+        }
+        state.book.playback_complete = false;
+        updateMarks();
+        try {
+          await fetchJson(
+            `/api/playback?book_id=${encodeURIComponent(state.book.id)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                last_played: null,
+                furthest_played: null,
+                bookmarks: getBookmarks(),
+              }),
+            }
+          );
+          setStatus("Furthest chunk reset.");
+        } catch (err) {
+          state.playback.lastPlayed = previousLast;
+          state.playback.furthestPlayed = furthestIndex;
+          if (entry) {
+            entry.playback_complete = previousEntryComplete;
+            renderBooks();
+          }
+          state.book.playback_complete = previousBookComplete;
+          updateMarks();
+          setStatus(err.message || "Failed to reset furthest chunk.");
+        }
       }
 
       function startSynthPolling() {
@@ -7182,6 +7242,10 @@
         if (action === "play" || action === "play-furthest") {
           jumpToIndex(index, true);
           closeBookmarkPanel();
+          return;
+        }
+        if (action === "clear-furthest") {
+          void clearFurthestPlayed();
           return;
         }
         if (action === "remove") {
