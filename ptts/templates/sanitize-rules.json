@@ -18,6 +18,7 @@
         "^List\\ of\\ illustrations$",
         "^List\\ of\\ contributors$",
         "^List\\ of\\ works\\ cited$",
+        "^List\\ of\\ figures",
         "^Also\\ By$",
         "^General\\ index$",
         "^Imprint$",
@@ -25,7 +26,8 @@
         "^Cover\\ Page$",
         "^Half\\ Title$",
         "^Suggested\\ Further\\ Reading$",
-        "^Titlepage$"
+        "^Titlepage$",
+        "^Expanded\\ table\\ of\\ contents$"
     ],
     "section_cutoff_patterns": [],
     "remove_patterns": []
