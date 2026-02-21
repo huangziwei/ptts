@@ -207,6 +207,12 @@ _DOT_SPACE_DOT_RE = re.compile(r"(?<=\.)\s+(?=[A-Za-z]\.)")
 _LAST_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)\s*$")
 _NEXT_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)")
 _ELLIPSIS_RE = re.compile(r"(\.\.\.|…)\s*$")
+_INITIALS_WITH_NAME_RE = re.compile(
+    r"\b(?P<seq>[A-Z]\.(?:\s+[A-Z]\.)+)\s+(?P<name>[A-Z][A-Za-z'’\-]+)\b"
+)
+_SPACED_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>[A-Z]\.(?:\s+[A-Z]\.)+)")
+_COMPACT_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>(?:[A-Z]\.){2,})")
+_NO_NUMBER_ABBREV_RE = re.compile(r"\bNo\.(?=\s*\d)", re.IGNORECASE)
 _ABBREV_EXPANSIONS = {
     "prof": "professor",
     "fig": "figure",
@@ -949,8 +955,51 @@ def _expand_abbreviations(text: str) -> str:
     return _ABBREV_EXPANSION_RE.sub(replace, text)
 
 
+def _hyphenate_dotted_letters(seq: str) -> str:
+    letters = re.findall(r"[A-Z](?=\.)", seq)
+    if len(letters) < 2:
+        return seq
+    return "-".join(letters)
+
+
+def _normalize_initials_with_name(text: str) -> str:
+    if not text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        seq = match.group("seq")
+        name = match.group("name")
+        hyphenated = _hyphenate_dotted_letters(seq)
+        if hyphenated == seq:
+            return match.group(0)
+        return f"{hyphenated}-{name}"
+
+    return _INITIALS_WITH_NAME_RE.sub(replace, text)
+
+
+def _normalize_dotted_initialisms(text: str) -> str:
+    if not text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        seq = match.group("seq")
+        return _hyphenate_dotted_letters(seq)
+
+    text = _SPACED_DOTTED_INITIALISM_RE.sub(replace, text)
+    return _COMPACT_DOTTED_INITIALISM_RE.sub(replace, text)
+
+
+def _normalize_no_number_abbrev(text: str) -> str:
+    if not text:
+        return text
+    return _NO_NUMBER_ABBREV_RE.sub("number", text)
+
+
 def normalize_abbreviations(text: str) -> str:
     text = _expand_abbreviations(text)
+    text = _normalize_initials_with_name(text)
+    text = _normalize_dotted_initialisms(text)
+    text = _normalize_no_number_abbrev(text)
     return _ABBREV_DOT_RE.sub(r"\1", text)
 
 

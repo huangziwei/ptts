@@ -238,6 +238,18 @@ def test_prepare_tts_text_expands_vs_viz() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_normalizes_dotted_initialisms() -> None:
+    text = "S. T. Joshi wrote in the U.S., U.K., and U.N."
+    expected = "S-T-Joshi wrote in the U-S, U-K, and U-N."
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_normalizes_no_number_abbrev() -> None:
+    text = "See No. 5 for details."
+    expected = "See number five for details."
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_prepare_tts_text_strips_double_quotes() -> None:
     text = 'He said "bible" should be read aloud.'
     expected = "He said bible should be read aloud."
