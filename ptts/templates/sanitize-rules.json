@@ -25,6 +25,7 @@
         "^Colophon$",
         "^Cover\\ Page$",
         "^Half\\ Title$",
+        "^Halftitle\\ Page$",
         "^Suggested\\ Further\\ Reading$",
         "^Titlepage$",
         "^Expanded\\ table\\ of\\ contents$"
