@@ -318,8 +318,8 @@ _ROMAN_CANONICAL_RE = re.compile(
     r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$"
 )
 _ROMAN_HEADING_RE = re.compile(
-    r"\b(?P<label>(?:chapter|book|part|volume|vol|section|act|appendix)\.?)"
-    r"\s+(?P<num>[IVXLCDM]+)\b",
+    r"\b(?P<label>(?:chapter(?:s)?|book(?:s)?|part(?:s)?|volume(?:s)?|vol(?:s)?|section(?:s)?|act(?:s)?|appendix(?:es)?|appendices)\.?)"
+    r"\s+(?P<num>[IVXLCDM]+(?:\s*(?:,\s*(?:and|or)\s+|,\s*|\s+(?:and|or|&)\s+)[IVXLCDM]+)*)\b",
     re.IGNORECASE,
 )
 _ROMAN_LEADING_TITLE_RE = re.compile(
@@ -328,6 +328,7 @@ _ROMAN_LEADING_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _ROMAN_STANDALONE_RE = re.compile(r"^(?P<num>[IVXLCDM]+)(?P<trail>[^A-Za-z0-9]*)$", re.IGNORECASE)
+_ROMAN_TOKEN_RE = re.compile(r"\b[IVXLCDM]+\b", re.IGNORECASE)
 _ROMAN_I_DETERMINERS = {
     "a",
     "an",
@@ -1459,13 +1460,31 @@ def _normalize_roman_numerals(text: str) -> str:
         return False
 
     def replace_heading(match: re.Match[str]) -> str:
-        roman = match.group("num")
-        number = _roman_to_int(match.group("num"))
-        if number is None:
+        numbers_text = match.group("num")
+        romans = list(_ROMAN_TOKEN_RE.finditer(numbers_text))
+        if not romans:
             return match.group(0)
-        if roman.upper() == "I" and not should_convert_roman_i(match):
-            return match.group(0)
-        return f"{match.group('label')} {_int_to_words(number)}"
+        if len(romans) == 1:
+            roman = romans[0].group(0)
+            number = _roman_to_int(roman)
+            if number is None:
+                return match.group(0)
+            if roman.upper() == "I" and not should_convert_roman_i(match):
+                return match.group(0)
+            return f"{match.group('label')} {_int_to_words(number)}"
+
+        parts: List[str] = []
+        cursor = 0
+        for roman_match in romans:
+            start, end = roman_match.span()
+            number = _roman_to_int(roman_match.group(0))
+            if number is None:
+                return match.group(0)
+            parts.append(numbers_text[cursor:start])
+            parts.append(_int_to_words(number))
+            cursor = end
+        parts.append(numbers_text[cursor:])
+        return f"{match.group('label')} {''.join(parts)}"
 
     def replace_leading_title(match: re.Match[str]) -> str:
         number = _roman_to_int(match.group("num"))

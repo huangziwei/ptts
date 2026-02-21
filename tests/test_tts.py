@@ -49,6 +49,18 @@ def test_prepare_tts_text_normalizes_roman_heading_with_comma() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_normalizes_plural_roman_heading_list() -> None:
+    text = (
+        "The remaining qualities, mindfulness and the absence of desires and discontent, "
+        "will be the subjects of Chapters III and IV."
+    )
+    expected = (
+        "The remaining qualities, mindfulness and the absence of desires and discontent, "
+        "will be the subjects of Chapters three and four."
+    )
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_make_chunks_keeps_name_initials_together() -> None:
     text = (
         "We are grateful to Irwin Z. Hoffman for his help."
