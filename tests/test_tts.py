@@ -88,6 +88,20 @@ def test_prepare_tts_text_normalizes_label_numbers() -> None:
     )
 
 
+def test_prepare_tts_text_normalizes_standalone_dotted_numbers() -> None:
+    assert (
+        tts.prepare_tts_text("1.1.2 The Preoccupation with Certainty")
+        == "one point one point two The Preoccupation with Certainty."
+    )
+
+
+def test_prepare_tts_text_normalizes_deep_dotted_numbers() -> None:
+    assert (
+        tts.prepare_tts_text("See 1.1.1.1.1 for details.")
+        == "See one point one point one point one point one for details."
+    )
+
+
 def test_prepare_tts_text_normalizes_large_numbers() -> None:
     assert (
         tts.prepare_tts_text("Population 1,000,000")

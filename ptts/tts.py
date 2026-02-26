@@ -401,7 +401,7 @@ _NUMBER_LABEL_RE = re.compile(
 )
 _GROUPED_INT_COMMA_RE = re.compile(r"\b\d{1,3}(?:,\d{3})+\b")
 _GROUPED_INT_DOT_RE = re.compile(r"\b\d{1,3}(?:\.\d{3})+\b")
-_DECIMAL_RE = re.compile(r"\b\d+\.\d+\b")
+_DECIMAL_RE = re.compile(r"\b\d+(?:\.\d+)+\b")
 _PLAIN_INT_RE = re.compile(r"\b\d+\b")
 _SIGNED_INT_RE = re.compile(r"(?<!\w)(?P<sign>[+-])(?P<num>\d+)\b")
 _YEAR_RANGE_RE = re.compile(
@@ -1157,14 +1157,18 @@ def _normalize_grouped_numbers(text: str) -> str:
 def _normalize_decimal_numbers(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         token = match.group(0)
-        left, right = token.split(".", 1)
-        try:
-            left_value = int(left)
-        except ValueError:
-            return token
-        left_words = _int_to_words(left_value)
-        right_words = _digits_to_words(right)
-        return f"{left_words} point {right_words}"
+        parts = token.split(".")
+        if len(parts) == 2:
+            left, right = parts
+            try:
+                left_value = int(left)
+            except ValueError:
+                return token
+            left_words = _int_to_words(left_value)
+            right_words = _digits_to_words(right)
+            return f"{left_words} point {right_words}"
+        spoken = [_number_run_to_words(part) for part in parts]
+        return " point ".join(spoken)
 
     return _DECIMAL_RE.sub(replace, text)
 
