@@ -31,13 +31,19 @@ class _FakeDocumentItem:
 
 class _FakeBook:
     def __init__(self, items: list[_FakeDocumentItem]) -> None:
-        self._by_href = {item.get_name(): item for item in items}
+        self._items = list(items)
+        self._by_href = {item.get_name(): item for item in self._items}
 
     def get_item_with_href(self, href: str):
         return self._by_href.get(href)
 
     def get_item_with_id(self, _item_id: str):
         return None
+
+    def get_items_of_type(self, item_type: int):
+        if item_type != epub_util.ITEM_DOCUMENT:
+            return []
+        return list(self._items)
 
 
 def _load_book(path: Path) -> epub_util.epub.EpubBook:
@@ -112,6 +118,39 @@ def test_html_to_text_keeps_chapter_ids_when_backrefs_include_numeric_crossrefs(
     )
     assert "Chapter One" in text
     assert "Body text." in text
+
+
+def test_collect_footnote_index_detects_notes_entries_with_anchor_ids() -> None:
+    chapter_html = (
+        b"<html><body>"
+        b"<p>Body text<a href='notes.xhtml#anchor-note-1' class='class_nounder'>1</a>.</p>"
+        b"</body></html>"
+    )
+    notes_html = (
+        b"<html><body>"
+        b"<p class='class_h5'>NOTES</p>"
+        b"<p id='anchor-note-1' class='class_notes'>"
+        b"<a href='chapter.xhtml#anchor-callout-1'>1.</a> Citation text."
+        b"</p>"
+        b"</body></html>"
+    )
+    book = _FakeBook(
+        [
+            _FakeDocumentItem("chapter.xhtml", "Chapter", chapter_html),
+            _FakeDocumentItem("notes.xhtml", "Notes", notes_html),
+        ]
+    )
+    footnote_index = epub_util._collect_footnote_index(book)
+
+    assert "anchor-note-1" in footnote_index["note_ids"]
+    assert (
+        epub_util.html_to_text(
+            chapter_html,
+            footnote_index=footnote_index,
+            source_href="chapter.xhtml",
+        )
+        == "Body text."
+    )
 
 
 def test_html_to_text_normalizes_modifier_apostrophe() -> None:

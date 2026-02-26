@@ -305,6 +305,11 @@ _NOTE_ID_RE = re.compile(
     r"^(?:fn|footnote|endnote|note|noteref|fnref|en)[a-z0-9._:-]*$",
     re.IGNORECASE,
 )
+_NOTES_CLASS_RE = re.compile(
+    r"(?:^|[\s_-])(?:footnotes?|endnotes?|notes?)\d*(?:$|[\s_-])",
+    re.IGNORECASE,
+)
+_NOTE_SECTION_TITLES = {"notes", "endnotes", "footnotes"}
 
 
 def _normalize_id(value: str) -> str:
@@ -334,6 +339,46 @@ def _looks_like_note_id(value: str) -> bool:
         return True
     # Some EPUBs use compact IDs such as n12/en9 for notes.
     return bool(re.fullmatch(r"(?:n|en)\d+[a-z]?", cleaned))
+
+
+def _looks_like_notes_heading(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").strip().lower())
+    return normalized in _NOTE_SECTION_TITLES
+
+
+def _looks_like_note_entry_tag(tag: object, source_href: str) -> bool:
+    attrs = getattr(tag, "attrs", None)
+    if not isinstance(attrs, dict):
+        return False
+
+    tag_id = _normalize_id(str(attrs.get("id") or ""))
+    if not tag_id:
+        return False
+
+    first_anchor = None
+    for child in getattr(tag, "children", []):
+        child_name = getattr(child, "name", None)
+        if child_name == "a":
+            first_anchor = child
+            break
+        if str(child).strip():
+            return False
+    if first_anchor is None:
+        return False
+
+    marker_text = first_anchor.get_text(strip=True)
+    if not _looks_like_note_marker(marker_text):
+        return False
+
+    href = str(first_anchor.get("href") or "")
+    fragment = _normalize_id(_href_fragment(href))
+    if not fragment:
+        return False
+
+    target_href = normalize_href(href)
+    if target_href and target_href == source_href:
+        return False
+    return True
 
 
 def _normalize_break_runs(text: str) -> str:
@@ -520,6 +565,9 @@ def _collect_footnote_index(
         )
         soup = BeautifulSoup(content, parser)
         is_note_source = False
+        has_notes_heading = False
+        has_notes_class = False
+        note_entry_ids: set[str] = set()
         for tag in soup.find_all(attrs={"epub:type": "footnote"}):
             note_id = _normalize_id(str(tag.get("id") or ""))
             if note_id:
@@ -539,6 +587,8 @@ def _collect_footnote_index(
                 classes = [classes]
             class_text = " ".join(classes).lower()
             id_text = str(attrs.get("id") or "")
+            if _NOTES_CLASS_RE.search(class_text):
+                has_notes_class = True
             if "footnote" in class_text or "endnote" in class_text:
                 note_id = _normalize_id(id_text)
                 if note_id:
@@ -549,6 +599,15 @@ def _collect_footnote_index(
                 if note_id:
                     note_ids.add(note_id)
                     is_note_source = True
+            if _looks_like_note_entry_tag(tag, source_href):
+                note_id = _normalize_id(id_text)
+                if note_id:
+                    note_entry_ids.add(note_id)
+
+        for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"]):
+            if _looks_like_notes_heading(tag.get_text(" ", strip=True)):
+                has_notes_heading = True
+                break
 
         for anchor in soup.find_all("a"):
             text = anchor.get_text(strip=True)
@@ -565,6 +624,10 @@ def _collect_footnote_index(
                     parent_text = parent.get_text(strip=True)
                     if parent_text == text:
                         note_ids.add(parent_id)
+
+        if note_entry_ids and (has_notes_heading or has_notes_class or len(note_entry_ids) >= 8):
+            note_ids.update(note_entry_ids)
+            is_note_source = True
 
         if is_note_source and source_href:
             note_sources.add(source_href)
