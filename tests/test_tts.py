@@ -276,6 +276,21 @@ def test_prepare_tts_text_normalizes_no_number_abbrev() -> None:
     assert tts.prepare_tts_text(text) == expected
 
 
+def test_prepare_tts_text_normalizes_page_verse_abbrev() -> None:
+    text = "See p. 1878, pp. 1971-77, v. 5, and vv. 6-7."
+    expected = (
+        "See page eighteen seventy eight, pages nineteen seventy one to nineteen seventy seven, "
+        "verse five, and verses six-seven."
+    )
+    assert tts.prepare_tts_text(text) == expected
+
+
+def test_prepare_tts_text_keeps_pm_abbrev() -> None:
+    text = "Meeting at 5 p.m."
+    expected = "Meeting at five p.m."
+    assert tts.prepare_tts_text(text) == expected
+
+
 def test_prepare_tts_text_strips_double_quotes() -> None:
     text = 'He said "bible" should be read aloud.'
     expected = "He said bible should be read aloud."
@@ -455,6 +470,12 @@ def test_make_chunks_skips_ca_split() -> None:
 
 def test_make_chunks_skips_approx_split() -> None:
     text = "The distance is approx. 20 miles in total."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
+def test_make_chunks_skips_page_verse_reference_split() -> None:
+    text = "See p. 1878, pp. 1971-77, v. 5, and vv. 6-7."
     chunks = tts.make_chunks(text, max_chars=200)
     assert chunks == [text]
 

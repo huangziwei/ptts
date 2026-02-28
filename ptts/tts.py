@@ -121,8 +121,8 @@ _ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Fig|Figs)\.$", re.I
 _SINGLE_INITIAL_RE = re.compile(r"\b[A-Z]\.$")
 _NAME_INITIAL_RE = re.compile(r"\b([A-Z][a-z]+)\s+[A-Z]\.$")
 _MULTI_INITIAL_RE = re.compile(r"(?:\b[A-Z]\.\s*){2,}$")
-_VOL_NO_ABBREV_RE = re.compile(r"\b(?:vol|no|nos)\.$", re.IGNORECASE)
-_VOL_NO_FOLLOW_RE = re.compile(
+_REFERENCE_ABBREV_RE = re.compile(r"\b(?:vol|no|nos|p|pp|v|vv)\.$", re.IGNORECASE)
+_REFERENCE_ABBREV_FOLLOW_RE = re.compile(
     r"""^[\"'(\[]*(?:\d|[IVXLCDM]+\b|[A-Za-z](?:\d+|[.-]\d+)?\b)""",
     re.IGNORECASE,
 )
@@ -214,6 +214,10 @@ _INITIALS_WITH_NAME_RE = re.compile(
 _SPACED_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>[A-Z]\.(?:\s+[A-Z]\.)+)")
 _COMPACT_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>(?:[A-Z]\.){2,})")
 _NO_NUMBER_ABBREV_RE = re.compile(r"\bNo\.(?=\s*\d)", re.IGNORECASE)
+_PAGE_VERSE_ABBREV_RE = re.compile(
+    r"\b(?P<token>p|pp|v|vv)\.(?=\s+(?:\d|[IVXLCDM]+\b))",
+    re.IGNORECASE,
+)
 _ABBREV_EXPANSIONS = {
     "prof": "professor",
     "fig": "figure",
@@ -700,8 +704,8 @@ def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool
         if next_word and next_word[0].islower():
             return True
 
-    if _VOL_NO_ABBREV_RE.search(tail):
-        if _VOL_NO_FOLLOW_RE.match(paragraph[next_pos:]):
+    if _REFERENCE_ABBREV_RE.search(tail):
+        if _REFERENCE_ABBREV_FOLLOW_RE.match(paragraph[next_pos:]):
             return True
 
     if _is_whitelisted_abbrev_boundary(tail, paragraph, next_pos):
@@ -998,11 +1002,29 @@ def _normalize_no_number_abbrev(text: str) -> str:
     return _NO_NUMBER_ABBREV_RE.sub("number", text)
 
 
+def _normalize_page_verse_abbrev(text: str) -> str:
+    if not text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group("token").lower()
+        if token == "p":
+            return "page"
+        if token == "pp":
+            return "pages"
+        if token == "v":
+            return "verse"
+        return "verses"
+
+    return _PAGE_VERSE_ABBREV_RE.sub(replace, text)
+
+
 def normalize_abbreviations(text: str) -> str:
     text = _expand_abbreviations(text)
     text = _normalize_initials_with_name(text)
     text = _normalize_dotted_initialisms(text)
     text = _normalize_no_number_abbrev(text)
+    text = _normalize_page_verse_abbrev(text)
     return _ABBREV_DOT_RE.sub(r"\1", text)
 
 
