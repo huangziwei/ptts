@@ -453,6 +453,12 @@ def test_make_chunks_skips_ca_split() -> None:
     assert chunks == [text]
 
 
+def test_make_chunks_skips_approx_split() -> None:
+    text = "The distance is approx. 20 miles in total."
+    chunks = tts.make_chunks(text, max_chars=200)
+    assert chunks == [text]
+
+
 def test_make_chunks_skips_phd_split() -> None:
     text = "She entered the Ph.D. program."
     chunks = tts.make_chunks(text, max_chars=200)
