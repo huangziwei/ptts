@@ -345,9 +345,7 @@ def test_extract_chapters_preserves_multi_toc_split_series() -> None:
             expected = epub_util.html_to_text(item.get_content())
             chapter = chapter_by_source.get(base_href)
             assert chapter is not None
-            # Chapter contains at least the primary file's text; the fallback
-            # merge may append orphaned spine items that follow it.
-            assert chapter.text.startswith(expected)
+            assert chapter.text == expected
 
 
 def test_extract_chapters_merges_single_toc_split_series() -> None:

@@ -857,16 +857,21 @@ def _chapters_from_toc_entries(
                     merged_items.append(item)
                     idx += 1
 
-            if not merged_items:
+            if not merged_items and key:
                 next_toc_idx = len(spine_items)
                 for ti in toc_spine_indices:
                     if ti > start_idx:
                         next_toc_idx = ti
                         break
                 if next_toc_idx > start_idx + 1:
-                    merged_items = [
-                        spine_items[i][1] for i in range(start_idx, next_toc_idx)
-                    ]
+                    candidate = []
+                    for i in range(start_idx, next_toc_idx):
+                        if _split_series_key(spine_items[i][0]) == key:
+                            candidate.append(spine_items[i][1])
+                        else:
+                            break
+                    if len(candidate) > 1:
+                        merged_items = candidate
 
         if merged_items:
             text = _join_item_text(merged_items, footnote_index=footnote_index)
