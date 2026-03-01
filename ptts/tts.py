@@ -113,6 +113,26 @@ def _install_tts_warning_filter() -> None:
     _TTS_WARNING_FILTER_INSTALLED = True
 
 
+_URL_RE = re.compile(
+    r"(?:https?|ftp)://[^\s<>\"')\]]+",
+    re.IGNORECASE,
+)
+_URL_SPELL_OUT = {"http", "https", "ftp", "www"}
+_URL_PUNCT: dict[str, str] = {
+    ":": "colon",
+    "/": "slash",
+    ".": "dot",
+    "?": "question mark",
+    "=": "equals",
+    "&": "ampersand",
+    "#": "hash",
+    "_": "underscore",
+    "-": "dash",
+    "@": "at",
+    "%": "percent",
+    "~": "tilde",
+}
+
 _SENT_SPLIT_RE = re.compile(
     r"(?<=[.!?][\"')\]\}\u201d\u2019»])\s+|(?<=[.!?])\s+"
 )
@@ -1019,6 +1039,33 @@ def _normalize_page_verse_abbrev(text: str) -> str:
     return _PAGE_VERSE_ABBREV_RE.sub(replace, text)
 
 
+def _url_to_spoken(match: re.Match[str]) -> str:
+    url = match.group(0)
+    # Strip trailing punctuation that likely isn't part of the URL.
+    trailing = ""
+    while url and url[-1] in ".,;:!?":
+        trailing = url[-1] + trailing
+        url = url[:-1]
+    # Tokenise: runs of alnum characters, or individual special chars.
+    tokens = re.findall(r"[a-zA-Z0-9]+|.", url)
+    parts: list[str] = []
+    for token in tokens:
+        if token in _URL_PUNCT:
+            parts.append(_URL_PUNCT[token])
+        elif token.lower() in _URL_SPELL_OUT:
+            parts.append("-".join(token.lower()))
+        else:
+            parts.append(token)
+    spoken = " ".join(parts)
+    return re.sub(r"\s+", " ", spoken).strip() + trailing
+
+
+def normalize_urls(text: str) -> str:
+    if not text:
+        return text
+    return _URL_RE.sub(_url_to_spoken, text)
+
+
 def normalize_abbreviations(text: str) -> str:
     text = _expand_abbreviations(text)
     text = _normalize_initials_with_name(text)
@@ -1816,6 +1863,7 @@ def prepare_tts_text(
     # Apply twice so users can match either original spellings (with diacritics)
     # or transliterated forms used by Pocket-TTS.
     text = apply_reading_overrides(text, reading_overrides or [])
+    text = normalize_urls(text)
     text = normalize_abbreviations(text)
     text = _normalize_era_abbreviations(text)
     text = _normalize_roman_numerals(text)

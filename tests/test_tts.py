@@ -15,6 +15,63 @@ def test_prepare_tts_text_adds_punctuation() -> None:
     assert tts.prepare_tts_text("Hello world") == "Hello world."
 
 
+def test_normalize_urls_basic() -> None:
+    assert (
+        tts.normalize_urls("https://www.example.com")
+        == "h-t-t-p-s colon slash slash w-w-w dot example dot com"
+    )
+
+
+def test_normalize_urls_http() -> None:
+    assert (
+        tts.normalize_urls("http://example.com")
+        == "h-t-t-p colon slash slash example dot com"
+    )
+
+
+def test_normalize_urls_with_path() -> None:
+    assert (
+        tts.normalize_urls("https://example.com/my-page/article")
+        == "h-t-t-p-s colon slash slash example dot com slash my dash page slash article"
+    )
+
+
+def test_normalize_urls_with_query_and_fragment() -> None:
+    assert (
+        tts.normalize_urls("https://example.com/search?q=hello&lang=en#top")
+        == "h-t-t-p-s colon slash slash example dot com slash search question mark q equals hello ampersand lang equals en hash top"
+    )
+
+
+def test_normalize_urls_with_underscore() -> None:
+    assert (
+        tts.normalize_urls("https://example.com/some_article")
+        == "h-t-t-p-s colon slash slash example dot com slash some underscore article"
+    )
+
+
+def test_normalize_urls_trailing_punctuation() -> None:
+    result = tts.normalize_urls("See https://example.com.")
+    assert result == "See h-t-t-p-s colon slash slash example dot com."
+
+
+def test_normalize_urls_in_sentence() -> None:
+    result = tts.normalize_urls("Visit https://www.example.com/page for details.")
+    assert result == "Visit h-t-t-p-s colon slash slash w-w-w dot example dot com slash page for details."
+
+
+def test_normalize_urls_ftp() -> None:
+    assert (
+        tts.normalize_urls("ftp://files.example.com")
+        == "f-t-p colon slash slash files dot example dot com"
+    )
+
+
+def test_prepare_tts_text_normalizes_url() -> None:
+    result = tts.prepare_tts_text("See https://example.com for more.")
+    assert "h-t-t-p-s colon slash slash example dot com" in result
+
+
 def test_prepare_tts_text_normalizes_abbreviations() -> None:
     assert tts.prepare_tts_text("Mr. Poe went home.") == "Mr Poe went home."
 
