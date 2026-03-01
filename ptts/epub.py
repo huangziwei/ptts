@@ -815,7 +815,9 @@ def _chapters_from_toc_entries(
     spine_index = {href: idx for idx, (href, _item) in enumerate(spine_items)}
     chapters: List[Chapter] = []
     seen: set[str] = set()
+    entries = list(entries)
     split_series_counts: dict[tuple[str, str], int] = {}
+    toc_spine_positions: set[int] = set()
     for entry in entries:
         base_href = normalize_href(entry.href)
         if not base_href:
@@ -823,6 +825,9 @@ def _chapters_from_toc_entries(
         key = _split_series_key(base_href)
         if key:
             split_series_counts[key] = split_series_counts.get(key, 0) + 1
+        if base_href in spine_index:
+            toc_spine_positions.add(spine_index[base_href])
+    toc_spine_indices = sorted(toc_spine_positions)
 
     for entry in entries:
         base_href = normalize_href(entry.href)
@@ -852,6 +857,17 @@ def _chapters_from_toc_entries(
                     merged_items.append(item)
                     idx += 1
 
+            if not merged_items:
+                next_toc_idx = len(spine_items)
+                for ti in toc_spine_indices:
+                    if ti > start_idx:
+                        next_toc_idx = ti
+                        break
+                if next_toc_idx > start_idx + 1:
+                    merged_items = [
+                        spine_items[i][1] for i in range(start_idx, next_toc_idx)
+                    ]
+
         if merged_items:
             text = _join_item_text(merged_items, footnote_index=footnote_index)
             item_for_title = merged_items[0]
@@ -880,6 +896,44 @@ def _chapters_from_toc_entries(
         )
 
     return chapters
+
+
+def ingestion_report(
+    book: epub.EpubBook,
+    chapters: List[Chapter],
+) -> dict:
+    spine_items = _build_spine_items(book)
+    footnote_index = _collect_footnote_index(book)
+
+    all_chapter_text = "\n".join(ch.text for ch in chapters)
+    total_chapter_chars = sum(len(ch.text) for ch in chapters)
+
+    total_spine_chars = 0
+    orphaned_items: List[dict] = []
+    orphaned_chars = 0
+
+    for href, item in spine_items:
+        text = html_to_text(
+            item.get_content(),
+            footnote_index=footnote_index,
+            source_href=_item_name(item),
+        )
+        if not text:
+            continue
+        chars = len(text)
+        total_spine_chars += chars
+
+        snippet = text[:200].strip()
+        if snippet and snippet not in all_chapter_text:
+            orphaned_items.append({"href": href, "chars": chars})
+            orphaned_chars += chars
+
+    return {
+        "total_spine_chars": total_spine_chars,
+        "total_chapter_chars": total_chapter_chars,
+        "orphaned_items": orphaned_items,
+        "orphaned_chars": orphaned_chars,
+    }
 
 
 def extract_chapters(book: epub.EpubBook, prefer_toc: bool = True) -> List[Chapter]:

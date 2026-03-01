@@ -11,16 +11,20 @@ NEWS_EPUB = EPUB_DIR / "The News_ A User's Manual - Alain de Botton.epub"
 
 
 class _FakeDocumentItem:
-    def __init__(self, name: str, title: str, html: bytes) -> None:
+    def __init__(self, name: str, title: str, html: bytes, item_id: str = "") -> None:
         self.file_name = name
         self.title = title
         self._content = html
+        self.id = item_id or name
 
     def get_name(self) -> str:
         return self.file_name
 
     def get_title(self) -> str:
         return self.title
+
+    def get_id(self) -> str:
+        return self.id
 
     def get_type(self) -> int:
         return epub_util.ITEM_DOCUMENT
@@ -30,15 +34,24 @@ class _FakeDocumentItem:
 
 
 class _FakeBook:
-    def __init__(self, items: list[_FakeDocumentItem]) -> None:
+    def __init__(
+        self,
+        items: list[_FakeDocumentItem],
+        spine: list[str] | None = None,
+    ) -> None:
         self._items = list(items)
         self._by_href = {item.get_name(): item for item in self._items}
+        self._by_id = {item.get_id(): item for item in self._items}
+        if spine is not None:
+            self.spine = [(sid, "yes") for sid in spine]
+        else:
+            self.spine = [(item.get_id(), "yes") for item in self._items]
 
     def get_item_with_href(self, href: str):
         return self._by_href.get(href)
 
-    def get_item_with_id(self, _item_id: str):
-        return None
+    def get_item_with_id(self, item_id: str):
+        return self._by_id.get(item_id)
 
     def get_items_of_type(self, item_type: int):
         if item_type != epub_util.ITEM_DOCUMENT:
@@ -332,7 +345,9 @@ def test_extract_chapters_preserves_multi_toc_split_series() -> None:
             expected = epub_util.html_to_text(item.get_content())
             chapter = chapter_by_source.get(base_href)
             assert chapter is not None
-            assert chapter.text == expected
+            # Chapter contains at least the primary file's text; the fallback
+            # merge may append orphaned spine items that follow it.
+            assert chapter.text.startswith(expected)
 
 
 def test_extract_chapters_merges_single_toc_split_series() -> None:
@@ -380,3 +395,158 @@ def test_extract_chapters_preserves_section_breaks_in_news_epub() -> None:
     book = _load_book(NEWS_EPUB)
     chapters = epub_util.extract_chapters(book, prefer_toc=True)
     assert any(re.search(r"\n{3,}", chapter.text) for chapter in chapters)
+
+
+def test_chapters_from_toc_entries_fallback_merges_multi_file_chapters() -> None:
+    """When all split files share one prefix (count > 1), the fallback merge
+    should capture spine items between consecutive TOC entries."""
+    items = [
+        _FakeDocumentItem(
+            "book_split_000.html", "", b"<html><body><h1>Chapter One</h1></body></html>", "s0"
+        ),
+        _FakeDocumentItem(
+            "book_split_001.html", "", b"<html><body><p>Chapter one body content.</p></body></html>", "s1"
+        ),
+        _FakeDocumentItem(
+            "book_split_002.html", "", b"<html><body><p>More chapter one content.</p></body></html>", "s2"
+        ),
+        _FakeDocumentItem(
+            "book_split_003.html", "", b"<html><body><h1>Chapter Two</h1></body></html>", "s3"
+        ),
+        _FakeDocumentItem(
+            "book_split_004.html", "", b"<html><body><p>Chapter two body content.</p></body></html>", "s4"
+        ),
+    ]
+    book = _FakeBook(items)
+    entries = [
+        epub_util.TocEntry(title="Chapter One", href="book_split_000.html"),
+        epub_util.TocEntry(title="Chapter Two", href="book_split_003.html"),
+    ]
+    chapters = epub_util._chapters_from_toc_entries(book, entries)
+    assert len(chapters) == 2
+    assert "Chapter one body content" in chapters[0].text
+    assert "More chapter one content" in chapters[0].text
+    assert "Chapter two body content" in chapters[1].text
+
+
+def test_chapters_from_toc_entries_last_entry_merges_to_end_of_spine() -> None:
+    """The last TOC entry should merge all remaining spine items to end."""
+    items = [
+        _FakeDocumentItem(
+            "book_split_000.html", "", b"<html><body><h1>Chapter One</h1></body></html>", "s0"
+        ),
+        _FakeDocumentItem(
+            "book_split_001.html", "", b"<html><body><h1>Chapter Two</h1></body></html>", "s1"
+        ),
+        _FakeDocumentItem(
+            "book_split_002.html", "", b"<html><body><p>Chapter two part one.</p></body></html>", "s2"
+        ),
+        _FakeDocumentItem(
+            "book_split_003.html", "", b"<html><body><p>Chapter two part two.</p></body></html>", "s3"
+        ),
+    ]
+    book = _FakeBook(items)
+    entries = [
+        epub_util.TocEntry(title="Chapter One", href="book_split_000.html"),
+        epub_util.TocEntry(title="Chapter Two", href="book_split_001.html"),
+    ]
+    chapters = epub_util._chapters_from_toc_entries(book, entries)
+    assert len(chapters) == 2
+    assert "Chapter two part one" in chapters[1].text
+    assert "Chapter two part two" in chapters[1].text
+
+
+def test_chapters_from_toc_entries_split_series_merge_regression() -> None:
+    """Single TOC entry pointing to a split series with count==1 should still
+    merge all files in that series via the existing logic."""
+    items = [
+        _FakeDocumentItem(
+            "intro.html", "", b"<html><body><p>Introduction.</p></body></html>", "intro"
+        ),
+        _FakeDocumentItem(
+            "ch_split_000.html", "", b"<html><body><h1>Chapter</h1></body></html>", "s0"
+        ),
+        _FakeDocumentItem(
+            "ch_split_001.html", "", b"<html><body><p>Chapter body.</p></body></html>", "s1"
+        ),
+        _FakeDocumentItem(
+            "ch_split_002.html", "", b"<html><body><p>More chapter body.</p></body></html>", "s2"
+        ),
+    ]
+    book = _FakeBook(items)
+    entries = [
+        epub_util.TocEntry(title="Introduction", href="intro.html"),
+        epub_util.TocEntry(title="Chapter", href="ch_split_000.html"),
+    ]
+    chapters = epub_util._chapters_from_toc_entries(book, entries)
+    assert len(chapters) == 2
+    assert "Chapter body" in chapters[1].text
+    assert "More chapter body" in chapters[1].text
+
+
+def test_chapters_from_toc_entries_single_file_chapters_unaffected() -> None:
+    """Single-file chapters (no split files) should remain unchanged."""
+    items = [
+        _FakeDocumentItem(
+            "ch1.html", "", b"<html><body><p>Chapter one.</p></body></html>", "c1"
+        ),
+        _FakeDocumentItem(
+            "ch2.html", "", b"<html><body><p>Chapter two.</p></body></html>", "c2"
+        ),
+    ]
+    book = _FakeBook(items)
+    entries = [
+        epub_util.TocEntry(title="Chapter 1", href="ch1.html"),
+        epub_util.TocEntry(title="Chapter 2", href="ch2.html"),
+    ]
+    chapters = epub_util._chapters_from_toc_entries(book, entries)
+    assert len(chapters) == 2
+    assert chapters[0].text == "Chapter one."
+    assert chapters[1].text == "Chapter two."
+
+
+def test_ingestion_report_detects_orphaned_items() -> None:
+    """ingestion_report should detect spine items not captured in chapters."""
+    items = [
+        _FakeDocumentItem(
+            "ch1.html", "", b"<html><body><p>Chapter one.</p></body></html>", "c1"
+        ),
+        _FakeDocumentItem(
+            "ch2.html", "", b"<html><body><p>Orphaned content here.</p></body></html>", "c2"
+        ),
+    ]
+    book = _FakeBook(items)
+    chapters = [
+        epub_util.Chapter(title="Ch1", href="ch1.html", source="ch1.html", text="Chapter one."),
+    ]
+    report = epub_util.ingestion_report(book, chapters)
+    assert len(report["orphaned_items"]) == 1
+    assert report["orphaned_items"][0]["href"] == "ch2.html"
+    assert report["orphaned_chars"] > 0
+
+
+def test_ingestion_report_no_orphans_after_merge() -> None:
+    """After a successful merge, ingestion_report should show no orphans."""
+    items = [
+        _FakeDocumentItem(
+            "book_split_000.html", "", b"<html><body><h1>Chapter One</h1></body></html>", "s0"
+        ),
+        _FakeDocumentItem(
+            "book_split_001.html", "", b"<html><body><p>Chapter one body.</p></body></html>", "s1"
+        ),
+        _FakeDocumentItem(
+            "book_split_002.html", "", b"<html><body><h1>Chapter Two</h1></body></html>", "s2"
+        ),
+        _FakeDocumentItem(
+            "book_split_003.html", "", b"<html><body><p>Chapter two body.</p></body></html>", "s3"
+        ),
+    ]
+    book = _FakeBook(items)
+    entries = [
+        epub_util.TocEntry(title="Chapter One", href="book_split_000.html"),
+        epub_util.TocEntry(title="Chapter Two", href="book_split_002.html"),
+    ]
+    chapters = epub_util._chapters_from_toc_entries(book, entries)
+    report = epub_util.ingestion_report(book, chapters)
+    assert len(report["orphaned_items"]) == 0
+    assert report["orphaned_chars"] == 0

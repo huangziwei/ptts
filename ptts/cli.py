@@ -91,6 +91,14 @@ def _ingest_epub(input_path: Path, out_dir: Path, raw_dir: Path) -> int:
         sys.stderr.write("No chapters found in EPUB.\n")
         return 2
 
+    report = epub_util.ingestion_report(book, chapters)
+    if report["orphaned_items"]:
+        n = len(report["orphaned_items"])
+        chars = report["orphaned_chars"]
+        sys.stderr.write(
+            f"Warning: {n} spine item(s) ({chars} chars) not captured in any chapter.\n"
+        )
+
     toc_items = []
     for idx, chapter in enumerate(chapters, start=1):
         title = chapter.title or f"Chapter {idx}"
@@ -114,6 +122,7 @@ def _ingest_epub(input_path: Path, out_dir: Path, raw_dir: Path) -> int:
         "source_epub": str(input_path),
         "metadata": metadata,
         "chapters": toc_items,
+        "ingestion_report": report,
     }
 
     toc_path = out_dir / "toc.json"
