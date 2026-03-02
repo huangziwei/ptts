@@ -344,7 +344,7 @@ _ROMAN_CANONICAL_RE = re.compile(
     r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$"
 )
 _ROMAN_HEADING_RE = re.compile(
-    r"\b(?P<label>(?:chapter(?:s)?|book(?:s)?|part(?:s)?|volume(?:s)?|vol(?:s)?|section(?:s)?|act(?:s)?|appendix(?:es)?|appendices)\.?)"
+    r"\b(?P<label>(?:chapter(?:s)?|book(?:s)?|part(?:s)?|volume(?:s)?|vol(?:s)?|section(?:s)?|act(?:s)?|scene(?:s)?|appendix(?:es)?|appendices)\.?)"
     r"\s+(?P<num>[IVXLCDM]+(?:\s*(?:,\s*(?:and|or)\s+|,\s*|\s+(?:and|or|&)\s+)[IVXLCDM]+)*)\b",
     re.IGNORECASE,
 )
