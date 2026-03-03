@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, List, Optional, Union
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -1524,6 +1524,55 @@ def create_app(root_dir: Path) -> FastAPI:
             {
                 "status": "ok",
                 "metadata": metadata_payload,
+                "book": _book_summary(book_dir),
+            }
+        )
+
+    @app.post("/api/books/cover")
+    def update_cover(
+        book_id: str = Form(...),
+        file: UploadFile = File(...),
+    ) -> JSONResponse:
+        allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+        if file.content_type not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail="Only JPEG, PNG, WebP, or GIF images are accepted.",
+            )
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+        }
+        ext = ext_map.get(file.content_type, ".jpg")
+        # Remove old cover files
+        for old in book_dir.glob("cover.*"):
+            if old.is_file():
+                old.unlink()
+        cover_filename = f"cover{ext}"
+        dest = book_dir / cover_filename
+        with open(dest, "wb") as fh:
+            shutil.copyfileobj(file.file, fh)
+        # Update metadata.cover in toc.json files
+        for path in (book_dir / "toc.json", book_dir / "clean" / "toc.json"):
+            if not path.exists():
+                continue
+            data = _load_json(path)
+            if not isinstance(data, dict):
+                continue
+            metadata = data.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["cover"] = {"path": cover_filename}
+            data["metadata"] = metadata
+            _atomic_write_json(path, data)
+        cover_url = f"/audio/{book_dir.name}/{cover_filename}"
+        return _no_store(
+            {
+                "status": "ok",
+                "cover_url": cover_url,
                 "book": _book_summary(book_dir),
             }
         )

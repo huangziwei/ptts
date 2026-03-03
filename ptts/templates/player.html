@@ -1056,6 +1056,59 @@
         color: var(--danger);
       }
 
+      .meta-cover-zone {
+        position: relative;
+        border: 1px dashed var(--line-strong);
+        border-radius: 10px;
+        padding: 4px;
+        cursor: pointer;
+        transition: border 0.2s ease, background 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .meta-cover-zone.dragover {
+        border-color: var(--accent);
+        background: var(--surface-drag);
+      }
+
+      .meta-cover-preview {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .meta-cover-preview img {
+        max-height: 160px;
+        max-width: 100%;
+        border-radius: 6px;
+        object-fit: contain;
+      }
+
+      .meta-cover-hint {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.45);
+        color: #fff;
+        font-size: 12px;
+        border-radius: 10px;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+        pointer-events: none;
+      }
+
+      .meta-cover-zone:hover .meta-cover-hint,
+      .meta-cover-zone.dragover .meta-cover-hint {
+        opacity: 1;
+      }
+
       .clone-card {
         width: min(560px, calc(100vw - 32px));
       }
@@ -2139,6 +2192,14 @@
               <button class="btn circle" id="metaClose" type="button" aria-label="Close">x</button>
             </div>
             <div class="meta-form">
+              <label>Cover</label>
+              <div class="meta-cover-zone" id="metaCoverZone">
+                <div class="meta-cover-preview" id="metaCoverPreview"></div>
+                <div class="meta-cover-hint">
+                  <span>Drop image to replace</span>
+                </div>
+              </div>
+              <input type="file" id="metaCoverInput" accept="image/*" hidden />
               <label for="metaTitle">Title</label>
               <input id="metaTitle" type="text" autocomplete="off" />
               <label for="metaAuthors">Authors</label>
@@ -2405,6 +2466,10 @@
       const metaTitle = document.getElementById("metaTitle");
       const metaAuthors = document.getElementById("metaAuthors");
       const metaYear = document.getElementById("metaYear");
+      const metaCoverZone = document.getElementById("metaCoverZone");
+      const metaCoverPreview = document.getElementById("metaCoverPreview");
+      const metaCoverInput = document.getElementById("metaCoverInput");
+      let pendingCoverFile = null;
       const rulesDrop = document.getElementById("rulesDrop");
       const rulesCutoff = document.getElementById("rulesCutoff");
       const rulesRemove = document.getElementById("rulesRemove");
@@ -5698,6 +5763,14 @@
         if (!state.book || !metaModal) {
           return;
         }
+        pendingCoverFile = null;
+        if (metaCoverPreview) {
+          if (state.book.cover_url) {
+            metaCoverPreview.innerHTML = `<img src="${escapeHtml(state.book.cover_url)}" alt="Cover" />`;
+          } else {
+            metaCoverPreview.innerHTML = `<span style="font-size:12px;color:var(--muted)">No cover</span>`;
+          }
+        }
         metaTitle.value = state.book.title || "";
         metaAuthors.value = (state.book.authors || []).join(", ");
         metaYear.value = state.book.year || "";
@@ -5758,6 +5831,21 @@
         setMetaStatus("Saving...");
         metaSave.disabled = true;
         try {
+          if (pendingCoverFile) {
+            const form = new FormData();
+            form.append("book_id", state.book.id);
+            form.append("file", pendingCoverFile);
+            const coverData = await fetchJson("/api/books/cover", {
+              method: "POST",
+              body: form,
+            });
+            if (coverData.cover_url) {
+              state.book.cover_url = coverData.cover_url;
+              const entry = state.books.find((b) => b.id === state.book.id);
+              if (entry) entry.cover_url = coverData.cover_url;
+            }
+            pendingCoverFile = null;
+          }
           const data = await fetchJson("/api/books/metadata", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -7182,6 +7270,33 @@
       metaClose.addEventListener("click", closeMetaModal);
       metaCancel.addEventListener("click", closeMetaModal);
       metaSave.addEventListener("click", saveMetadata);
+      function handleCoverFile(file) {
+        if (!file || !file.type.startsWith("image/")) return;
+        pendingCoverFile = file;
+        if (metaCoverPreview) {
+          const url = URL.createObjectURL(file);
+          metaCoverPreview.innerHTML = `<img src="${url}" alt="New cover" />`;
+        }
+      }
+      metaCoverZone.addEventListener("click", () => metaCoverInput.click());
+      metaCoverInput.addEventListener("change", () => {
+        if (metaCoverInput.files && metaCoverInput.files[0]) {
+          handleCoverFile(metaCoverInput.files[0]);
+        }
+      });
+      metaCoverZone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        metaCoverZone.classList.add("dragover");
+      });
+      metaCoverZone.addEventListener("dragleave", () => {
+        metaCoverZone.classList.remove("dragover");
+      });
+      metaCoverZone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        metaCoverZone.classList.remove("dragover");
+        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        handleCoverFile(file);
+      });
       metaModal.addEventListener("click", (event) => {
         if (event.target === metaModal) {
           closeMetaModal();
