@@ -7264,7 +7264,7 @@
       }
       cloneModal.addEventListener("click", (event) => {
         if (event.target === cloneModal) {
-          closeCloneModal();
+          event.stopPropagation();
         }
       });
       metaClose.addEventListener("click", closeMetaModal);
@@ -7299,7 +7299,7 @@
       });
       metaModal.addEventListener("click", (event) => {
         if (event.target === metaModal) {
-          closeMetaModal();
+          event.stopPropagation();
         }
       });
       document.addEventListener("keydown", (event) => {
@@ -7307,11 +7307,9 @@
           return;
         }
         if (cloneModal && !cloneModal.hidden) {
-          closeCloneModal();
           return;
         }
         if (metaModal && !metaModal.hidden) {
-          closeMetaModal();
           return;
         }
       });
