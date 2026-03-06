@@ -746,25 +746,7 @@ def _should_skip_sentence_split(paragraph: str, end: int, next_pos: int) -> bool
             return False
         return True
 
-    if not _SINGLE_INITIAL_RE.search(tail):
-        return False
-
-    if next_word and next_word[0].islower():
-        return True
-
-    if next_lower and next_lower in _SENTENCE_STARTERS:
-        return False
-
-    name_match = _NAME_INITIAL_RE.search(tail)
-    if name_match and next_word:
-        prev_word = name_match.group(1).lower()
-        if prev_word not in _INITIAL_STOPWORDS:
-            return True
-
-    if len(next_word) == 1:
-        return True
-
-    return False
+    return bool(_SINGLE_INITIAL_RE.search(tail))
 
 
 def _ends_with_clause_punct(token: str) -> bool:
