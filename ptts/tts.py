@@ -463,6 +463,7 @@ _CURRENCY_SUFFIX_RE = re.compile(
     r"(?P<amount>[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))\s*"
     rf"(?P<sym>[{_CURRENCY_SYMBOL_CLASS}])(?!\w)"
 )
+_PHD_RE = re.compile(r"\bPh\s*\.\s*D\s*\.?", re.IGNORECASE)
 _ERA_DOTTED_REPLACEMENTS = (
     (re.compile(r"\bB\s*\.\s*C\s*\.\s*E\s*\.?", re.IGNORECASE), "B-C-E"),
     (re.compile(r"\bA\s*\.\s*D\s*\.?", re.IGNORECASE), "A-D"),
@@ -1050,6 +1051,7 @@ def normalize_urls(text: str) -> str:
 
 def normalize_abbreviations(text: str) -> str:
     text = _expand_abbreviations(text)
+    text = _PHD_RE.sub("P-H-D", text)
     text = _normalize_initials_with_name(text)
     text = _normalize_dotted_initialisms(text)
     text = _normalize_no_number_abbrev(text)
