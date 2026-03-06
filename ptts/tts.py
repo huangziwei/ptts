@@ -354,6 +354,10 @@ _ROMAN_LEADING_TITLE_RE = re.compile(
     re.IGNORECASE,
 )
 _ROMAN_STANDALONE_RE = re.compile(r"^(?P<num>[IVXLCDM]+)(?P<trail>[^A-Za-z0-9]*)$", re.IGNORECASE)
+_ROMAN_COLON_HEADING_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<num>[IVXLCDM]+)(?P<sep>\s*:\s*)",
+    re.IGNORECASE | re.MULTILINE,
+)
 _ROMAN_TOKEN_RE = re.compile(r"\b[IVXLCDM]+\b", re.IGNORECASE)
 _ROMAN_I_DETERMINERS = {
     "a",
@@ -1561,7 +1565,14 @@ def _normalize_roman_numerals(text: str) -> str:
         trail = match.group("trail") or ""
         return f"{match.group('indent')}{_int_to_words(number)}{trail}\n"
 
+    def replace_colon_heading(match: re.Match[str]) -> str:
+        number = _roman_to_int(match.group("num"))
+        if number is None:
+            return match.group(0)
+        return f"{match.group('indent')}{_int_to_words(number)}{match.group('sep')}"
+
     text = _ROMAN_LEADING_TITLE_RE.sub(replace_leading_title, text, count=1)
+    text = _ROMAN_COLON_HEADING_RE.sub(replace_colon_heading, text)
     text = _ROMAN_HEADING_RE.sub(replace_heading, text)
     stripped = text.strip()
     match = _ROMAN_STANDALONE_RE.fullmatch(stripped)
