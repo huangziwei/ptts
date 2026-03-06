@@ -466,6 +466,31 @@ def _is_structural_heading_block(elem: object) -> bool:
     return False
 
 
+def _ol_item_number(li_elem: object) -> int | None:
+    parent = li_elem.parent
+    if not parent or getattr(parent, "name", None) != "ol":
+        return None
+    start = 1
+    start_attr = parent.get("start")
+    if start_attr is not None:
+        try:
+            start = int(start_attr)
+        except (ValueError, TypeError):
+            pass
+    counter = start
+    for sibling in parent.find_all("li", recursive=False):
+        value_attr = sibling.get("value")
+        if value_attr is not None:
+            try:
+                counter = int(value_attr)
+            except (ValueError, TypeError):
+                pass
+        if sibling is li_elem:
+            return counter
+        counter += 1
+    return None
+
+
 def _break_after_block(text: str, is_heading: bool, is_first_block: bool) -> str:
     if is_heading:
         if is_first_block and _is_title_heading(text):
@@ -728,6 +753,10 @@ def html_to_text(
             text, preserve_source_newlines=(getattr(elem, "name", "") == "pre")
         )
         if text:
+            if getattr(elem, "name", "") == "li":
+                num = _ol_item_number(elem)
+                if num is not None:
+                    text = f"{num}. {text}"
             blocks.append((text, _is_structural_heading_block(elem)))
 
     if blocks:
