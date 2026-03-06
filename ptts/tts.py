@@ -232,7 +232,7 @@ _INITIALS_WITH_NAME_RE = re.compile(
     r"\b(?P<seq>[A-Z]\.(?:\s+[A-Z]\.)+)\s+(?P<name>[A-Z][A-Za-z'’\-]+)\b"
 )
 _SPACED_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>[A-Z]\.(?:\s+[A-Z]\.)+)")
-_COMPACT_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>(?:[A-Z]\.){2,})")
+_COMPACT_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>(?:[A-Z][a-z]?\.){2,})")
 _NO_NUMBER_ABBREV_RE = re.compile(r"\bNo\.(?=\s*\d)", re.IGNORECASE)
 _PAGE_VERSE_ABBREV_RE = re.compile(
     r"\b(?P<token>p|pp|v|vv)\.(?=\s+(?:\d|[IVXLCDM]+\b))",
@@ -463,7 +463,6 @@ _CURRENCY_SUFFIX_RE = re.compile(
     r"(?P<amount>[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))\s*"
     rf"(?P<sym>[{_CURRENCY_SYMBOL_CLASS}])(?!\w)"
 )
-_PHD_RE = re.compile(r"\bPh\s*\.\s*D\s*\.?", re.IGNORECASE)
 _ERA_DOTTED_REPLACEMENTS = (
     (re.compile(r"\bB\s*\.\s*C\s*\.\s*E\s*\.?", re.IGNORECASE), "B-C-E"),
     (re.compile(r"\bA\s*\.\s*D\s*\.?", re.IGNORECASE), "A-D"),
@@ -966,7 +965,8 @@ def _expand_abbreviations(text: str) -> str:
 
 
 def _hyphenate_dotted_letters(seq: str) -> str:
-    letters = re.findall(r"[A-Z](?=\.)", seq)
+    segments = re.findall(r"[A-Za-z]+(?=\.)", seq)
+    letters = [ch.upper() for seg in segments for ch in seg]
     if len(letters) < 2:
         return seq
     return "-".join(letters)
@@ -1051,7 +1051,6 @@ def normalize_urls(text: str) -> str:
 
 def normalize_abbreviations(text: str) -> str:
     text = _expand_abbreviations(text)
-    text = _PHD_RE.sub("P-H-D", text)
     text = _normalize_initials_with_name(text)
     text = _normalize_dotted_initialisms(text)
     text = _normalize_no_number_abbrev(text)
