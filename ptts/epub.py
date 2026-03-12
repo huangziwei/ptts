@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -70,12 +71,21 @@ def read_epub(path: Path) -> epub.EpubBook:
     return epub.read_epub(str(path))
 
 
+def _unescape_meta(value: str) -> str:
+    """Unescape HTML entities that some EPUBs leave in metadata."""
+    prev = None
+    while prev != value:
+        prev = value
+        value = html.unescape(value)
+    return value
+
+
 def _first_dc_meta(book: epub.EpubBook, name: str) -> str:
     items = book.get_metadata("DC", name)
     if not items:
         return ""
     value, _attrs = items[0]
-    return value or ""
+    return _unescape_meta(value) if value else ""
 
 
 def _all_dc_meta(book: epub.EpubBook, name: str) -> List[str]:
@@ -83,7 +93,7 @@ def _all_dc_meta(book: epub.EpubBook, name: str) -> List[str]:
     values: List[str] = []
     for value, _attrs in items:
         if value:
-            values.append(value)
+            values.append(_unescape_meta(value))
     return values
 
 
