@@ -14,7 +14,7 @@ from ebooklib import ITEM_DOCUMENT, ITEM_IMAGE, epub
 _PARAGRAPH_BREAK = "\n\n"
 _SECTION_BREAK = "\n\n\n"
 _TITLE_BREAK = "\n\n\n\n\n"
-_INLINE_BREAK_PLACEHOLDER = "__PTTS_BR__"
+_INLINE_BREAK_PLACEHOLDER = "__NEB_BR__"
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _STRUCTURAL_HEADING_CLASS_TOKENS = {
     "book",

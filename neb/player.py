@@ -153,7 +153,7 @@ def _is_http_url(value: str) -> bool:
 
 def _download_clone_source(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "ptts clone"})
+    request = urllib.request.Request(url, headers={"User-Agent": "neb clone"})
     with urllib.request.urlopen(request) as response, dest.open("wb") as handle:
         shutil.copyfileobj(response, handle)
 
@@ -860,7 +860,7 @@ def _build_merge_command(
     merge_cmd = [
         "uv",
         "run",
-        "ptts",
+        "neb",
         "merge",
         "--book",
         str(book_dir),
@@ -1973,7 +1973,7 @@ def create_app(root_dir: Path) -> FastAPI:
                 cmd = [
                     "uv",
                     "run",
-                    "ptts",
+                    "neb",
                     "ingest",
                     "--input",
                     str(tmp_path),
@@ -1992,7 +1992,7 @@ def create_app(root_dir: Path) -> FastAPI:
                     cmd = [
                         "uv",
                         "run",
-                        "ptts",
+                        "neb",
                         "sanitize",
                         "--book",
                         str(out_dir),
@@ -2384,7 +2384,7 @@ def create_app(root_dir: Path) -> FastAPI:
             "run",
             "--with",
             "pocket-tts",
-            "ptts",
+            "neb",
             "synth",
             "--book",
             str(book_dir),
@@ -2494,7 +2494,7 @@ def create_app(root_dir: Path) -> FastAPI:
             "run",
             "--with",
             "pocket-tts",
-            "ptts",
+            "neb",
             "sample",
             "--book",
             str(book_dir),

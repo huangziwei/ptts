@@ -1,4 +1,4 @@
-from ptts import cli
+from neb import cli
 
 
 def _entry(

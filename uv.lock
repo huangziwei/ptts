@@ -367,6 +367,41 @@ wheels = [
 ]
 
 [[package]]
+name = "neb"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "ebooklib" },
+    { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "lxml" },
+    { name = "pocket-tts" },
+    { name = "pytest" },
+    { name = "python-multipart" },
+    { name = "rich" },
+    { name = "torch", version = "2.9.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
+    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.12" },
+    { name = "ebooklib", specifier = ">=0.18" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "lxml", specifier = ">=5.0" },
+    { name = "pocket-tts" },
+    { name = "pytest", specifier = ">=7.4" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "rich", specifier = ">=13.7" },
+    { name = "torch", marker = "sys_platform != 'darwin'", specifier = "==2.9.1+cpu", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torch", marker = "sys_platform == 'darwin'" },
+    { name = "uvicorn", specifier = ">=0.27" },
+]
+
+[[package]]
 name = "networkx"
 version = "3.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -447,41 +482,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ab/3e/2f15ee05b3dcf6ec08251f5030a3deb4643d2ecd55e17a4ca8998888c1df/pocket_tts-1.1.1.tar.gz", hash = "sha256:cdd234e49299e8fe927bd0b93c164c7785bdd83bed302622e218bcda3944f603", size = 618656, upload-time = "2026-02-17T17:16:25.393Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4e/9d/b8957a9c738ac4c6f29f84cf268c3ff766ea96d4d5212d0c7320193e6394/pocket_tts-1.1.1-py3-none-any.whl", hash = "sha256:46d97789a4a1aa655b3b9659d6e880f79eda56f5fb03d4444fd0e9318e1224dd", size = 52529, upload-time = "2026-02-17T17:16:23.528Z" },
-]
-
-[[package]]
-name = "ptts"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "beautifulsoup4" },
-    { name = "ebooklib" },
-    { name = "fastapi" },
-    { name = "jinja2" },
-    { name = "lxml" },
-    { name = "pocket-tts" },
-    { name = "pytest" },
-    { name = "python-multipart" },
-    { name = "rich" },
-    { name = "torch", version = "2.9.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
-    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "beautifulsoup4", specifier = ">=4.12" },
-    { name = "ebooklib", specifier = ">=0.18" },
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "jinja2", specifier = ">=3.1" },
-    { name = "lxml", specifier = ">=5.0" },
-    { name = "pocket-tts" },
-    { name = "pytest", specifier = ">=7.4" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "rich", specifier = ">=13.7" },
-    { name = "torch", marker = "sys_platform != 'darwin'", specifier = "==2.9.1+cpu", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torch", marker = "sys_platform == 'darwin'" },
-    { name = "uvicorn", specifier = ">=0.27" },
 ]
 
 [[package]]

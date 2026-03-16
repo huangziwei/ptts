@@ -1,7 +1,7 @@
 [project]
-name = "ptts"
+name = "neb"
 version = "0.1.0"
-description = "EPUB to M4B pipeline using Pocket-TTS"
+description = "Narrate English Books — EPUB to audiobook pipeline"
 readme = "README.md"
 requires-python = "==3.13.*"
 dependencies = [
@@ -20,14 +20,14 @@ dependencies = [
 ]
 
 [project.scripts]
-ptts = "ptts.cli:main"
+neb = "neb.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["ptts"]
+packages = ["neb"]
 
 [tool.uv]
 

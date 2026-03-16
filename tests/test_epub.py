@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ptts import epub as epub_util
+from neb import epub as epub_util
 
 EPUB_DIR = Path(__file__).resolve().parent / "epub"
 CHANDLER_EPUB = EPUB_DIR / "Collected Stories of Raymond Chandler - Raymond Chandler.epub"

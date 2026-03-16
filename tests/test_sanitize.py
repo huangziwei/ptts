@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from ptts import sanitize
+from neb import sanitize
 
 
 def test_normalize_text_unwraps_lines() -> None:

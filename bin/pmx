@@ -2,8 +2,7 @@
 set -euo pipefail
 
 image="ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
-namespace="${PMX_NAMESPACE:-ptts}"
-prefix="${namespace}-"
+prefix="${PMX_NAMESPACE:+${PMX_NAMESPACE}-}"
 
 container="${PMX_NAME:-}"
 if [ -z "$container" ]; then

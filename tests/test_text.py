@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ptts import text
+from neb import text
 
 
 def test_guess_title_from_path_heading(tmp_path: Path) -> None:

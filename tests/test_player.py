@@ -5,13 +5,13 @@ import json
 from fastapi.testclient import TestClient
 import pytest
 
-from ptts import player
+from neb import player
 
 
 def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
-    (repo_root / "pyproject.toml").write_text("[project]\nname='ptts'\n", encoding="utf-8")
+    (repo_root / "pyproject.toml").write_text("[project]\nname='neb'\n", encoding="utf-8")
     root_dir = repo_root / "out"
     root_dir.mkdir()
     return repo_root, root_dir

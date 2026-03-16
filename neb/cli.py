@@ -212,7 +212,7 @@ def _is_http_url(value: str) -> bool:
 
 def _download_to(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "ptts clone"})
+    request = urllib.request.Request(url, headers={"User-Agent": "neb clone"})
     with urllib.request.urlopen(request) as response, dest.open("wb") as handle:
         shutil.copyfileobj(response, handle)
 
@@ -568,7 +568,7 @@ def _boundary_report(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ptts")
+    parser = argparse.ArgumentParser(prog="neb")
     subparsers = parser.add_subparsers(dest="command")
 
     ingest = subparsers.add_parser(
@@ -606,7 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rules",
         help=(
             "Path to JSON rules file (defaults to sanitize-rules.json in the book "
-            "directory if present, otherwise ptts/templates/sanitize-rules.json)"
+            "directory if present, otherwise neb/templates/sanitize-rules.json)"
         ),
     )
     sanitize.add_argument(

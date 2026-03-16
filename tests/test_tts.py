@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ptts import tts
+from neb import tts
 
 
 def test_make_chunks_preserves_text() -> None:

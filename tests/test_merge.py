@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ptts import merge
+from neb import merge
 
 
 def _write_wav(path: Path, duration_ms: int = 120, rate: int = 24_000) -> None:
