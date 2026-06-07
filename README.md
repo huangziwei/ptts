@@ -1,25 +1,12 @@
-# neb: Narrate English Books with [maneko](https://github.com/huangziwei/maneko)
+# neb: Narrate English Books
 
 ![screenshot](.github/screenshot/player.png)
 
 ## Prerequisites
 
 ```bash
-git clone https://github.com/huangziwei/neb
-cd ~/neb
-
-# neb's default TTS backend is maneko (https://github.com/huangziwei/maneko), a native
-# Rust/candle engine installed from GitHub — building it needs a Rust toolchain:
-#   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Install project dependencies into .venv (builds maneko from GitHub; required for `neb`)
+git clone https://github.com/huangziwei/neb && cd ~/neb
 uv sync
-
-# Model weights download automatically from Hugging Face (public `zwaiwng/maneko`) into
-# this repo's .cache/ on first run — no account or token needed.
-
-# Optional: also install the legacy torch/pocket-tts backend (select via NEB_TTS_BACKEND=torch)
-# uv sync --extra torch
 ```
 
 ## TTS a book
@@ -65,31 +52,6 @@ uv run neb synth \
   --max-chars 400 \
   --pad-ms 300
 ```
-
-Voice cloning is wav-only — pass a local `.wav` clone source with `--voice` (create one
-with `neb clone`). The default is `voices/ray.wav`:
-```bash
-uv run neb synth --book out/some-book --voice voices/ray.wav
-```
-
-To use the legacy torch/pocket-tts engine instead, install it (`uv sync --extra torch`)
-and set `NEB_TTS_BACKEND=torch`.
-
-Optional: add per-book pronunciation overrides at
-`out/some-book/reading-overrides.json`:
-
-```json
-{
-  "global": [
-    { "base": "sutta", "reading": "soot-ta" },
-    { "base": "sati", "reading": "sah-tee" },
-    { "base": "satipatthana", "reading": "sah-tee-pat-ta-na" }
-  ]
-}
-```
-
-`base` uses whole-word matching by default (case-insensitive). Chapter-specific
-overrides are also supported under `"chapters": { "<chapter-id>": { "replacements": [...] } }`.
 
 #### 4) Merge to M4B
 ```bash
