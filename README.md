@@ -1,4 +1,4 @@
-# neb: Narrate English Books with [Pocket-TTS](https://huggingface.co/kyutai/pocket-tts)
+# neb: Narrate English Books with [maneko](https://github.com/huangziwei/maneko)
 
 ![screenshot](.github/screenshot/player.png)
 
@@ -8,13 +8,18 @@
 git clone https://github.com/huangziwei/neb
 cd ~/neb
 
-# Install project dependencies into .venv (required for `neb` CLI)
+# neb's default TTS backend is maneko (https://github.com/huangziwei/maneko), a native
+# Rust/candle engine installed from GitHub — building it needs a Rust toolchain:
+#   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install project dependencies into .venv (builds maneko from GitHub; required for `neb`)
 uv sync
 
-## To use voice cloning, you need to accept the terms via browser at https://huggingface.co/kyutai/pocket-tts
-## Then you need to save the access token with correct permissions (I ticked everything in Repositories and Inference)
-## This step can be skipped if you don't need voice cloning
-# uvx hf auth login
+# Model weights download automatically from Hugging Face (public `zwaiwng/maneko`) into
+# this repo's .cache/ on first run — no account or token needed.
+
+# Optional: also install the legacy torch/pocket-tts backend (select via NEB_TTS_BACKEND=torch)
+# uv sync --extra torch
 ```
 
 ## TTS a book
@@ -55,18 +60,20 @@ uv run neb sanitize \
 
 #### 3) Synthesize audio (TTS)
 ```bash
-uv run --with pocket-tts neb synth \
+uv run neb synth \
   --book out/some-book \
   --max-chars 400 \
   --pad-ms 300
 ```
 
-By default, `neb synth` uses the built-in voice `alba`. To choose a built-in voice
-explicitly (or use a cloned wav), pass `--voice`:
+Voice cloning is wav-only — pass a local `.wav` clone source with `--voice` (create one
+with `neb clone`). The default is `voices/ray.wav`:
 ```bash
-uv run --with pocket-tts neb synth --book out/some-book --voice alba
-uv run --with pocket-tts neb synth --book out/some-book --voice voices/ray.wav
+uv run neb synth --book out/some-book --voice voices/ray.wav
 ```
+
+To use the legacy torch/pocket-tts engine instead, install it (`uv sync --extra torch`)
+and set `NEB_TTS_BACKEND=torch`.
 
 Optional: add per-book pronunciation overrides at
 `out/some-book/reading-overrides.json`:

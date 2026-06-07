@@ -115,3 +115,19 @@ def test_resolve_model_id_falls_back_to_default_layers() -> None:
 def test_resolve_model_id_accepts_iso_tag() -> None:
     assert language.resolve_model_id("de-DE", 6) == "german"
     assert language.resolve_model_id("pt-BR", 24) == "portuguese_24l"
+
+
+def test_resolve_maneko_language_maps_english_to_dated_stem() -> None:
+    # English is the one special case: maneko's validated default checkpoint.
+    assert language.resolve_maneko_language("english", 6) == "english_2026-04"
+    assert language.resolve_maneko_language("en-US", None) == "english_2026-04"
+    assert language.resolve_maneko_language("english", 24) == "english_2026-04"
+
+
+def test_resolve_maneko_language_is_identity_for_other_stems() -> None:
+    assert language.resolve_maneko_language("german", 6) == "german"
+    assert language.resolve_maneko_language("german", 24) == "german_24l"
+    assert language.resolve_maneko_language("french", 24) == "french_24l"
+    assert language.resolve_maneko_language("italian", 6) == "italian"
+    assert language.resolve_maneko_language("spanish", 24) == "spanish_24l"
+    assert language.resolve_maneko_language("pt-BR", 24) == "portuguese_24l"

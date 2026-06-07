@@ -10,13 +10,21 @@ dependencies = [
   "fastapi>=0.110",
   "jinja2>=3.1",
   "lxml>=5.0",
-  "pocket-tts",
+  "maneko",
+  "numpy>=2.1",
   "python-multipart>=0.0.9",
   "pytest>=7.4",
   "rich>=13.7",
+  "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+# Legacy pocket-tts/torch backend, selected with NEB_TTS_BACKEND=torch. The default
+# backend is maneko (installed above); install this extra only to use the torch engine.
+torch = [
+  "pocket-tts",
   "torch==2.9.1+cpu; sys_platform != 'darwin'",
   "torch; sys_platform == 'darwin'",
-  "uvicorn>=0.27",
 ]
 
 [project.scripts]
@@ -32,6 +40,9 @@ packages = ["neb"]
 [tool.uv]
 
 [tool.uv.sources]
+# maneko is a native Rust/candle wheel built via maturin — installing it needs a
+# Rust toolchain. There is no PyPI release; it is pulled and built from GitHub.
+maneko = { git = "https://github.com/huangziwei/maneko.git", subdirectory = "crates/interfaces/python" }
 torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
 
 [[tool.uv.index]]

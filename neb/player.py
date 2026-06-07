@@ -29,7 +29,7 @@ from . import sanitize
 from . import tts as tts_util
 from .text import guess_title_from_path, read_clean_text
 from .text.common import READING_OVERRIDES_FILENAME, _load_reading_overrides
-from .voice import BUILTIN_VOICES, DEFAULT_VOICE, resolve_voice_prompt
+from .voice import DEFAULT_VOICE, resolve_voice_prompt
 
 def _load_json(path: Path) -> dict:
     if not path.exists():
@@ -1733,13 +1733,8 @@ def create_app(root_dir: Path) -> FastAPI:
                     if isinstance(gender, str) and gender in _VOICE_GENDERS:
                         entry["gender"] = gender
                 local.append(entry)
-        builtin = [
-            {"label": name, "value": name}
-            for name in sorted(BUILTIN_VOICES.keys())
-        ]
-        return _no_store(
-            {"local": local, "builtin": builtin, "default": DEFAULT_VOICE}
-        )
+        # Built-in (pocket-tts hosted) voices were removed: cloning is wav-only.
+        return _no_store({"local": local, "default": DEFAULT_VOICE})
 
     @app.post("/api/voices/metadata")
     def set_voice_metadata(payload: VoiceMetadataPayload) -> JSONResponse:
@@ -2513,10 +2508,8 @@ def create_app(root_dir: Path) -> FastAPI:
 
         model_config = _load_model_config(book_dir)
         cmd = [
-            "uv",
-            "run",
-            "--with",
-            "pocket-tts",
+            sys.executable,
+            "-m",
             "neb",
             "synth",
             "--book",
@@ -2540,6 +2533,7 @@ def create_app(root_dir: Path) -> FastAPI:
             cmd.append("--rechunk")
 
         env = os.environ.copy()
+        env.setdefault("HF_HOME", str(repo_root / ".cache" / "huggingface"))
         process = subprocess.Popen(
             cmd,
             cwd=str(repo_root),
@@ -2628,10 +2622,8 @@ def create_app(root_dir: Path) -> FastAPI:
 
         model_config = _load_model_config(book_dir)
         cmd = [
-            "uv",
-            "run",
-            "--with",
-            "pocket-tts",
+            sys.executable,
+            "-m",
             "neb",
             "sample",
             "--book",
@@ -2653,6 +2645,7 @@ def create_app(root_dir: Path) -> FastAPI:
             cmd.append("--rechunk")
 
         env = os.environ.copy()
+        env.setdefault("HF_HOME", str(repo_root / ".cache" / "huggingface"))
         process = subprocess.Popen(
             cmd,
             cwd=str(repo_root),

@@ -943,3 +943,51 @@ def test_prepare_manifest_coerces_french_to_24_layers(tmp_path: Path) -> None:
     )
     assert manifest["language"] == "french"
     assert manifest["layers"] == 24
+
+
+def test_floats_to_int16_scales_normalized_audio() -> None:
+    import numpy as np
+
+    out = tts.floats_to_int16([0.0, 1.0, -1.0, 0.5])
+    assert out.dtype == np.int16
+    assert out.tolist() == [0, 32767, -32767, 16384]
+
+
+def test_floats_to_int16_passes_through_int16_range_values() -> None:
+    # Peaks well outside [-1, 1] are treated as already-scaled samples.
+    out = tts.floats_to_int16([0.0, 1000.0, -2000.0])
+    assert out.tolist() == [0, 1000, -2000]
+
+
+def test_floats_to_int16_empty() -> None:
+    out = tts.floats_to_int16([])
+    assert out.size == 0
+
+
+def test_resolve_backend_name_defaults_to_maneko(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NEB_TTS_BACKEND", raising=False)
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEB_TTS_BACKEND", "torch")
+    assert tts._resolve_backend_name() == "torch"
+    monkeypatch.setenv("NEB_TTS_BACKEND", "MANEKO")  # case-insensitive
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_auto_prefers_torch_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEB_TTS_BACKEND", "auto")
+    monkeypatch.setattr(tts, "torch", object())
+    monkeypatch.setattr(tts, "TTSModel", object())
+    assert tts._resolve_backend_name() == "torch"
+    monkeypatch.setattr(tts, "torch", None)
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_rejects_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEB_TTS_BACKEND", "bogus")
+    with pytest.raises(RuntimeError):
+        tts._resolve_backend_name()

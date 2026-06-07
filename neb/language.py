@@ -148,3 +148,21 @@ def resolve_model_id(language: str, layers: Optional[int] = None) -> str:
     if model_id is None:
         model_id = _POCKET_TTS_MODEL_IDS[(lang, default_layers(lang))]
     return model_id
+
+
+# pocket-tts model id -> maneko config stem. They are identical for every
+# language/layer pair except English, where maneko's validated default checkpoint
+# is the dated stem `english_2026-04`.
+_POCKET_ID_TO_MANEKO_STEM: dict[str, str] = {
+    "english": "english_2026-04",
+}
+
+
+def resolve_maneko_language(language: str, layers: Optional[int] = None) -> str:
+    """Return the maneko config stem for a (language, layers) pair.
+
+    Built on top of `resolve_model_id`, so it inherits the same ISO-tag handling
+    and layer fallbacks. Identity for all stems except `english`.
+    """
+    model_id = resolve_model_id(language, layers)
+    return _POCKET_ID_TO_MANEKO_STEM.get(model_id, model_id)

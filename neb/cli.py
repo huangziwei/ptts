@@ -623,7 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output", required=True, help="Path to output .m4b")
     run.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     run.set_defaults(func=lambda _args: _not_implemented("run"))
 
@@ -655,7 +655,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     synth.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     synth.add_argument(
         "--voice-map",
@@ -683,7 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sample.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     sample.add_argument(
         "--voice-map",

@@ -5,6 +5,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import sys
@@ -12,6 +13,8 @@ import threading
 import time
 import unicodedata
 import wave
+
+import numpy as np
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +54,11 @@ except Exception:  # pragma: no cover - optional runtime dependency
     torch = None
     TTSModel = None
 
+try:
+    import maneko
+except Exception:  # pragma: no cover - optional runtime dependency
+    maneko = None
+
 
 _TTS_WARNING_CONTEXT = contextvars.ContextVar("_TTS_WARNING_CONTEXT", default=None)
 _TTS_WARNING_FILTER_INSTALLED = False
@@ -59,6 +67,27 @@ _TTS_WARNING_CONTEXT_STACK: List[dict[str, Any]] = []
 
 _TTS_MODEL_CACHE: Dict[Tuple[str, int], Any] = {}
 _TTS_MODEL_CACHE_LOCK = threading.Lock()
+
+
+def _repo_root() -> Path:
+    """Walk up from the cwd to the directory holding pyproject.toml (the repo)."""
+    start = Path.cwd()
+    for candidate in [start, *start.parents]:
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return start
+
+
+def _ensure_hf_home() -> None:
+    """Default HF_HOME to the repo-local cache so weights land in ./.cache/.
+
+    maneko (and pocket-tts) resolve weights via HF_HOME; pointing it at the
+    repo's .cache/huggingface keeps everything self-contained. An explicit
+    HF_HOME in the environment always wins.
+    """
+    if os.environ.get("HF_HOME"):
+        return
+    os.environ["HF_HOME"] = str(_repo_root() / ".cache" / "huggingface")
 
 
 def _load_tts_model(
@@ -767,8 +796,9 @@ def write_chunk_files(
 def _require_tts() -> None:
     if torch is None or TTSModel is None:
         raise RuntimeError(
-            "Pocket-TTS dependencies are missing. Install torch and pocket-tts "
-            "or run with uv: `uv run --with pocket-tts`."
+            "torch/pocket-tts not installed. They are optional (the default backend is "
+            "maneko). Install the extra (`uv sync --extra torch`) and select it with "
+            "NEB_TTS_BACKEND=torch."
         )
 
 
@@ -794,13 +824,29 @@ def tensor_to_int16(audio: "torch.Tensor") -> "torch.Tensor":
     return a
 
 
+def floats_to_int16(samples: Sequence[float]) -> np.ndarray:
+    """Convert mono float audio (maneko's `list[float]`, ~[-1, 1]) to int16.
+
+    Mirrors `tensor_to_int16`'s heuristic: if the peak looks like normalized
+    float audio, scale by 32767; otherwise assume the values are already in
+    int16 range.
+    """
+    a = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if a.size == 0:
+        return np.zeros(0, dtype=np.int16)
+    max_abs = float(np.abs(a).max())
+    if max_abs <= 1.5:
+        a = np.clip(a, -1.0, 1.0) * 32767.0
+    return np.rint(a).astype(np.int16)
+
+
 def write_wav_mono_16k_or_24k(
-    path: Path, samples_i16: "torch.Tensor", sample_rate: int
+    path: Path, samples_i16: np.ndarray, sample_rate: int
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
 
-    arr = samples_i16.numpy()  # requires numpy via torch; typical torch installs include it
+    arr = np.ascontiguousarray(samples_i16, dtype=np.int16)
     data = arr.tobytes()
 
     with wave.open(str(tmp), "wb") as wf:
@@ -810,6 +856,144 @@ def write_wav_mono_16k_or_24k(
         wf.writeframes(data)
 
     tmp.replace(path)
+
+
+# --- TTS backends --------------------------------------------------------------
+# A thin interface over the inference engine so the synth pipeline is engine
+# agnostic. The default is maneko (native Rust/candle q8); torch/pocket-tts is an
+# optional fallback. Both return mono int16 numpy arrays; audio assembly (concat
+# + pause padding) is done in numpy by the callers.
+
+
+class _TTSBackend:
+    name = "base"
+
+    def sample_rate(self, language: Optional[str], layers: Optional[int]) -> int:
+        raise NotImplementedError
+
+    def prepare_voice(
+        self, voice_prompt: str, language: Optional[str], layers: Optional[int]
+    ) -> Any:
+        raise NotImplementedError
+
+    def generate(
+        self,
+        voice_handle: Any,
+        text: str,
+        language: Optional[str],
+        layers: Optional[int],
+    ) -> np.ndarray:
+        raise NotImplementedError
+
+
+class ManekoBackend(_TTSBackend):
+    """Native maneko (Rust/candle q8). One resident Pocket; caches per language."""
+
+    name = "maneko"
+
+    def __init__(self) -> None:
+        if maneko is None:
+            raise RuntimeError(
+                "maneko is not installed (the default TTS backend). Install it with "
+                "`uv sync` (builds it from GitHub — needs a Rust toolchain), or select "
+                "another backend with NEB_TTS_BACKEND=torch."
+            )
+        self._pocket = maneko.Pocket("cpu")
+
+    @staticmethod
+    def _stem(language: Optional[str], layers: Optional[int]) -> str:
+        return language_util.resolve_maneko_language(language, layers)
+
+    def sample_rate(self, language: Optional[str], layers: Optional[int]) -> int:
+        return int(self._pocket.sample_rate(self._stem(language, layers)))
+
+    def prepare_voice(
+        self, voice_prompt: str, language: Optional[str], layers: Optional[int]
+    ) -> Any:
+        # maneko clones lazily and caches the voice-state per (voice, language)
+        # internally, so there is nothing to precompute — just carry the path.
+        return voice_prompt
+
+    def generate(
+        self,
+        voice_handle: Any,
+        text: str,
+        language: Optional[str],
+        layers: Optional[int],
+    ) -> np.ndarray:
+        floats = self._pocket.generate(text, self._stem(language, layers), voice_handle)
+        return floats_to_int16(floats)
+
+
+class TorchBackend(_TTSBackend):
+    """Legacy pocket-tts (torch CPU) path, kept as an optional fallback."""
+
+    name = "torch"
+
+    def __init__(self) -> None:
+        _require_tts()
+        _install_tts_warning_filter()
+
+    def sample_rate(self, language: Optional[str], layers: Optional[int]) -> int:
+        return int(_load_tts_model(language, layers).sample_rate)
+
+    def prepare_voice(
+        self, voice_prompt: str, language: Optional[str], layers: Optional[int]
+    ) -> Any:
+        model = _load_tts_model(language, layers)
+        return model.get_state_for_audio_prompt(voice_prompt)
+
+    def generate(
+        self,
+        voice_handle: Any,
+        text: str,
+        language: Optional[str],
+        layers: Optional[int],
+    ) -> np.ndarray:
+        model = _load_tts_model(language, layers)
+        audio = model.generate_audio(voice_handle, text)
+        return tensor_to_int16(audio).numpy()
+
+
+_TTS_BACKENDS: Dict[str, _TTSBackend] = {}
+_TTS_BACKEND_LOCK = threading.Lock()
+
+
+def _make_backend(name: str) -> _TTSBackend:
+    if name == "maneko":
+        return ManekoBackend()
+    if name == "torch":
+        return TorchBackend()
+    raise RuntimeError(
+        f"Unknown NEB_TTS_BACKEND={name!r} (expected 'maneko', 'torch', or 'auto')."
+    )
+
+
+def _resolve_backend_name() -> str:
+    selector = (os.environ.get("NEB_TTS_BACKEND") or "maneko").strip().lower()
+    if selector == "auto":
+        return "torch" if (torch is not None and TTSModel is not None) else "maneko"
+    if selector in ("maneko", "torch"):
+        return selector
+    raise RuntimeError(
+        f"Unknown NEB_TTS_BACKEND={selector!r} (expected 'maneko', 'torch', or 'auto')."
+    )
+
+
+def get_backend() -> _TTSBackend:
+    """Return the configured TTS backend (cached per concrete engine).
+
+    Selected by NEB_TTS_BACKEND: 'maneko' (default), 'torch', or 'auto' (torch if
+    installed, else maneko). Re-reads the env each call so callers/tests can switch.
+    """
+    _ensure_hf_home()
+    name = _resolve_backend_name()
+    with _TTS_BACKEND_LOCK:
+        backend = _TTS_BACKENDS.get(name)
+        if backend is None:
+            backend = _make_backend(name)
+            _TTS_BACKENDS[name] = backend
+        return backend
 
 
 def wav_duration_ms(path: Path) -> int:
@@ -1107,7 +1291,7 @@ def synthesize(
     language: Optional[str] = None,
     layers: Optional[int] = None,
 ) -> int:
-    _require_tts()
+    backend = get_backend()
     language = language_util.normalize_language_tag(language)
     layers = language_util.resolve_layers(language, layers)
 
@@ -1207,33 +1391,31 @@ def synthesize(
 
     write_status(out_dir, "cloning", "Preparing voice")
 
-    tts_model = _load_tts_model(language, layers)
-    _install_tts_warning_filter()
-    sample_rate = int(tts_model.sample_rate)
+    sample_rate = backend.sample_rate(language, layers)
     if manifest.get("sample_rate") != sample_rate:
         manifest["sample_rate"] = sample_rate
         atomic_write_json(manifest_path, manifest)
 
     voice_states: Dict[str, Any] = {}
     for voice_id, voice_prompt in voice_prompts.items():
-        voice_states[voice_id] = tts_model.get_state_for_audio_prompt(voice_prompt)
+        voice_states[voice_id] = backend.prepare_voice(voice_prompt, language, layers)
     write_status(out_dir, "synthesizing")
 
     base_pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
-    pad_tensors: Dict[int, Optional["torch.Tensor"]] = {}
+    pad_arrays: Dict[int, Optional[np.ndarray]] = {}
 
-    def pad_tensor_for(multiplier: int) -> Optional["torch.Tensor"]:
+    def pad_array_for(multiplier: int) -> Optional[np.ndarray]:
         multiplier = max(1, int(multiplier))
         if base_pad_samples <= 0:
             return None
-        if multiplier not in pad_tensors:
+        if multiplier not in pad_arrays:
             total_samples = base_pad_samples * multiplier
-            pad_tensors[multiplier] = (
-                torch.zeros(total_samples, dtype=torch.int16)
+            pad_arrays[multiplier] = (
+                np.zeros(total_samples, dtype=np.int16)
                 if total_samples > 0
                 else None
             )
-        return pad_tensors[multiplier]
+        return pad_arrays[multiplier]
 
     segment_paths: List[Path] = []
     selected_ids = set(only_chapter_ids) if only_chapter_ids else None
@@ -1324,7 +1506,7 @@ def synthesize(
 
                 sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
                 sub_total = len(sub_texts)
-                audio_parts: List["torch.Tensor"] = []
+                audio_parts: List[np.ndarray] = []
                 for sub_idx, sub_text in enumerate(sub_texts, start=1):
                     sub_text = sub_text.strip()
                     if not sub_text:
@@ -1334,25 +1516,28 @@ def synthesize(
                     with _tts_warning_context(
                         chapter_id, chunk_idx, chapter_total, sub_idx, sub_total
                     ):
-                        audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+                        audio_parts.append(
+                            backend.generate(voice_state, sub_text, language, layers)
+                        )
 
                 if not audio_parts:
                     with _tts_warning_context(chapter_id, chunk_idx, chapter_total, 1, 1):
-                        audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+                        audio_parts = [
+                            backend.generate(voice_state, tts_text, language, layers)
+                        ]
 
                 if len(audio_parts) == 1:
-                    audio = audio_parts[0]
+                    a16 = audio_parts[0]
                 else:
-                    audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
-                a16 = tensor_to_int16(audio)
+                    a16 = np.concatenate(audio_parts)
 
-                pad_tensor = pad_tensor_for(pause_multiplier)
-                if pad_tensor is not None and pad_tensor.numel() > 0:
-                    a16 = torch.cat([a16, pad_tensor], dim=0)
+                pad_array = pad_array_for(pause_multiplier)
+                if pad_array is not None and pad_array.size > 0:
+                    a16 = np.concatenate([a16, pad_array])
 
                 write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
                 segment_paths.append(seg_path)
-                dms = int(round(a16.numel() * 1000.0 / sample_rate))
+                dms = int(round(a16.size * 1000.0 / sample_rate))
 
                 # Persist progress for restartability.
                 ch_entry["durations_ms"][chunk_idx - 1] = dms
@@ -1384,7 +1569,7 @@ def synthesize_chunk(
     voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
 ) -> dict:
-    _require_tts()
+    backend = get_backend()
     if base_dir is None:
         base_dir = Path.cwd()
     if chunk_index < 0:
@@ -1494,12 +1679,9 @@ def synthesize_chunk(
         voice_id = _normalize_voice_id(entry.get("voice"), default_voice)
 
     voice_prompt = resolve_voice_prompt(voice_id, base_dir=base_dir)
-    tts_model = _load_tts_model(
-        manifest.get("language"),
-        manifest.get("layers"),
-    )
-    _install_tts_warning_filter()
-    sample_rate = int(tts_model.sample_rate)
+    language = manifest.get("language")
+    layers = manifest.get("layers")
+    sample_rate = backend.sample_rate(language, layers)
     if manifest.get("sample_rate") != sample_rate:
         manifest["sample_rate"] = sample_rate
 
@@ -1511,7 +1693,7 @@ def synthesize_chunk(
     except (TypeError, ValueError, IndexError):
         pause_multiplier = 1
     pad_samples = base_pad_samples * pause_multiplier
-    pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
+    pad_array = np.zeros(pad_samples, dtype=np.int16) if pad_samples > 0 else None
 
     overrides_dir = out_dir
     if not _reading_overrides_path(overrides_dir).exists():
@@ -1543,25 +1725,28 @@ def synthesize_chunk(
             "duration_ms": 0,
         }
 
-    voice_state = tts_model.get_state_for_audio_prompt(voice_prompt)
+    voice_state = backend.prepare_voice(voice_prompt, language, layers)
     sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
     sub_total = len(sub_texts)
-    audio_parts: List["torch.Tensor"] = []
+    audio_parts: List[np.ndarray] = []
     for sub_idx, sub_text in enumerate(sub_texts, start=1):
         with _tts_warning_context(
             chapter_id, chunk_index + 1, chunk_count, sub_idx, sub_total
         ):
-            audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+            audio_parts.append(
+                backend.generate(voice_state, sub_text, language, layers)
+            )
     if not audio_parts:
         with _tts_warning_context(chapter_id, chunk_index + 1, chunk_count, 1, 1):
-            audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+            audio_parts = [
+                backend.generate(voice_state, tts_text, language, layers)
+            ]
     if len(audio_parts) == 1:
-        audio = audio_parts[0]
+        a16 = audio_parts[0]
     else:
-        audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
-    a16 = tensor_to_int16(audio)
-    if pad_tensor is not None and pad_tensor.numel() > 0:
-        a16 = torch.cat([a16, pad_tensor], dim=0)
+        a16 = np.concatenate(audio_parts)
+    if pad_array is not None and pad_array.size > 0:
+        a16 = np.concatenate([a16, pad_array])
     write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
 
     dms = wav_duration_ms(seg_path)
@@ -1721,7 +1906,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     ap.add_argument(
         "--voice-map",

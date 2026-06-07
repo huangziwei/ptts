@@ -353,7 +353,7 @@ def test_book_details_includes_pause_multipliers(tmp_path: Path) -> None:
     tts_dir = book_dir / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "voice": "alba",
+        "voice": "voices/ray.wav",
         "pad_ms": 300,
         "chapters": [
             {
@@ -518,7 +518,7 @@ def test_model_config_clears_cache_when_config_differs(tmp_path: Path) -> None:
     manifest_path.write_text(
         json.dumps(
             {
-                "voice": "alba",
+                "voice": "voices/ray.wav",
                 "language": "german",
                 "layers": 24,
                 "chapters": [],
@@ -551,7 +551,7 @@ def test_model_config_preserves_cache_when_unchanged(tmp_path: Path) -> None:
     manifest_path.write_text(
         json.dumps(
             {
-                "voice": "alba",
+                "voice": "voices/ray.wav",
                 "language": "german",
                 "layers": 24,
                 "chapters": [],
@@ -578,7 +578,7 @@ def test_book_details_surfaces_model_config_and_manifest_model(tmp_path: Path) -
     tts_dir = book_dir / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "voice": "alba",
+        "voice": "voices/ray.wav",
         "pad_ms": 300,
         "language": "german",
         "layers": 24,
