@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import sys
@@ -796,9 +797,9 @@ def write_chunk_files(
 def _require_tts() -> None:
     if torch is None or TTSModel is None:
         raise RuntimeError(
-            "torch/pocket-tts not installed. They are optional (the default backend is "
-            "maneko). Install the extra (`uv sync --extra torch`) and select it with "
-            "NEB_TTS_BACKEND=torch."
+            "torch/pocket-tts not installed. `uv sync` installs them on Apple Silicon "
+            "(where torch is the default backend); elsewhere install the extra "
+            "(`uv sync --extra torch`) and select it with NEB_TTS_BACKEND=torch."
         )
 
 
@@ -860,9 +861,10 @@ def write_wav_mono_16k_or_24k(
 
 # --- TTS backends --------------------------------------------------------------
 # A thin interface over the inference engine so the synth pipeline is engine
-# agnostic. The default is maneko (native Rust/candle q8); torch/pocket-tts is an
-# optional fallback. Both return mono int16 numpy arrays; audio assembly (concat
-# + pause padding) is done in numpy by the callers.
+# agnostic. The default is platform-aware (see _default_backend_name): torch on
+# Apple Silicon, maneko (native Rust/candle q8) everywhere else. Both return mono
+# int16 numpy arrays; audio assembly (concat + pause padding) is done in numpy by
+# the callers.
 
 
 class _TTSBackend:
@@ -894,9 +896,9 @@ class ManekoBackend(_TTSBackend):
     def __init__(self) -> None:
         if maneko is None:
             raise RuntimeError(
-                "maneko is not installed (the default TTS backend). Install it with "
-                "`uv sync` (builds it from GitHub — needs a Rust toolchain), or select "
-                "another backend with NEB_TTS_BACKEND=torch."
+                "maneko is not installed. Install it with `uv sync` (builds it from "
+                "GitHub — needs a Rust toolchain), or select another backend with "
+                "NEB_TTS_BACKEND=torch."
             )
         self._pocket = maneko.Pocket("cpu")
 
@@ -926,7 +928,8 @@ class ManekoBackend(_TTSBackend):
 
 
 class TorchBackend(_TTSBackend):
-    """Legacy pocket-tts (torch CPU) path, kept as an optional fallback."""
+    """Upstream pocket-tts (torch CPU). Default on Apple Silicon, where torch's
+    Accelerate/AMX GEMMs outrun maneko's q8 NEON kernels (~1.8x on an M4 Pro)."""
 
     name = "torch"
 
@@ -969,8 +972,23 @@ def _make_backend(name: str) -> _TTSBackend:
     )
 
 
+def _default_backend_name() -> str:
+    """Platform-aware default backend when NEB_TTS_BACKEND is unset.
+
+    Apple Silicon prefers torch (its Accelerate/AMX GEMMs beat maneko's q8 NEON
+    kernels there; pyproject installs it by default on that platform). Everywhere
+    else maneko is the fast native path.
+    """
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        if torch is not None and TTSModel is not None:
+            return "torch"
+    return "maneko"
+
+
 def _resolve_backend_name() -> str:
-    selector = (os.environ.get("NEB_TTS_BACKEND") or "maneko").strip().lower()
+    selector = (os.environ.get("NEB_TTS_BACKEND") or "").strip().lower()
+    if not selector:
+        return _default_backend_name()
     if selector == "auto":
         return "torch" if (torch is not None and TTSModel is not None) else "maneko"
     if selector in ("maneko", "torch"):
@@ -983,8 +1001,9 @@ def _resolve_backend_name() -> str:
 def get_backend() -> _TTSBackend:
     """Return the configured TTS backend (cached per concrete engine).
 
-    Selected by NEB_TTS_BACKEND: 'maneko' (default), 'torch', or 'auto' (torch if
-    installed, else maneko). Re-reads the env each call so callers/tests can switch.
+    Selected by NEB_TTS_BACKEND: 'maneko', 'torch', or 'auto' (torch if installed,
+    else maneko). Unset picks a platform default: torch on Apple Silicon, maneko
+    elsewhere. Re-reads the env each call so callers/tests can switch.
     """
     _ensure_hf_home()
     name = _resolve_backend_name()

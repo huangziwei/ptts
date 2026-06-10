@@ -964,8 +964,31 @@ def test_floats_to_int16_empty() -> None:
     assert out.size == 0
 
 
-def test_resolve_backend_name_defaults_to_maneko(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_backend_name_defaults_to_torch_on_apple_silicon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("NEB_TTS_BACKEND", raising=False)
+    monkeypatch.setattr(tts.sys, "platform", "darwin")
+    monkeypatch.setattr(tts.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tts, "torch", object())
+    monkeypatch.setattr(tts, "TTSModel", object())
+    assert tts._resolve_backend_name() == "torch"
+    # Without torch installed the default falls back to maneko even there.
+    monkeypatch.setattr(tts, "torch", None)
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_defaults_to_maneko_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEB_TTS_BACKEND", raising=False)
+    monkeypatch.setattr(tts, "torch", object())
+    monkeypatch.setattr(tts, "TTSModel", object())
+    monkeypatch.setattr(tts.sys, "platform", "linux")
+    assert tts._resolve_backend_name() == "maneko"
+    # Intel macs (including Rosetta pythons) also default to maneko.
+    monkeypatch.setattr(tts.sys, "platform", "darwin")
+    monkeypatch.setattr(tts.platform, "machine", lambda: "x86_64")
     assert tts._resolve_backend_name() == "maneko"
 
 

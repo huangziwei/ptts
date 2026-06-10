@@ -12,6 +12,12 @@ dependencies = [
   "lxml>=5.0",
   "maneko",
   "numpy>=2.1",
+  # Apple Silicon: torch rides Accelerate/AMX and outruns the portable maneko
+  # build (benchmarked 2026-06: 12.6x vs 7.0x realtime on M4 Pro), so the torch
+  # backend installs and is the runtime default there (see neb/tts.py). Every
+  # other platform defaults to maneko and opts into torch via the extra below.
+  "pocket-tts; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "torch; sys_platform == 'darwin' and platform_machine == 'arm64'",
   "python-multipart>=0.0.9",
   "pytest>=7.4",
   "rich>=13.7",
@@ -19,8 +25,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Legacy pocket-tts/torch backend, selected with NEB_TTS_BACKEND=torch. The default
-# backend is maneko (installed above); install this extra only to use the torch engine.
+# pocket-tts/torch backend for platforms where it is not installed by default
+# (anything that is not an Apple Silicon Mac); select it with NEB_TTS_BACKEND=torch.
 torch = [
   "pocket-tts",
   "torch==2.9.1+cpu; sys_platform != 'darwin'",
