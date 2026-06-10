@@ -86,9 +86,33 @@ def _ensure_hf_home() -> None:
     repo's .cache/huggingface keeps everything self-contained. An explicit
     HF_HOME in the environment always wins.
     """
-    if os.environ.get("HF_HOME"):
+    if not os.environ.get("HF_HOME"):
+        os.environ["HF_HOME"] = str(_repo_root() / ".cache" / "huggingface")
+    _ensure_hf_token_visible()
+
+
+def _ensure_hf_token_visible() -> None:
+    """Keep `hf auth login` working under a redirected HF_HOME.
+
+    huggingface_hub looks for the auth token at $HF_HOME/token, so the repo-local
+    HF_HOME hides a user-level login — and the gated kyutai/pocket-tts weights
+    (required for voice cloning on the torch backend) then fail to download.
+    Export HF_TOKEN from the user-level token when the active HF_HOME has none.
+    (HF_TOKEN is re-read on every hub call; HF_TOKEN_PATH would be a no-op here
+    because huggingface_hub freezes it at import time.)
+    """
+    if os.environ.get("HF_TOKEN") or os.environ.get("HF_TOKEN_PATH"):
         return
-    os.environ["HF_HOME"] = str(_repo_root() / ".cache" / "huggingface")
+    hf_home = os.environ.get("HF_HOME")
+    if not hf_home or (Path(hf_home) / "token").exists():
+        return
+    user_token = Path.home() / ".cache" / "huggingface" / "token"
+    try:
+        token = user_token.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if token:
+        os.environ["HF_TOKEN"] = token
 
 
 def _load_tts_model(
@@ -896,9 +920,10 @@ class ManekoBackend(_TTSBackend):
     def __init__(self) -> None:
         if maneko is None:
             raise RuntimeError(
-                "maneko is not installed. Install it with `uv sync` (builds it from "
-                "GitHub — needs a Rust toolchain), or select another backend with "
-                "NEB_TTS_BACKEND=torch."
+                "maneko is not installed. `uv sync` installs it everywhere except "
+                "Apple Silicon (where torch is the default backend); there, opt in "
+                "with `uv sync --extra maneko` (builds from GitHub — needs a Rust "
+                "toolchain), or use NEB_TTS_BACKEND=torch."
             )
         self._pocket = maneko.Pocket("cpu")
 
@@ -1831,20 +1856,26 @@ def synthesize_book(
         sys.stderr.write(f"{exc}\n")
         return 2
     resolved_language = language or _resolve_book_language(book_dir)
-    return synthesize(
-        chapters=chapters,
-        voice=voice,
-        out_dir=out_dir,
-        max_chars=max_chars,
-        pad_ms=pad_ms,
-        chunk_mode=chunk_mode,
-        rechunk=rechunk,
-        voice_map_path=voice_map_path,
-        reading_overrides_dir=book_dir,
-        base_dir=base_dir,
-        language=resolved_language,
-        layers=layers,
-    )
+    try:
+        return synthesize(
+            chapters=chapters,
+            voice=voice,
+            out_dir=out_dir,
+            max_chars=max_chars,
+            pad_ms=pad_ms,
+            chunk_mode=chunk_mode,
+            rechunk=rechunk,
+            voice_map_path=voice_map_path,
+            reading_overrides_dir=book_dir,
+            base_dir=base_dir,
+            language=resolved_language,
+            layers=layers,
+        )
+    except Exception as exc:
+        # Leave a machine-readable trace for the player UI; the traceback still
+        # goes to the log via the re-raise.
+        write_status(out_dir, "error", detail=str(exc)[:1000])
+        raise
 
 
 def synthesize_book_sample(
@@ -1894,22 +1925,28 @@ def synthesize_book_sample(
                     break
             atomic_write_json(manifest_path, manifest)
 
-    return synthesize(
-        chapters=chapters,
-        voice=voice,
-        out_dir=out_dir,
-        max_chars=max_chars,
-        pad_ms=pad_ms,
-        chunk_mode=chunk_mode,
-        rechunk=rechunk,
-        wipe_segments=False,
-        only_chapter_ids={sample_id},
-        voice_map_path=voice_map_path,
-        reading_overrides_dir=book_dir,
-        base_dir=base_dir,
-        language=language or _resolve_book_language(book_dir),
-        layers=layers,
-    )
+    try:
+        return synthesize(
+            chapters=chapters,
+            voice=voice,
+            out_dir=out_dir,
+            max_chars=max_chars,
+            pad_ms=pad_ms,
+            chunk_mode=chunk_mode,
+            rechunk=rechunk,
+            wipe_segments=False,
+            only_chapter_ids={sample_id},
+            voice_map_path=voice_map_path,
+            reading_overrides_dir=book_dir,
+            base_dir=base_dir,
+            language=language or _resolve_book_language(book_dir),
+            layers=layers,
+        )
+    except Exception as exc:
+        # Leave a machine-readable trace for the player UI; the traceback still
+        # goes to the log via the re-raise.
+        write_status(out_dir, "error", detail=str(exc)[:1000])
+        raise
 
 
 # ----------------------------

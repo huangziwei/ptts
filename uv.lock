@@ -384,7 +384,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "lxml" },
-    { name = "maneko" },
+    { name = "maneko", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
     { name = "numpy" },
     { name = "pocket-tts", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "pytest" },
@@ -395,6 +395,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+maneko = [
+    { name = "maneko" },
+]
 torch = [
     { name = "pocket-tts" },
     { name = "torch", version = "2.9.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
@@ -408,7 +411,8 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "lxml", specifier = ">=5.0" },
-    { name = "maneko", git = "https://github.com/huangziwei/maneko.git?subdirectory=crates%2Finterfaces%2Fpython" },
+    { name = "maneko", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'", git = "https://github.com/huangziwei/maneko.git?subdirectory=crates%2Finterfaces%2Fpython" },
+    { name = "maneko", marker = "extra == 'maneko'", git = "https://github.com/huangziwei/maneko.git?subdirectory=crates%2Finterfaces%2Fpython" },
     { name = "numpy", specifier = ">=2.1" },
     { name = "pocket-tts", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "pocket-tts", marker = "extra == 'torch'" },
@@ -420,7 +424,7 @@ requires-dist = [
     { name = "torch", marker = "sys_platform != 'darwin' and extra == 'torch'", specifier = "==2.9.1+cpu", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", specifier = ">=0.27" },
 ]
-provides-extras = ["torch"]
+provides-extras = ["torch", "maneko"]
 
 [[package]]
 name = "networkx"

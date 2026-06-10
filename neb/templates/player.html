@@ -5371,6 +5371,12 @@
           } else {
             progressDetail.textContent = "";
           }
+        } else if (stage === "error") {
+          progressFill.style.width = "0%";
+          progressText.textContent =
+            data.mode === "sample" ? "Sample failed." : "TTS failed.";
+          progressDetail.textContent =
+            data.error || `Check ${data.log_path || "the synth log"} for details.`;
         } else if (!progress) {
           progressFill.style.width = "0%";
           progressText.textContent = "Idle.";
@@ -5390,7 +5396,10 @@
           }
         }
 
-        if (sampling) {
+        if (stage === "error") {
+          bookStatus.textContent =
+            data.mode === "sample" ? "Sample failed." : "TTS failed.";
+        } else if (sampling) {
           if (stage === "chunking") {
             bookStatus.textContent = "Preparing sample...";
           } else if (stage === "cloning") {

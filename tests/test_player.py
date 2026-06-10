@@ -599,3 +599,19 @@ def test_book_details_surfaces_model_config_and_manifest_model(tmp_path: Path) -
         "layers": 24,
     }
     assert book["model_config_options"]["layers"] == [6, 24]
+
+
+def test_read_log_tail_returns_last_nonempty_line(tmp_path: Path) -> None:
+    log = tmp_path / "synth.log"
+    log.write_text(
+        "starting\nprogress 1\n\nValueError: voice cloning unsupported\n\n",
+        encoding="utf-8",
+    )
+    assert player._read_log_tail(log) == "ValueError: voice cloning unsupported"
+
+
+def test_read_log_tail_missing_file_and_long_logs(tmp_path: Path) -> None:
+    assert player._read_log_tail(tmp_path / "missing.log") == ""
+    log = tmp_path / "long.log"
+    log.write_text("x" * 20000 + "\nfinal line\n", encoding="utf-8")
+    assert player._read_log_tail(log) == "final line"

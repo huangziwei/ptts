@@ -1014,3 +1014,42 @@ def test_resolve_backend_name_rejects_unknown(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("NEB_TTS_BACKEND", "bogus")
     with pytest.raises(RuntimeError):
         tts._resolve_backend_name()
+
+
+def test_ensure_hf_token_visible_exports_user_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hf_home = tmp_path / "repo-cache"
+    hf_home.mkdir()
+    fake_home = tmp_path / "home"
+    token_file = fake_home / ".cache" / "huggingface" / "token"
+    token_file.parent.mkdir(parents=True)
+    token_file.write_text("hf_secret\n", encoding="utf-8")
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_TOKEN_PATH", raising=False)
+    monkeypatch.setattr(tts.Path, "home", lambda: fake_home)
+    tts._ensure_hf_token_visible()
+    assert tts.os.environ.get("HF_TOKEN") == "hf_secret"
+
+
+def test_ensure_hf_token_visible_prefers_active_hf_home_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hf_home = tmp_path / "repo-cache"
+    hf_home.mkdir()
+    (hf_home / "token").write_text("local", encoding="utf-8")
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_TOKEN_PATH", raising=False)
+    tts._ensure_hf_token_visible()
+    assert "HF_TOKEN" not in tts.os.environ
+
+
+def test_ensure_hf_token_visible_respects_explicit_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "explicit")
+    monkeypatch.setenv("HF_HOME", "/nonexistent")
+    tts._ensure_hf_token_visible()
+    assert tts.os.environ["HF_TOKEN"] == "explicit"

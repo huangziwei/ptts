@@ -1259,6 +1259,22 @@ def _load_tts_status(book_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _read_log_tail(path: Path, max_chars: int = 400) -> str:
+    """Last non-empty line of a log, for surfacing subprocess failures."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 8192))
+            text = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return lines[-1][:max_chars]
+
+
 @dataclass
 class SynthJob:
     book_id: str
@@ -2434,6 +2450,16 @@ def create_app(root_dir: Path) -> FastAPI:
             except ValueError:
                 log_path = str(job.log_path)
 
+        failed = job is not None and job.exit_code not in (None, 0)
+        error_detail = ""
+        if failed:
+            if str(tts_status.get("stage") or "") == "error" and tts_status.get("detail"):
+                error_detail = str(tts_status["detail"])
+            else:
+                error_detail = _read_log_tail(job.log_path)
+            if not error_detail:
+                error_detail = f"TTS process exited with code {job.exit_code}."
+
         payload = {
             "book_id": book_id,
             "running": running,
@@ -2441,6 +2467,7 @@ def create_app(root_dir: Path) -> FastAPI:
             "progress": progress,
             "log_path": log_path,
             "stage": "idle",
+            "error": error_detail,
             "ffmpeg_status": ffmpeg_status,
             "ffmpeg_error": ffmpeg_error,
             "ffmpeg_log_path": ffmpeg_log,
@@ -2456,6 +2483,8 @@ def create_app(root_dir: Path) -> FastAPI:
                 payload["stage"] = "chunking"
             else:
                 payload["stage"] = "sampling" if mode == "sample" else "synthesizing"
+        elif failed:
+            payload["stage"] = "error"
         elif mode == "sample" and job and job.exit_code == 0:
             payload["stage"] = "sampled"
         elif progress and progress.get("total") and progress.get("done") >= progress.get("total"):
