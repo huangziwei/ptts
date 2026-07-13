@@ -893,6 +893,16 @@ def _chapters_from_toc_entries(
         start_idx = spine_index.get(base_href)
         merged_items: List[object] = []
         if start_idx is not None:
+            # A TOC marks where a chapter starts in reading order; the chapter
+            # runs up to the next TOC entry's spine position (or the end of the
+            # spine). Everything between two consecutive TOC anchors belongs to
+            # the earlier chapter.
+            next_toc_idx = len(spine_items)
+            for ti in toc_spine_indices:
+                if ti > start_idx:
+                    next_toc_idx = ti
+                    break
+
             key = _split_series_key(base_href)
             prev_key = (
                 _split_series_key(spine_items[start_idx - 1][0])
@@ -913,11 +923,6 @@ def _chapters_from_toc_entries(
                     idx += 1
 
             if not merged_items and key:
-                next_toc_idx = len(spine_items)
-                for ti in toc_spine_indices:
-                    if ti > start_idx:
-                        next_toc_idx = ti
-                        break
                 if next_toc_idx > start_idx + 1:
                     candidate = []
                     for i in range(start_idx, next_toc_idx):
@@ -927,6 +932,15 @@ def _chapters_from_toc_entries(
                             break
                     if len(candidate) > 1:
                         merged_items = candidate
+
+            # General case: a chapter whose body spans several spine files that
+            # are not split-series siblings (e.g. one file per section, as many
+            # trade EPUBs are laid out). Capture every spine item up to the next
+            # TOC boundary so the content is not left orphaned.
+            if not merged_items and next_toc_idx > start_idx + 1:
+                merged_items = [
+                    item for _href, item in spine_items[start_idx:next_toc_idx]
+                ]
 
         if merged_items:
             text = _join_item_text(merged_items, footnote_index=footnote_index)
