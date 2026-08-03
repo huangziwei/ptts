@@ -2217,6 +2217,8 @@
                   <span>Female</span>
                 </label>
               </div>
+              <label for="cloneLanguage">Voice language</label>
+              <select id="cloneLanguage"></select>
               <div class="clone-preview" id="clonePreviewWrap" hidden>
                 <audio id="clonePreviewAudio" controls preload="metadata"></audio>
               </div>
@@ -2434,8 +2436,13 @@
         boundaryLogFlushTimer: null,
         boundaryLogInFlight: false,
         localVoiceValues: [],
+        visibleVoiceValues: [],
         voiceGenderMap: {},
+        voiceLanguageMap: {},
         voiceDisplayNameMap: {},
+        voiceLanguages: [],
+        voiceLanguageDisplayNames: {},
+        defaultVoiceLanguage: "english",
         cloneMode: "add",
         cloneEditVoice: null,
         cloneNameDirty: false,
@@ -2512,6 +2519,7 @@
       const cloneBuiltinToggle = document.getElementById("cloneBuiltinToggle");
       const cloneGenderMale = document.getElementById("cloneGenderMale");
       const cloneGenderFemale = document.getElementById("cloneGenderFemale");
+      const cloneLanguage = document.getElementById("cloneLanguage");
       const clonePreviewWrap = document.getElementById("clonePreviewWrap");
       const clonePreviewAudio = document.getElementById("clonePreviewAudio");
       const metaModal = document.getElementById("metaModal");
@@ -3540,12 +3548,86 @@
         return state.selectedVoice;
       }
 
+      function missingVoiceMessage() {
+        if (getSelectedVoice()) {
+          return "";
+        }
+        const label = voiceLanguageLabel(activeVoiceLanguage());
+        return label
+          ? `No ${label} voice available. Clone one first.`
+          : "No voice available. Clone one first.";
+      }
+
       function normalizeVoiceGender(value) {
         const raw = String(value || "").trim().toLowerCase();
         if (raw === "female" || raw === "male") {
           return raw;
         }
         return "";
+      }
+
+      function normalizeVoiceLanguage(value) {
+        return String(value || "").trim().toLowerCase();
+      }
+
+      function activeVoiceLanguage() {
+        const book = state.book;
+        const configured = book && book.model_config
+          ? normalizeVoiceLanguage(book.model_config.language)
+          : "";
+        return (
+          configured ||
+          (book ? normalizeVoiceLanguage(book.language) : "") ||
+          state.defaultVoiceLanguage
+        );
+      }
+
+      function voiceLanguageOf(item) {
+        const direct = item ? normalizeVoiceLanguage(item.language) : "";
+        if (direct) {
+          return direct;
+        }
+        const value = item && typeof item.value === "string" ? item.value : "";
+        // Untagged voices fall back to the default language, matching the server.
+        return (
+          (value ? state.voiceLanguageMap[value] : "") ||
+          state.defaultVoiceLanguage
+        );
+      }
+
+      function voiceLanguageLabel(language) {
+        const normalized = normalizeVoiceLanguage(language);
+        if (!normalized) {
+          return "";
+        }
+        return (
+          state.voiceLanguageDisplayNames[normalized] ||
+          normalized.charAt(0).toUpperCase() + normalized.slice(1)
+        );
+      }
+
+      function getCloneLanguageValue() {
+        return cloneLanguage ? normalizeVoiceLanguage(cloneLanguage.value) : "";
+      }
+
+      function setCloneLanguageValue(value) {
+        if (!cloneLanguage) {
+          return;
+        }
+        const languages = state.voiceLanguages.length
+          ? state.voiceLanguages
+          : [state.defaultVoiceLanguage];
+        cloneLanguage.innerHTML = "";
+        languages.forEach((language) => {
+          const option = document.createElement("option");
+          option.value = language;
+          option.textContent = voiceLanguageLabel(language);
+          cloneLanguage.appendChild(option);
+        });
+        const desired = normalizeVoiceLanguage(value);
+        cloneLanguage.value = languages.includes(desired)
+          ? desired
+          : languages[0];
       }
 
       function getCloneGenderValue() {
@@ -3592,6 +3674,13 @@
           return false;
         }
         return state.localVoiceValues.includes(value);
+      }
+
+      function isVisibleVoice(value) {
+        if (!value) {
+          return false;
+        }
+        return state.visibleVoiceValues.includes(value);
       }
 
       function selectedLocalVoice() {
@@ -3730,6 +3819,10 @@
         if (!value) {
           return "";
         }
+        const metadataLabel = state.voiceDisplayNameMap[value];
+        if (metadataLabel) {
+          return metadataLabel;
+        }
         const match = state.voiceOptions.find((entry) => entry.value === value);
         if (match && match.label) {
           return displayVoiceLabel(match);
@@ -3773,7 +3866,10 @@
         group.className = "voice-group";
         const title = document.createElement("div");
         title.className = "voice-group-title";
-        title.textContent = "Local voices";
+        const languageLabel = voiceLanguageLabel(activeVoiceLanguage());
+        title.textContent = languageLabel
+          ? `Local voices - ${languageLabel}`
+          : "Local voices";
         const row = document.createElement("div");
         row.className = "local-voice-row";
         const buckets = [
@@ -3805,7 +3901,10 @@
         if (!hasLocal) {
           const empty = document.createElement("div");
           empty.className = "voice-empty";
-          empty.textContent = "No local voices.";
+          const languageLabel = voiceLanguageLabel(activeVoiceLanguage());
+          empty.textContent = languageLabel
+            ? `No ${languageLabel} voices.`
+            : "No local voices.";
           row.appendChild(empty);
         }
         row.appendChild(createLocalVoiceActionButton());
@@ -3817,17 +3916,29 @@
       async function loadVoices() {
         try {
           const data = await fetchJson("/api/voices");
-          const local = Array.isArray(data.local) ? data.local : [];
+          const allLocal = Array.isArray(data.local) ? data.local : [];
           const builtin = Array.isArray(data.builtin) ? data.builtin : [];
           const visibleBuiltin = state.showBuiltinVoices ? builtin : [];
           const defaultVoice = data.default || "";
+          state.voiceLanguages = Array.isArray(data.languages)
+            ? data.languages.map(normalizeVoiceLanguage).filter(Boolean)
+            : [];
+          state.voiceLanguageDisplayNames =
+            data.language_display_names &&
+            typeof data.language_display_names === "object"
+              ? data.language_display_names
+              : {};
+          state.defaultVoiceLanguage =
+            normalizeVoiceLanguage(data.default_language) ||
+            state.defaultVoiceLanguage;
 
-          state.localVoiceValues = local
+          state.localVoiceValues = allLocal
             .map((item) => item.value)
             .filter((value) => typeof value === "string" && value);
           const voiceGenderMap = {};
+          const voiceLanguageMap = {};
           const voiceDisplayNameMap = {};
-          local.forEach((item) => {
+          allLocal.forEach((item) => {
             const value = typeof item.value === "string" ? item.value : "";
             if (!value) {
               return;
@@ -3835,6 +3946,10 @@
             const gender = normalizeVoiceGender(item.gender);
             if (gender) {
               voiceGenderMap[value] = gender;
+            }
+            const language = normalizeVoiceLanguage(item.language);
+            if (language) {
+              voiceLanguageMap[value] = language;
             }
             if (
               typeof item.display_name === "string" &&
@@ -3844,9 +3959,20 @@
             }
           });
           state.voiceGenderMap = voiceGenderMap;
+          state.voiceLanguageMap = voiceLanguageMap;
           state.voiceDisplayNameMap = voiceDisplayNameMap;
 
+          // The model language doubles as a voice filter: a German book only
+          // offers German voice prompts.
+          const activeLanguage = activeVoiceLanguage();
+          const local = allLocal.filter(
+            (item) => voiceLanguageOf(item) === activeLanguage
+          );
+
           state.voiceOptions = [...local, ...builtin];
+          state.visibleVoiceValues = state.voiceOptions
+            .map((item) => item.value)
+            .filter((value) => typeof value === "string" && value);
           voiceGroup.innerHTML = "";
           localVoiceActionButton = null;
           renderLocalVoiceGroups(local);
@@ -3873,8 +3999,9 @@
               selected = null;
             }
           }
+          const previousDefault = state.voiceMap.default;
           setSelectedVoice(selected, false);
-          if (state.advancedMode && state.voiceMap.default !== selected) {
+          if (state.advancedMode && previousDefault !== selected) {
             state.voiceMap.default = selected;
             scheduleVoiceMapSave();
           }
@@ -3997,6 +4124,7 @@
           language: patch.language ?? state.book.model_config?.language ?? null,
           layers: patch.layers ?? state.book.model_config?.layers ?? null,
         };
+        const previousLanguage = activeVoiceLanguage();
         try {
           const data = await fetchJson(
             `/api/books/${encodeURIComponent(state.book.id)}/model-config`,
@@ -4023,6 +4151,10 @@
             }
           }
           renderModelConfig();
+          // The language picker doubles as the voice filter.
+          if (activeVoiceLanguage() !== previousLanguage) {
+            await loadVoices();
+          }
           return true;
         } catch (err) {
           console.warn("Failed to save model config.", err);
@@ -4089,7 +4221,9 @@
           [...state.advancedSelection].filter((id) => chapterIds.has(id))
         );
         const defaultLabel = voiceLabelFromValue(state.voiceMap.default || "");
-        buildVoiceOptions(advancedBulkVoice, defaultLabel);
+        const bulkValue = advancedBulkVoice.value || "default";
+        buildVoiceOptions(advancedBulkVoice, defaultLabel, bulkValue);
+        advancedBulkVoice.value = bulkValue;
         if (!advancedBulkVoice.value) {
           advancedBulkVoice.value = "default";
         }
@@ -4118,10 +4252,10 @@
 
           const select = document.createElement("select");
           select.className = "advanced-select";
-          buildVoiceOptions(select, defaultLabel);
           const override = state.voiceMap.chapters
             ? state.voiceMap.chapters[chapterId]
             : null;
+          buildVoiceOptions(select, defaultLabel, override || "default");
           select.value = override || "default";
           select.addEventListener("change", () => {
             updateChapterVoice(chapterId, select.value);
@@ -4135,7 +4269,7 @@
         updateAdvancedSelectionStats();
       }
 
-      function buildVoiceOptions(select, defaultLabel) {
+      function buildVoiceOptions(select, defaultLabel, currentValue = "") {
         select.innerHTML = "";
         const defaultOption = document.createElement("option");
         defaultOption.value = "default";
@@ -4188,6 +4322,24 @@
         appendOptionGroup("Male local voices", buckets.male);
         appendOptionGroup("Unspecified local voices", buckets.unspecified);
         appendOptionGroup("Built-in voices", buckets.builtin);
+
+        // Keep an existing assignment selectable even when its voice belongs to
+        // another language than the one the model config filters on.
+        const current = typeof currentValue === "string" ? currentValue : "";
+        if (current && current !== "default") {
+          const known = Array.from(select.options).some(
+            (option) => option.value === current
+          );
+          if (!known) {
+            const otherLabel = voiceLanguageLabel(
+              state.voiceLanguageMap[current] || ""
+            );
+            appendOptionGroup(
+              otherLabel ? `${otherLabel} local voices` : "Other local voices",
+              [{ value: current, label: voiceLabelFromValue(current) || current }]
+            );
+          }
+        }
       }
 
       function updateChapterVoice(chapterId, voiceValue) {
@@ -5608,6 +5760,9 @@
           cloneBuiltinToggle.disabled = busy;
         }
         setCloneGenderDisabled(busy);
+        if (cloneLanguage) {
+          cloneLanguage.disabled = busy;
+        }
         if (clonePreviewBtn) {
           clonePreviewBtn.disabled = busy;
         }
@@ -5685,8 +5840,12 @@
         }
         if (mode === "edit" && selectedForEdit) {
           setCloneGenderValue(state.voiceGenderMap[selectedForEdit] || "");
+          setCloneLanguageValue(
+            state.voiceLanguageMap[selectedForEdit] || activeVoiceLanguage()
+          );
         } else {
           setCloneGenderValue("");
+          setCloneLanguageValue(activeVoiceLanguage());
         }
         state.cloneNameDirty = false;
         updateCloneBuiltinToggleLabel();
@@ -5725,6 +5884,7 @@
         const duration = cloneDuration ? cloneDuration.value.trim() : "";
         const name = cloneName ? cloneName.value.trim() : "";
         const gender = getCloneGenderValue();
+        const language = getCloneLanguageValue();
         if (!source) {
           setCloneStatus("Source is required.", "error");
           if (cloneSource) {
@@ -5744,11 +5904,19 @@
           focusCloneGender();
           return null;
         }
+        if (!language) {
+          setCloneStatus("Select a voice language.", "error");
+          if (cloneLanguage) {
+            cloneLanguage.focus();
+          }
+          return null;
+        }
         const payload = {
           source,
           start: start || "0",
           duration: duration || "12",
           gender,
+          language,
         };
         if (name) {
           payload.name = name;
@@ -5802,10 +5970,18 @@
           return;
         }
         const gender = getCloneGenderValue();
+        const language = getCloneLanguageValue();
         const voiceName = cloneName ? cloneName.value.trim() : "";
         if (!gender) {
           setCloneStatus("Select Male or Female.", "error");
           focusCloneGender();
+          return;
+        }
+        if (!language) {
+          setCloneStatus("Select a voice language.", "error");
+          if (cloneLanguage) {
+            cloneLanguage.focus();
+          }
           return;
         }
         if (!voiceName) {
@@ -5824,13 +6000,16 @@
             body: JSON.stringify({
               voice: voiceValue,
               gender,
+              language,
               name: voiceName,
             }),
           });
           await loadVoices();
           const nextVoice =
             data && typeof data.voice === "string" ? data.voice : voiceValue;
-          setSelectedVoice(nextVoice);
+          if (isVisibleVoice(nextVoice)) {
+            setSelectedVoice(nextVoice);
+          }
           setStatus("Voice metadata updated.");
           closeCloneModal();
         } catch (err) {
@@ -5891,7 +6070,9 @@
             });
             await loadVoices();
             if (data && data.voice && data.voice.value) {
-              setSelectedVoice(data.voice.value);
+              if (isVisibleVoice(data.voice.value)) {
+                setSelectedVoice(data.voice.value);
+              }
               const label = voiceLabelFromValue(data.voice.value) || data.voice.label;
               setStatus(`Saved voice: ${label}.`);
             } else {
@@ -6120,6 +6301,11 @@
         if (!state.book) {
           return;
         }
+        const missingVoice = missingVoiceMessage();
+        if (missingVoice) {
+          setStatus(missingVoice);
+          return;
+        }
         saveSettings();
         if (state.advancedMode) {
           const saved = await saveVoiceMap();
@@ -6245,6 +6431,11 @@
         }
         if (state.synthRunning) {
           setStatus("Stop TTS before sampling.");
+          return;
+        }
+        const missingVoice = missingVoiceMessage();
+        if (missingVoice) {
+          setStatus(missingVoice);
           return;
         }
         saveSettings();

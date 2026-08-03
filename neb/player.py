@@ -68,6 +68,48 @@ def _normalize_voice_gender(value: object) -> Optional[str]:
     return raw
 
 
+def _normalize_voice_language(value: object) -> Optional[str]:
+    """Map a raw voice language tag to a pocket-tts language name.
+
+    Empty/missing stays None (untagged); unsupported raises ValueError.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    try:
+        return language_util.normalize_language_tag(raw)
+    except language_util.UnsupportedLanguageError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _safe_voice_gender(value: object) -> Optional[str]:
+    try:
+        return _normalize_voice_gender(value)
+    except ValueError:
+        return None
+
+
+def _safe_voice_language(value: object) -> Optional[str]:
+    try:
+        return _normalize_voice_language(value)
+    except ValueError:
+        return None
+
+
+def _voice_metadata_entry(
+    gender: Optional[str], language: Optional[str]
+) -> dict[str, str]:
+    """Build a voices/metadata.json entry, omitting untagged fields."""
+    entry: dict[str, str] = {}
+    if gender:
+        entry["gender"] = gender
+    if language:
+        entry["language"] = language
+    return entry
+
+
 def _normalize_voice_display_name(value: object) -> Optional[str]:
     if value is None:
         return None
@@ -116,19 +158,16 @@ def _load_voice_metadata(repo_root: Path) -> dict[str, dict[str, str]]:
         except ValueError:
             continue
         gender: Optional[str] = None
+        language: Optional[str] = None
         if isinstance(value, dict):
-            try:
-                gender = _normalize_voice_gender(value.get("gender"))
-            except ValueError:
-                gender = None
+            gender = _safe_voice_gender(value.get("gender"))
+            language = _safe_voice_language(value.get("language"))
         elif isinstance(value, str):
-            try:
-                gender = _normalize_voice_gender(value)
-            except ValueError:
-                gender = None
-        if not gender:
+            gender = _safe_voice_gender(value)
+        entry = _voice_metadata_entry(gender, language)
+        if not entry:
             continue
-        cleaned[rel_key] = {"gender": gender}
+        cleaned[rel_key] = entry
     return cleaned
 
 
@@ -1435,11 +1474,13 @@ class VoiceCloneSavePayload(BaseModel):
     name: Optional[str] = None
     overwrite: bool = False
     gender: Optional[str] = None
+    language: Optional[str] = None
 
 
 class VoiceMetadataPayload(BaseModel):
     voice: str
     gender: Optional[str] = None
+    language: Optional[str] = None
     name: Optional[str] = None
 
 
@@ -1748,9 +1789,26 @@ def create_app(root_dir: Path) -> FastAPI:
                     gender = metadata.get("gender")
                     if isinstance(gender, str) and gender in _VOICE_GENDERS:
                         entry["gender"] = gender
+                    language = metadata.get("language")
+                    if (
+                        isinstance(language, str)
+                        and language in language_util.POCKET_TTS_LANGUAGES
+                    ):
+                        entry["language"] = language
                 local.append(entry)
         # Built-in (pocket-tts hosted) voices were removed: cloning is wav-only.
-        return _no_store({"local": local, "default": DEFAULT_VOICE})
+        languages = sorted(language_util.POCKET_TTS_LANGUAGES)
+        return _no_store(
+            {
+                "local": local,
+                "default": DEFAULT_VOICE,
+                "languages": languages,
+                "language_display_names": {
+                    name: language_util.display_name(name) for name in languages
+                },
+                "default_language": language_util.DEFAULT_LANGUAGE,
+            }
+        )
 
     @app.post("/api/voices/metadata")
     def set_voice_metadata(payload: VoiceMetadataPayload) -> JSONResponse:
@@ -1765,6 +1823,7 @@ def create_app(root_dir: Path) -> FastAPI:
         metadata = _load_voice_metadata(repo_root)
         fields_set = _payload_fields_set(payload)
         has_gender = "gender" in fields_set
+        has_language = "language" in fields_set
         has_name = "name" in fields_set
 
         next_voice_value = voice_value
@@ -1806,11 +1865,20 @@ def create_app(root_dir: Path) -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
-            raw_gender = existing.get("gender") if isinstance(existing, dict) else None
-            gender = raw_gender if isinstance(raw_gender, str) and raw_gender in _VOICE_GENDERS else None
+            gender = _safe_voice_gender(existing.get("gender"))
 
-        if gender:
-            metadata[next_voice_value] = {"gender": gender}
+        language: Optional[str]
+        if has_language:
+            try:
+                language = _normalize_voice_language(payload.language)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            language = _safe_voice_language(existing.get("language"))
+
+        entry = _voice_metadata_entry(gender, language)
+        if entry:
+            metadata[next_voice_value] = entry
         else:
             metadata.pop(next_voice_value, None)
         _save_voice_metadata(repo_root, metadata)
@@ -1823,6 +1891,7 @@ def create_app(root_dir: Path) -> FastAPI:
                 "status": "saved",
                 "voice": next_voice_value,
                 "gender": gender,
+                "language": language,
                 "name": display_name,
             }
         )
@@ -1914,6 +1983,7 @@ def create_app(root_dir: Path) -> FastAPI:
             start = _parse_clone_time(payload.start, "start", allow_zero=True)
             duration = _parse_clone_time(payload.duration, "duration", allow_zero=False)
             gender = _normalize_voice_gender(payload.gender)
+            language = _normalize_voice_language(payload.language)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1954,7 +2024,8 @@ def create_app(root_dir: Path) -> FastAPI:
 
         fields_set = _payload_fields_set(payload)
         has_gender = "gender" in fields_set
-        if has_gender:
+        has_language = "language" in fields_set
+        if has_gender or has_language:
             metadata = _load_voice_metadata(repo_root)
             existing = (
                 metadata.get(value)
@@ -1962,17 +2033,16 @@ def create_app(root_dir: Path) -> FastAPI:
                 else {}
             )
             next_gender = (
-                gender
-                if has_gender
-                else (
-                    existing.get("gender")
-                    if isinstance(existing.get("gender"), str)
-                    and existing.get("gender") in _VOICE_GENDERS
-                    else None
-                )
+                gender if has_gender else _safe_voice_gender(existing.get("gender"))
             )
-            if next_gender:
-                metadata[value] = {"gender": next_gender}
+            next_language = (
+                language
+                if has_language
+                else _safe_voice_language(existing.get("language"))
+            )
+            entry = _voice_metadata_entry(next_gender, next_language)
+            if entry:
+                metadata[value] = entry
             else:
                 metadata.pop(value, None)
             _save_voice_metadata(repo_root, metadata)
@@ -1983,7 +2053,8 @@ def create_app(root_dir: Path) -> FastAPI:
                 "voice": {"label": display_name, "value": value},
                 "overwrote": replaced,
                 "used_preview": can_reuse_preview,
-                "gender": gender if payload.gender is not None else None,
+                "gender": gender,
+                "language": language,
                 "display_name": display_name,
             }
         )

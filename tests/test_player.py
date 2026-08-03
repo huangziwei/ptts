@@ -117,6 +117,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
             "duration": "3.5",
             "name": "NARRATOR",
             "gender": "female",
+            "language": "german",
         },
     )
     assert save.status_code == 200
@@ -124,6 +125,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
     assert save_payload["status"] == "saved"
     assert save_payload["used_preview"] is True
     assert save_payload["gender"] == "female"
+    assert save_payload["language"] == "german"
     assert save_payload["display_name"] == "Narrator"
     assert save_payload["voice"] == {"label": "Narrator", "value": "voices/narrator.wav"}
     assert len(calls) == 1
@@ -133,6 +135,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
         item for item in voices_payload["local"] if item["value"] == "voices/narrator.wav"
     )
     assert local_entry["gender"] == "female"
+    assert local_entry["language"] == "german"
     assert local_entry["label"] == "Narrator"
 
     conflict = client.post(
@@ -220,10 +223,16 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
 
     save = client.post(
         "/api/voices/metadata",
-        json={"voice": "voices/sample.wav", "gender": "male", "name": "SamplePrime"},
+        json={
+            "voice": "voices/sample.wav",
+            "gender": "male",
+            "language": "german",
+            "name": "SamplePrime",
+        },
     )
     assert save.status_code == 200
     assert save.json()["gender"] == "male"
+    assert save.json()["language"] == "german"
     assert save.json()["name"] == "Sampleprime"
     assert save.json()["voice"] == "voices/sampleprime.wav"
     assert not voice_path.exists()
@@ -237,6 +246,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
         if item["value"] == "voices/sampleprime.wav"
     )
     assert local_entry["gender"] == "male"
+    assert local_entry["language"] == "german"
     assert local_entry["label"] == "Sampleprime"
 
     rename = client.post(
@@ -246,6 +256,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
     assert rename.status_code == 200
     rename_payload = rename.json()
     assert rename_payload["gender"] == "male"
+    assert rename_payload["language"] == "german"
     assert rename_payload["name"] == "Sample2"
     assert rename_payload["voice"] == "voices/sample2.wav"
     assert not (voices_dir / "sampleprime.wav").exists()
@@ -258,6 +269,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
         if item["value"] == "voices/sample2.wav"
     )
     assert local_entry_renamed["gender"] == "male"
+    assert local_entry_renamed["language"] == "german"
     assert local_entry_renamed["label"] == "Sample2"
 
     clear = client.post(
@@ -266,6 +278,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
     )
     assert clear.status_code == 200
     assert clear.json()["gender"] is None
+    assert clear.json()["language"] == "german"
     assert clear.json()["name"] == "Sample2"
     assert clear.json()["voice"] == "voices/sample2.wav"
 
@@ -276,7 +289,18 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
         if item["value"] == "voices/sample2.wav"
     )
     assert "gender" not in local_entry_after
+    assert local_entry_after["language"] == "german"
     assert local_entry_after["label"] == "Sample2"
+
+    clear_language = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample2.wav", "language": None},
+    )
+    assert clear_language.status_code == 200
+    assert clear_language.json()["language"] is None
+
+    metadata = player._load_json(repo_root / "voices" / "metadata.json")
+    assert "voices/sample2.wav" not in metadata
 
 
 def test_voice_metadata_rejects_invalid_gender(tmp_path: Path) -> None:
@@ -294,6 +318,59 @@ def test_voice_metadata_rejects_invalid_gender(tmp_path: Path) -> None:
     )
     assert response.status_code == 400
     assert "Gender must be" in response.json()["detail"]
+
+
+def test_voice_metadata_normalizes_and_rejects_language(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    (voices_dir / "sample.wav").write_bytes(b"RIFFFAKEWAVE")
+
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    iso = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "language": "de-DE"},
+    )
+    assert iso.status_code == 200
+    assert iso.json()["language"] == "german"
+
+    rejected = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "language": "klingon"},
+    )
+    assert rejected.status_code == 400
+    assert "not supported by pocket-tts" in rejected.json()["detail"]
+
+
+def test_voices_listing_exposes_language_options(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    (voices_dir / "hannah.wav").write_bytes(b"RIFFFAKEWAVE")
+    (voices_dir / "kate.wav").write_bytes(b"RIFFFAKEWAVE")
+
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+    tagged = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/hannah.wav", "gender": "female", "language": "german"},
+    )
+    assert tagged.status_code == 200
+
+    payload = client.get("/api/voices").json()
+    assert payload["default_language"] == "english"
+    assert payload["languages"] == sorted(player.language_util.POCKET_TTS_LANGUAGES)
+    assert payload["language_display_names"]["german"] == "German"
+
+    hannah = next(
+        item for item in payload["local"] if item["value"] == "voices/hannah.wav"
+    )
+    assert hannah["language"] == "german"
+    # Untagged voices stay untagged; the player treats them as the default language.
+    kate = next(item for item in payload["local"] if item["value"] == "voices/kate.wav")
+    assert "language" not in kate
 
 
 def test_voice_delete_removes_file_and_metadata(tmp_path: Path) -> None:
