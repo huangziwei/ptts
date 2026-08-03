@@ -1,20 +1,12 @@
-# neb: Narrate English Books with [Pocket-TTS](https://huggingface.co/kyutai/pocket-tts)
+# neb: Narrate English Books
 
 ![screenshot](.github/screenshot/player.png)
 
 ## Prerequisites
 
 ```bash
-git clone https://github.com/huangziwei/neb
-cd ~/neb
-
-# Install project dependencies into .venv (required for `neb` CLI)
+git clone https://github.com/huangziwei/neb && cd ~/neb
 uv sync
-
-## To use voice cloning, you need to accept the terms via browser at https://huggingface.co/kyutai/pocket-tts
-## Then you need to save the access token with correct permissions (I ticked everything in Repositories and Inference)
-## This step can be skipped if you don't need voice cloning
-# uvx hf auth login
 ```
 
 ## TTS a book
@@ -55,34 +47,11 @@ uv run neb sanitize \
 
 #### 3) Synthesize audio (TTS)
 ```bash
-uv run --with pocket-tts neb synth \
+uv run neb synth \
   --book out/some-book \
   --max-chars 400 \
   --pad-ms 300
 ```
-
-By default, `neb synth` uses the built-in voice `alba`. To choose a built-in voice
-explicitly (or use a cloned wav), pass `--voice`:
-```bash
-uv run --with pocket-tts neb synth --book out/some-book --voice alba
-uv run --with pocket-tts neb synth --book out/some-book --voice voices/ray.wav
-```
-
-Optional: add per-book pronunciation overrides at
-`out/some-book/reading-overrides.json`:
-
-```json
-{
-  "global": [
-    { "base": "sutta", "reading": "soot-ta" },
-    { "base": "sati", "reading": "sah-tee" },
-    { "base": "satipatthana", "reading": "sah-tee-pat-ta-na" }
-  ]
-}
-```
-
-`base` uses whole-word matching by default (case-insensitive). Chapter-specific
-overrides are also supported under `"chapters": { "<chapter-id>": { "replacements": [...] } }`.
 
 #### 4) Merge to M4B
 ```bash

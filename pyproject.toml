@@ -10,13 +10,34 @@ dependencies = [
   "fastapi>=0.110",
   "jinja2>=3.1",
   "lxml>=5.0",
-  "pocket-tts",
+  # Each platform installs only the TTS engine it defaults to (see neb/tts.py).
+  # Apple Silicon: torch rides Accelerate/AMX and outruns the portable maneko
+  # build (benchmarked 2026-06: 12.6x vs 7.0x realtime on M4 Pro), and skipping
+  # maneko also drops the Rust-toolchain requirement there. Everywhere else
+  # maneko is the fast native path. The non-default engine is an extra below.
+  "maneko; sys_platform != 'darwin' or platform_machine != 'arm64'",
+  "numpy>=2.1",
+  "pocket-tts; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "torch; sys_platform == 'darwin' and platform_machine == 'arm64'",
   "python-multipart>=0.0.9",
   "pytest>=7.4",
   "rich>=13.7",
+  "uvicorn>=0.27",
+]
+
+[project.optional-dependencies]
+# pocket-tts/torch backend for platforms where it is not installed by default
+# (anything that is not an Apple Silicon Mac); select it with NEB_TTS_BACKEND=torch.
+torch = [
+  "pocket-tts",
   "torch==2.9.1+cpu; sys_platform != 'darwin'",
   "torch; sys_platform == 'darwin'",
-  "uvicorn>=0.27",
+]
+# maneko on Apple Silicon (e.g. for engine development or A/B runs); select it
+# with NEB_TTS_BACKEND=maneko. Note the default build is the portable CPU one —
+# export MATURIN_PEP517_ARGS="--features accelerate,metal" first for the fast build.
+maneko = [
+  "maneko",
 ]
 
 [project.scripts]
@@ -32,6 +53,9 @@ packages = ["neb"]
 [tool.uv]
 
 [tool.uv.sources]
+# maneko is a native Rust/candle wheel built via maturin — installing it needs a
+# Rust toolchain. There is no PyPI release; it is pulled and built from GitHub.
+maneko = { git = "https://github.com/huangziwei/maneko.git", subdirectory = "crates/interfaces/python" }
 torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
 
 [[tool.uv.index]]

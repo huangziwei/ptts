@@ -117,6 +117,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
             "duration": "3.5",
             "name": "NARRATOR",
             "gender": "female",
+            "language": "german",
         },
     )
     assert save.status_code == 200
@@ -124,6 +125,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
     assert save_payload["status"] == "saved"
     assert save_payload["used_preview"] is True
     assert save_payload["gender"] == "female"
+    assert save_payload["language"] == "german"
     assert save_payload["display_name"] == "Narrator"
     assert save_payload["voice"] == {"label": "Narrator", "value": "voices/narrator.wav"}
     assert len(calls) == 1
@@ -133,6 +135,7 @@ def test_clone_preview_and_save_reuses_preview(tmp_path: Path, monkeypatch: pyte
         item for item in voices_payload["local"] if item["value"] == "voices/narrator.wav"
     )
     assert local_entry["gender"] == "female"
+    assert local_entry["language"] == "german"
     assert local_entry["label"] == "Narrator"
 
     conflict = client.post(
@@ -220,10 +223,16 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
 
     save = client.post(
         "/api/voices/metadata",
-        json={"voice": "voices/sample.wav", "gender": "male", "name": "SamplePrime"},
+        json={
+            "voice": "voices/sample.wav",
+            "gender": "male",
+            "language": "german",
+            "name": "SamplePrime",
+        },
     )
     assert save.status_code == 200
     assert save.json()["gender"] == "male"
+    assert save.json()["language"] == "german"
     assert save.json()["name"] == "Sampleprime"
     assert save.json()["voice"] == "voices/sampleprime.wav"
     assert not voice_path.exists()
@@ -237,6 +246,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
         if item["value"] == "voices/sampleprime.wav"
     )
     assert local_entry["gender"] == "male"
+    assert local_entry["language"] == "german"
     assert local_entry["label"] == "Sampleprime"
 
     rename = client.post(
@@ -246,6 +256,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
     assert rename.status_code == 200
     rename_payload = rename.json()
     assert rename_payload["gender"] == "male"
+    assert rename_payload["language"] == "german"
     assert rename_payload["name"] == "Sample2"
     assert rename_payload["voice"] == "voices/sample2.wav"
     assert not (voices_dir / "sampleprime.wav").exists()
@@ -258,6 +269,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
         if item["value"] == "voices/sample2.wav"
     )
     assert local_entry_renamed["gender"] == "male"
+    assert local_entry_renamed["language"] == "german"
     assert local_entry_renamed["label"] == "Sample2"
 
     clear = client.post(
@@ -266,6 +278,7 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
     )
     assert clear.status_code == 200
     assert clear.json()["gender"] is None
+    assert clear.json()["language"] == "german"
     assert clear.json()["name"] == "Sample2"
     assert clear.json()["voice"] == "voices/sample2.wav"
 
@@ -276,7 +289,18 @@ def test_voice_metadata_update_and_clear(tmp_path: Path) -> None:
         if item["value"] == "voices/sample2.wav"
     )
     assert "gender" not in local_entry_after
+    assert local_entry_after["language"] == "german"
     assert local_entry_after["label"] == "Sample2"
+
+    clear_language = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample2.wav", "language": None},
+    )
+    assert clear_language.status_code == 200
+    assert clear_language.json()["language"] is None
+
+    metadata = player._load_json(repo_root / "voices" / "metadata.json")
+    assert "voices/sample2.wav" not in metadata
 
 
 def test_voice_metadata_rejects_invalid_gender(tmp_path: Path) -> None:
@@ -294,6 +318,59 @@ def test_voice_metadata_rejects_invalid_gender(tmp_path: Path) -> None:
     )
     assert response.status_code == 400
     assert "Gender must be" in response.json()["detail"]
+
+
+def test_voice_metadata_normalizes_and_rejects_language(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    (voices_dir / "sample.wav").write_bytes(b"RIFFFAKEWAVE")
+
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    iso = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "language": "de-DE"},
+    )
+    assert iso.status_code == 200
+    assert iso.json()["language"] == "german"
+
+    rejected = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/sample.wav", "language": "klingon"},
+    )
+    assert rejected.status_code == 400
+    assert "not supported by pocket-tts" in rejected.json()["detail"]
+
+
+def test_voices_listing_exposes_language_options(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    voices_dir = repo_root / "voices"
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    (voices_dir / "hannah.wav").write_bytes(b"RIFFFAKEWAVE")
+    (voices_dir / "kate.wav").write_bytes(b"RIFFFAKEWAVE")
+
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+    tagged = client.post(
+        "/api/voices/metadata",
+        json={"voice": "voices/hannah.wav", "gender": "female", "language": "german"},
+    )
+    assert tagged.status_code == 200
+
+    payload = client.get("/api/voices").json()
+    assert payload["default_language"] == "english"
+    assert payload["languages"] == sorted(player.language_util.POCKET_TTS_LANGUAGES)
+    assert payload["language_display_names"]["german"] == "German"
+
+    hannah = next(
+        item for item in payload["local"] if item["value"] == "voices/hannah.wav"
+    )
+    assert hannah["language"] == "german"
+    # Untagged voices stay untagged; the player treats them as the default language.
+    kate = next(item for item in payload["local"] if item["value"] == "voices/kate.wav")
+    assert "language" not in kate
 
 
 def test_voice_delete_removes_file_and_metadata(tmp_path: Path) -> None:
@@ -353,7 +430,7 @@ def test_book_details_includes_pause_multipliers(tmp_path: Path) -> None:
     tts_dir = book_dir / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "voice": "alba",
+        "voice": "voices/ray.wav",
         "pad_ms": 300,
         "chapters": [
             {
@@ -423,3 +500,195 @@ def test_reading_overrides_save_and_get(tmp_path: Path) -> None:
             "case_sensitive": False,
         },
     ]
+
+
+def _make_book_with_language(root_dir: Path, book_id: str, lang_tag: str) -> Path:
+    book_dir = root_dir / book_id
+    (book_dir / "clean").mkdir(parents=True, exist_ok=True)
+    (book_dir / "clean" / "toc.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"title": "Book", "language": lang_tag},
+                "chapters": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return book_dir
+
+
+def test_model_config_defaults_from_toc_language(tmp_path: Path) -> None:
+    _repo_root, root_dir = _make_repo(tmp_path)
+    book_dir = _make_book_with_language(root_dir, "book-de", "de-DE")
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    resp = client.get("/api/books/book-de/model-config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["config"]["language"] == "german"
+    assert body["config"]["layers"] == 24
+    assert body["options"]["layers"] == [6, 24]
+    assert "german" in body["options"]["languages"]
+    assert body["options"]["language_display_names"]["german"] == "German"
+    assert not (book_dir / "model-config.json").exists()
+
+
+def test_model_config_persists_overrides(tmp_path: Path) -> None:
+    _repo_root, root_dir = _make_repo(tmp_path)
+    book_dir = _make_book_with_language(root_dir, "book-de", "de-DE")
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/books/book-de/model-config",
+        json={"language": "german", "layers": 6},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["config"]["language"] == "german"
+    assert body["config"]["layers"] == 6
+
+    stored = json.loads((book_dir / "model-config.json").read_text(encoding="utf-8"))
+    assert stored == {"language": "german", "layers": 6}
+
+    reload = client.get("/api/books/book-de/model-config")
+    assert reload.json()["config"] == body["config"]
+
+
+def test_model_config_coerces_unsupported_layers(tmp_path: Path) -> None:
+    _repo_root, root_dir = _make_repo(tmp_path)
+    _make_book_with_language(root_dir, "book-en", "en")
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/books/book-en/model-config",
+        json={"layers": 24},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["config"]["layers"] == 6
+
+
+def test_model_config_hides_single_layer_for_french(tmp_path: Path) -> None:
+    _repo_root, root_dir = _make_repo(tmp_path)
+    _make_book_with_language(root_dir, "book-fr", "fr-CA")
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    resp = client.get("/api/books/book-fr/model-config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["config"]["language"] == "french"
+    assert body["config"]["layers"] == 24
+    assert body["options"]["layers"] == [24]
+
+
+def test_model_config_clears_cache_when_config_differs(tmp_path: Path) -> None:
+    _repo_root, root_dir = _make_repo(tmp_path)
+    book_dir = _make_book_with_language(root_dir, "book-de", "de-DE")
+    tts_dir = book_dir / "tts"
+    seg_dir = tts_dir / "segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    (seg_dir / "dummy.wav").write_bytes(b"x")
+    manifest_path = tts_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "voice": "voices/ray.wav",
+                "language": "german",
+                "layers": 24,
+                "chapters": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/books/book-de/model-config",
+        json={"language": "german", "layers": 6},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cache_cleared"] is True
+    assert not seg_dir.exists()
+    assert not manifest_path.exists()
+
+
+def test_model_config_preserves_cache_when_unchanged(tmp_path: Path) -> None:
+    _repo_root, root_dir = _make_repo(tmp_path)
+    book_dir = _make_book_with_language(root_dir, "book-de", "de-DE")
+    tts_dir = book_dir / "tts"
+    seg_dir = tts_dir / "segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    (seg_dir / "dummy.wav").write_bytes(b"x")
+    manifest_path = tts_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "voice": "voices/ray.wav",
+                "language": "german",
+                "layers": 24,
+                "chapters": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = player.create_app(root_dir)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/books/book-de/model-config",
+        json={"language": "german", "layers": 24},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["cache_cleared"] is False
+    assert seg_dir.exists()
+    assert manifest_path.exists()
+
+
+def test_book_details_surfaces_model_config_and_manifest_model(tmp_path: Path) -> None:
+    repo_root, root_dir = _make_repo(tmp_path)
+    book_dir = _make_book_with_language(root_dir, "book-de", "de-DE")
+    tts_dir = book_dir / "tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "voice": "voices/ray.wav",
+        "pad_ms": 300,
+        "language": "german",
+        "layers": 24,
+        "chapters": [],
+    }
+    (tts_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
+
+    details = player._book_details(book_dir, repo_root)
+    book = details["book"]
+    assert book["language"] == "german"
+    assert book["language_display"] == "German"
+    assert book["model_config"]["language"] == "german"
+    assert book["model_config"]["layers"] == 24
+    assert book["manifest_model"] == {
+        "language": "german",
+        "layers": 24,
+    }
+    assert book["model_config_options"]["layers"] == [6, 24]
+
+
+def test_read_log_tail_returns_last_nonempty_line(tmp_path: Path) -> None:
+    log = tmp_path / "synth.log"
+    log.write_text(
+        "starting\nprogress 1\n\nValueError: voice cloning unsupported\n\n",
+        encoding="utf-8",
+    )
+    assert player._read_log_tail(log) == "ValueError: voice cloning unsupported"
+
+
+def test_read_log_tail_missing_file_and_long_logs(tmp_path: Path) -> None:
+    assert player._read_log_tail(tmp_path / "missing.log") == ""
+    log = tmp_path / "long.log"
+    log.write_text("x" * 20000 + "\nfinal line\n", encoding="utf-8")
+    assert player._read_log_tail(log) == "final line"

@@ -24,10 +24,12 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import epub as epub_util
+from . import language as language_util
 from . import sanitize
 from . import tts as tts_util
 from .text import guess_title_from_path, read_clean_text
-from .voice import BUILTIN_VOICES, DEFAULT_VOICE, resolve_voice_prompt
+from .text.common import READING_OVERRIDES_FILENAME, _load_reading_overrides
+from .voice import DEFAULT_VOICE, resolve_voice_prompt
 
 def _load_json(path: Path) -> dict:
     if not path.exists():
@@ -64,6 +66,48 @@ def _normalize_voice_gender(value: object) -> Optional[str]:
     if raw not in _VOICE_GENDERS:
         raise ValueError("Gender must be 'female' or 'male'.")
     return raw
+
+
+def _normalize_voice_language(value: object) -> Optional[str]:
+    """Map a raw voice language tag to a pocket-tts language name.
+
+    Empty/missing stays None (untagged); unsupported raises ValueError.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    try:
+        return language_util.normalize_language_tag(raw)
+    except language_util.UnsupportedLanguageError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _safe_voice_gender(value: object) -> Optional[str]:
+    try:
+        return _normalize_voice_gender(value)
+    except ValueError:
+        return None
+
+
+def _safe_voice_language(value: object) -> Optional[str]:
+    try:
+        return _normalize_voice_language(value)
+    except ValueError:
+        return None
+
+
+def _voice_metadata_entry(
+    gender: Optional[str], language: Optional[str]
+) -> dict[str, str]:
+    """Build a voices/metadata.json entry, omitting untagged fields."""
+    entry: dict[str, str] = {}
+    if gender:
+        entry["gender"] = gender
+    if language:
+        entry["language"] = language
+    return entry
 
 
 def _normalize_voice_display_name(value: object) -> Optional[str]:
@@ -114,19 +158,16 @@ def _load_voice_metadata(repo_root: Path) -> dict[str, dict[str, str]]:
         except ValueError:
             continue
         gender: Optional[str] = None
+        language: Optional[str] = None
         if isinstance(value, dict):
-            try:
-                gender = _normalize_voice_gender(value.get("gender"))
-            except ValueError:
-                gender = None
+            gender = _safe_voice_gender(value.get("gender"))
+            language = _safe_voice_language(value.get("language"))
         elif isinstance(value, str):
-            try:
-                gender = _normalize_voice_gender(value)
-            except ValueError:
-                gender = None
-        if not gender:
+            gender = _safe_voice_gender(value)
+        entry = _voice_metadata_entry(gender, language)
+        if not entry:
             continue
-        cleaned[rel_key] = {"gender": gender}
+        cleaned[rel_key] = entry
     return cleaned
 
 
@@ -531,6 +572,7 @@ def _book_summary(book_dir: Path) -> dict:
         and isinstance(furthest, int)
         and furthest >= total_chunks - 1
     )
+    language = language_util.resolve_language(metadata.get("language"))
     return {
         "id": book_dir.name,
         "title": metadata.get("title") or book_dir.name,
@@ -544,6 +586,8 @@ def _book_summary(book_dir: Path) -> dict:
         "chapter_count": len(chapters) if isinstance(chapters, list) else 0,
         "source_type": source_type,
         "source_origin": source_origin,
+        "language": language,
+        "language_display": language_util.display_name(language),
     }
 
 
@@ -594,6 +638,57 @@ def _default_book_voice(book_dir: Path, repo_root: Path) -> str:
 
 def _voice_map_path(book_dir: Path) -> Path:
     return book_dir / "voice-map.json"
+
+
+def _model_config_path(book_dir: Path) -> Path:
+    return book_dir / "model-config.json"
+
+
+def _sanitize_model_config(payload: dict, book_dir: Path) -> dict:
+    """Coerce a raw model-config payload into a valid (language, layers) pair."""
+    source_language = None
+    if isinstance(payload, dict):
+        source_language = payload.get("language")
+    if not source_language:
+        toc = _load_json(book_dir / "clean" / "toc.json")
+        metadata = toc.get("metadata", {}) if isinstance(toc, dict) else {}
+        source_language = metadata.get("language")
+    language = language_util.resolve_language(source_language)
+
+    raw_layers = payload.get("layers") if isinstance(payload, dict) else None
+    try:
+        layers_int = int(raw_layers) if raw_layers is not None else None
+    except (TypeError, ValueError):
+        layers_int = None
+    layers = language_util.resolve_layers(language, layers_int)
+
+    return {"language": language, "layers": layers}
+
+
+def _load_model_config(book_dir: Path) -> dict:
+    data = _load_json(_model_config_path(book_dir))
+    return _sanitize_model_config(
+        data if isinstance(data, dict) else {}, book_dir
+    )
+
+
+def _write_model_config(book_dir: Path, config: dict) -> dict:
+    sanitized = _sanitize_model_config(config, book_dir)
+    path = _model_config_path(book_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, sanitized)
+    return sanitized
+
+
+def _model_config_options(language: str) -> dict:
+    return {
+        "languages": sorted(language_util.POCKET_TTS_LANGUAGES),
+        "language_display_names": {
+            name: language_util.display_name(name)
+            for name in sorted(language_util.POCKET_TTS_LANGUAGES)
+        },
+        "layers": language_util.available_layers(language),
+    }
 
 
 def _sanitize_voice_map(payload: dict, repo_root: Path, fallback_default: str) -> dict:
@@ -719,6 +814,14 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
                 }
             )
 
+    model_config = _load_model_config(book_dir)
+    manifest_language = (
+        manifest.get("language") if isinstance(manifest, dict) else None
+    )
+    manifest_layers = (
+        manifest.get("layers") if isinstance(manifest, dict) else None
+    )
+    language = model_config["language"]
     return {
         "book": {
             "id": book_dir.name,
@@ -733,6 +836,14 @@ def _book_details(book_dir: Path, repo_root: Path) -> dict:
             "last_voice": last_voice,
             "source_type": source_type,
             "source_origin": source_origin,
+            "language": language,
+            "language_display": language_util.display_name(language),
+            "model_config": model_config,
+            "model_config_options": _model_config_options(language),
+            "manifest_model": {
+                "language": manifest_language,
+                "layers": manifest_layers,
+            },
         },
         "chapters": chapters,
         "audio_base": f"/audio/{book_dir.name}/tts/segments",
@@ -1187,6 +1298,22 @@ def _load_tts_status(book_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _read_log_tail(path: Path, max_chars: int = 400) -> str:
+    """Last non-empty line of a log, for surfacing subprocess failures."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 8192))
+            text = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return lines[-1][:max_chars]
+
+
 @dataclass
 class SynthJob:
     book_id: str
@@ -1282,6 +1409,11 @@ class VoiceMapPayload(BaseModel):
     chapters: dict = {}
 
 
+class ModelConfigPayload(BaseModel):
+    language: Optional[str] = None
+    layers: Optional[int] = None
+
+
 class ChapterAction(BaseModel):
     book_id: str
     title: str
@@ -1342,11 +1474,13 @@ class VoiceCloneSavePayload(BaseModel):
     name: Optional[str] = None
     overwrite: bool = False
     gender: Optional[str] = None
+    language: Optional[str] = None
 
 
 class VoiceMetadataPayload(BaseModel):
     voice: str
     gender: Optional[str] = None
+    language: Optional[str] = None
     name: Optional[str] = None
 
 
@@ -1370,8 +1504,7 @@ def create_app(root_dir: Path) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
-        context = {"request": request, "root_dir": str(root_dir)}
-        return templates.TemplateResponse("player.html", context)
+        return templates.TemplateResponse(request, "player.html", {"root_dir": str(root_dir)})
 
     @app.get("/api/books")
     def list_books() -> JSONResponse:
@@ -1453,6 +1586,62 @@ def create_app(root_dir: Path) -> FastAPI:
         path = _voice_map_path(book_dir)
         _atomic_write_json(path, data)
         return _no_store(data)
+
+    @app.get("/api/books/{book_id}/model-config")
+    def get_book_model_config(book_id: str) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        config = _load_model_config(book_dir)
+        return _no_store(
+            {
+                "config": config,
+                "options": _model_config_options(config["language"]),
+            }
+        )
+
+    @app.post("/api/books/{book_id}/model-config")
+    def set_book_model_config(
+        book_id: str, payload: ModelConfigPayload
+    ) -> JSONResponse:
+        book_dir = _resolve_book_dir(root_dir, book_id)
+        manifest_path = book_dir / "tts" / "manifest.json"
+        prior_manifest = _load_json(manifest_path) if manifest_path.exists() else {}
+        config = _write_model_config(book_dir, payload.dict())
+
+        cache_cleared = False
+        if isinstance(prior_manifest, dict) and prior_manifest:
+            prior = (
+                prior_manifest.get("language"),
+                prior_manifest.get("layers"),
+            )
+            current = (config["language"], config["layers"])
+            if any(v is not None for v in prior) and prior != current:
+                job = jobs.get(book_id)
+                if job and job.process.poll() is None:
+                    job.process.terminate()
+                    try:
+                        job.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        job.process.kill()
+                        job.process.wait(timeout=2)
+                    job.exit_code = job.process.returncode
+                    job.ended_at = time.time()
+                    if job.log_handle:
+                        job.log_handle.close()
+                        job.log_handle = None
+                seg_dir = book_dir / "tts" / "segments"
+                if seg_dir.exists():
+                    shutil.rmtree(seg_dir)
+                if manifest_path.exists():
+                    manifest_path.unlink()
+                cache_cleared = True
+
+        return _no_store(
+            {
+                "config": config,
+                "options": _model_config_options(config["language"]),
+                "cache_cleared": cache_cleared,
+            }
+        )
 
     @app.post("/api/books/delete")
     def delete_book(payload: DeleteBookRequest) -> JSONResponse:
@@ -1600,13 +1789,25 @@ def create_app(root_dir: Path) -> FastAPI:
                     gender = metadata.get("gender")
                     if isinstance(gender, str) and gender in _VOICE_GENDERS:
                         entry["gender"] = gender
+                    language = metadata.get("language")
+                    if (
+                        isinstance(language, str)
+                        and language in language_util.POCKET_TTS_LANGUAGES
+                    ):
+                        entry["language"] = language
                 local.append(entry)
-        builtin = [
-            {"label": name, "value": name}
-            for name in sorted(BUILTIN_VOICES.keys())
-        ]
+        # Built-in (pocket-tts hosted) voices were removed: cloning is wav-only.
+        languages = sorted(language_util.POCKET_TTS_LANGUAGES)
         return _no_store(
-            {"local": local, "builtin": builtin, "default": DEFAULT_VOICE}
+            {
+                "local": local,
+                "default": DEFAULT_VOICE,
+                "languages": languages,
+                "language_display_names": {
+                    name: language_util.display_name(name) for name in languages
+                },
+                "default_language": language_util.DEFAULT_LANGUAGE,
+            }
         )
 
     @app.post("/api/voices/metadata")
@@ -1622,6 +1823,7 @@ def create_app(root_dir: Path) -> FastAPI:
         metadata = _load_voice_metadata(repo_root)
         fields_set = _payload_fields_set(payload)
         has_gender = "gender" in fields_set
+        has_language = "language" in fields_set
         has_name = "name" in fields_set
 
         next_voice_value = voice_value
@@ -1663,11 +1865,20 @@ def create_app(root_dir: Path) -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
-            raw_gender = existing.get("gender") if isinstance(existing, dict) else None
-            gender = raw_gender if isinstance(raw_gender, str) and raw_gender in _VOICE_GENDERS else None
+            gender = _safe_voice_gender(existing.get("gender"))
 
-        if gender:
-            metadata[next_voice_value] = {"gender": gender}
+        language: Optional[str]
+        if has_language:
+            try:
+                language = _normalize_voice_language(payload.language)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            language = _safe_voice_language(existing.get("language"))
+
+        entry = _voice_metadata_entry(gender, language)
+        if entry:
+            metadata[next_voice_value] = entry
         else:
             metadata.pop(next_voice_value, None)
         _save_voice_metadata(repo_root, metadata)
@@ -1680,6 +1891,7 @@ def create_app(root_dir: Path) -> FastAPI:
                 "status": "saved",
                 "voice": next_voice_value,
                 "gender": gender,
+                "language": language,
                 "name": display_name,
             }
         )
@@ -1771,6 +1983,7 @@ def create_app(root_dir: Path) -> FastAPI:
             start = _parse_clone_time(payload.start, "start", allow_zero=True)
             duration = _parse_clone_time(payload.duration, "duration", allow_zero=False)
             gender = _normalize_voice_gender(payload.gender)
+            language = _normalize_voice_language(payload.language)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1811,7 +2024,8 @@ def create_app(root_dir: Path) -> FastAPI:
 
         fields_set = _payload_fields_set(payload)
         has_gender = "gender" in fields_set
-        if has_gender:
+        has_language = "language" in fields_set
+        if has_gender or has_language:
             metadata = _load_voice_metadata(repo_root)
             existing = (
                 metadata.get(value)
@@ -1819,17 +2033,16 @@ def create_app(root_dir: Path) -> FastAPI:
                 else {}
             )
             next_gender = (
-                gender
-                if has_gender
-                else (
-                    existing.get("gender")
-                    if isinstance(existing.get("gender"), str)
-                    and existing.get("gender") in _VOICE_GENDERS
-                    else None
-                )
+                gender if has_gender else _safe_voice_gender(existing.get("gender"))
             )
-            if next_gender:
-                metadata[value] = {"gender": next_gender}
+            next_language = (
+                language
+                if has_language
+                else _safe_voice_language(existing.get("language"))
+            )
+            entry = _voice_metadata_entry(next_gender, next_language)
+            if entry:
+                metadata[value] = entry
             else:
                 metadata.pop(value, None)
             _save_voice_metadata(repo_root, metadata)
@@ -1840,7 +2053,8 @@ def create_app(root_dir: Path) -> FastAPI:
                 "voice": {"label": display_name, "value": value},
                 "overwrote": replaced,
                 "used_preview": can_reuse_preview,
-                "gender": gender if payload.gender is not None else None,
+                "gender": gender,
+                "language": language,
                 "display_name": display_name,
             }
         )
@@ -2198,7 +2412,7 @@ def create_app(root_dir: Path) -> FastAPI:
     def reading_overrides_get(book_id: str) -> JSONResponse:
         book_dir = _resolve_book_dir(root_dir, book_id)
         try:
-            global_overrides, _ = tts_util._load_reading_overrides(book_dir)
+            global_overrides, _ = _load_reading_overrides(book_dir)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _no_store({"book_id": book_id, "overrides": global_overrides})
@@ -2218,7 +2432,7 @@ def create_app(root_dir: Path) -> FastAPI:
             )
 
         overrides = _normalize_reading_overrides(payload.overrides)
-        overrides_path = book_dir / tts_util.READING_OVERRIDES_FILENAME
+        overrides_path = book_dir / READING_OVERRIDES_FILENAME
         data: dict = {}
         if overrides_path.exists():
             try:
@@ -2307,6 +2521,16 @@ def create_app(root_dir: Path) -> FastAPI:
             except ValueError:
                 log_path = str(job.log_path)
 
+        failed = job is not None and job.exit_code not in (None, 0)
+        error_detail = ""
+        if failed:
+            if str(tts_status.get("stage") or "") == "error" and tts_status.get("detail"):
+                error_detail = str(tts_status["detail"])
+            else:
+                error_detail = _read_log_tail(job.log_path)
+            if not error_detail:
+                error_detail = f"TTS process exited with code {job.exit_code}."
+
         payload = {
             "book_id": book_id,
             "running": running,
@@ -2314,6 +2538,7 @@ def create_app(root_dir: Path) -> FastAPI:
             "progress": progress,
             "log_path": log_path,
             "stage": "idle",
+            "error": error_detail,
             "ffmpeg_status": ffmpeg_status,
             "ffmpeg_error": ffmpeg_error,
             "ffmpeg_log_path": ffmpeg_log,
@@ -2329,6 +2554,8 @@ def create_app(root_dir: Path) -> FastAPI:
                 payload["stage"] = "chunking"
             else:
                 payload["stage"] = "sampling" if mode == "sample" else "synthesizing"
+        elif failed:
+            payload["stage"] = "error"
         elif mode == "sample" and job and job.exit_code == 0:
             payload["stage"] = "sampled"
         elif progress and progress.get("total") and progress.get("done") >= progress.get("total"):
@@ -2379,11 +2606,10 @@ def create_app(root_dir: Path) -> FastAPI:
         log_path = tts_dir / "synth.log"
         log_handle = log_path.open("w", encoding="utf-8")
 
+        model_config = _load_model_config(book_dir)
         cmd = [
-            "uv",
-            "run",
-            "--with",
-            "pocket-tts",
+            sys.executable,
+            "-m",
             "neb",
             "synth",
             "--book",
@@ -2396,6 +2622,10 @@ def create_app(root_dir: Path) -> FastAPI:
             str(payload.pad_ms),
             "--chunk-mode",
             payload.chunk_mode,
+            "--language",
+            model_config["language"],
+            "--layers",
+            str(model_config["layers"]),
         ]
         if use_voice_map and voice_map_path and voice_map_path.exists():
             cmd += ["--voice-map", str(voice_map_path)]
@@ -2403,6 +2633,7 @@ def create_app(root_dir: Path) -> FastAPI:
             cmd.append("--rechunk")
 
         env = os.environ.copy()
+        env.setdefault("HF_HOME", str(repo_root / ".cache" / "huggingface"))
         process = subprocess.Popen(
             cmd,
             cwd=str(repo_root),
@@ -2489,11 +2720,10 @@ def create_app(root_dir: Path) -> FastAPI:
                         break
                 _atomic_write_json(manifest_path, manifest)
 
+        model_config = _load_model_config(book_dir)
         cmd = [
-            "uv",
-            "run",
-            "--with",
-            "pocket-tts",
+            sys.executable,
+            "-m",
             "neb",
             "sample",
             "--book",
@@ -2506,11 +2736,16 @@ def create_app(root_dir: Path) -> FastAPI:
             str(payload.pad_ms),
             "--chunk-mode",
             payload.chunk_mode,
+            "--language",
+            model_config["language"],
+            "--layers",
+            str(model_config["layers"]),
         ]
         if payload.rechunk:
             cmd.append("--rechunk")
 
         env = os.environ.copy()
+        env.setdefault("HF_HOME", str(repo_root / ".cache" / "huggingface"))
         process = subprocess.Popen(
             cmd,
             cwd=str(repo_root),

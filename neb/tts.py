@@ -5,6 +5,8 @@ import contextvars
 import hashlib
 import json
 import logging
+import os
+import platform
 import re
 import shutil
 import sys
@@ -12,6 +14,8 @@ import threading
 import time
 import unicodedata
 import wave
+
+import numpy as np
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +30,22 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from .text import read_clean_text
+from . import language as language_util
+from .text import apply_reading_overrides, prepare_tts_text, read_clean_text
+from .text.common import (
+    _CHAPTER_BREAK_PAD_MULTIPLIER,
+    _CLAUSE_PUNCT,
+    _CLOSING_PUNCT,
+    _SECTION_BREAK_NEWLINES,
+    _SECTION_BREAK_PAD_MULTIPLIER,
+    _SENT_PUNCT,
+    _TITLE_BREAK_NEWLINES,
+    _TITLE_BREAK_PAD_MULTIPLIER,
+    READING_OVERRIDES_FILENAME,
+    _load_reading_overrides,
+    _merge_reading_overrides,
+    _reading_overrides_path,
+)
 from .voice import DEFAULT_VOICE, resolve_voice_prompt
 
 try:
@@ -36,11 +55,82 @@ except Exception:  # pragma: no cover - optional runtime dependency
     torch = None
     TTSModel = None
 
+try:
+    import maneko
+except Exception:  # pragma: no cover - optional runtime dependency
+    maneko = None
+
 
 _TTS_WARNING_CONTEXT = contextvars.ContextVar("_TTS_WARNING_CONTEXT", default=None)
 _TTS_WARNING_FILTER_INSTALLED = False
 _TTS_WARNING_CONTEXT_LOCK = threading.Lock()
 _TTS_WARNING_CONTEXT_STACK: List[dict[str, Any]] = []
+
+_TTS_MODEL_CACHE: Dict[Tuple[str, int], Any] = {}
+_TTS_MODEL_CACHE_LOCK = threading.Lock()
+
+
+def _repo_root() -> Path:
+    """Walk up from the cwd to the directory holding pyproject.toml (the repo)."""
+    start = Path.cwd()
+    for candidate in [start, *start.parents]:
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return start
+
+
+def _ensure_hf_home() -> None:
+    """Default HF_HOME to the repo-local cache so weights land in ./.cache/.
+
+    maneko (and pocket-tts) resolve weights via HF_HOME; pointing it at the
+    repo's .cache/huggingface keeps everything self-contained. An explicit
+    HF_HOME in the environment always wins.
+    """
+    if not os.environ.get("HF_HOME"):
+        os.environ["HF_HOME"] = str(_repo_root() / ".cache" / "huggingface")
+    _ensure_hf_token_visible()
+
+
+def _ensure_hf_token_visible() -> None:
+    """Keep `hf auth login` working under a redirected HF_HOME.
+
+    huggingface_hub looks for the auth token at $HF_HOME/token, so the repo-local
+    HF_HOME hides a user-level login — and the gated kyutai/pocket-tts weights
+    (required for voice cloning on the torch backend) then fail to download.
+    Export HF_TOKEN from the user-level token when the active HF_HOME has none.
+    (HF_TOKEN is re-read on every hub call; HF_TOKEN_PATH would be a no-op here
+    because huggingface_hub freezes it at import time.)
+    """
+    if os.environ.get("HF_TOKEN") or os.environ.get("HF_TOKEN_PATH"):
+        return
+    hf_home = os.environ.get("HF_HOME")
+    if not hf_home or (Path(hf_home) / "token").exists():
+        return
+    user_token = Path.home() / ".cache" / "huggingface" / "token"
+    try:
+        token = user_token.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if token:
+        os.environ["HF_TOKEN"] = token
+
+
+def _load_tts_model(
+    language: Optional[str],
+    layers: Optional[int] = None,
+) -> Any:
+    """Return a cached pocket-tts model for (language, layers)."""
+    _require_tts()
+    lang = language_util.resolve_language(language)
+    lay = language_util.resolve_layers(lang, layers)
+    key = (lang, lay)
+    with _TTS_MODEL_CACHE_LOCK:
+        model = _TTS_MODEL_CACHE.get(key)
+        if model is None:
+            model_id = language_util.resolve_model_id(lang, lay)
+            model = TTSModel.load_model(language=model_id)
+            _TTS_MODEL_CACHE[key] = model
+        return model
 
 
 @contextmanager
@@ -113,30 +203,9 @@ def _install_tts_warning_filter() -> None:
     _TTS_WARNING_FILTER_INSTALLED = True
 
 
-_URL_RE = re.compile(
-    r"(?:https?|ftp)://[^\s<>\"')\]]+",
-    re.IGNORECASE,
-)
-_URL_SPELL_OUT = {"http", "https", "ftp", "www"}
-_URL_PUNCT: dict[str, str] = {
-    ":": "colon",
-    "/": "slash",
-    ".": "dot",
-    "?": "question mark",
-    "=": "equals",
-    "&": "ampersand",
-    "#": "hash",
-    "_": "underscore",
-    "-": "dash",
-    "@": "at",
-    "%": "percent",
-    "~": "tilde",
-}
-
 _SENT_SPLIT_RE = re.compile(
     r"(?<=[.!?][\"')\]\}\u201d\u2019»])\s+|(?<=[.!?])\s+"
 )
-_ABBREV_DOT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Fig|Figs)\.", re.IGNORECASE)
 _ABBREV_SENT_RE = re.compile(r"\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Fig|Figs)\.$", re.IGNORECASE)
 _SINGLE_INITIAL_RE = re.compile(r"\b[A-Z]\.$")
 _NAME_INITIAL_RE = re.compile(r"\b([A-Z][a-z]+)\s+[A-Z]\.$")
@@ -228,54 +297,6 @@ _DOT_SPACE_DOT_RE = re.compile(r"(?<=\.)\s+(?=[A-Za-z]\.)")
 _LAST_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)\s*$")
 _NEXT_DOT_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z'-]*\.)")
 _ELLIPSIS_RE = re.compile(r"(\.\.\.|…)\s*$")
-_INITIALS_WITH_NAME_RE = re.compile(
-    r"\b(?P<seq>[A-Z]\.(?:\s+[A-Z]\.)+)\s+(?P<name>[A-Z][A-Za-z'’\-]+)\b"
-)
-_SPACED_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>[A-Z]\.(?:\s+[A-Z]\.)+)")
-_COMPACT_DOTTED_INITIALISM_RE = re.compile(r"\b(?P<seq>(?:[A-Z][a-z]?\.){2,})")
-_NO_NUMBER_ABBREV_RE = re.compile(r"\bNo\.(?=\s*\d)", re.IGNORECASE)
-_PAGE_VERSE_ABBREV_RE = re.compile(
-    r"\b(?P<token>p|pp|v|vv)\.(?=\s+(?:\d|[IVXLCDM]+\b))",
-    re.IGNORECASE,
-)
-_ABBREV_EXPANSIONS = {
-    "prof": "professor",
-    "fig": "figure",
-    "figs": "figures",
-    "approx": "approximately",
-    "ca": "circa",
-    "cf": "compare",
-    "i.e": "that is",
-    "e.g": "for example",
-    "etc": "et cetera",
-    "et al": "and others",
-    "et seq": "and the following",
-    "et seqq": "and the following",
-    "ibid": "in the same place",
-    "loc. cit": "in the place cited",
-    "n.b": "note well",
-    "op. cit": "in the work cited",
-    "q.v": "which see",
-    "vs": "versus",
-    "viz": "namely",
-}
-_ABBREV_EXPANSION_RE = re.compile(
-    r"\b(" + "|".join(map(re.escape, _ABBREV_EXPANSIONS)) + r")\.",
-    re.IGNORECASE,
-)
-_DOUBLE_QUOTE_CHARS = {'"', "“", "”", "«", "»", "„", "‟", "❝", "❞"}
-_SINGLE_QUOTE_CHARS = {"'", "‘", "’", "‚", "‛"}
-_LEADING_ELISIONS = {
-    "tis",
-    "twas",
-    "twere",
-    "twill",
-    "til",
-    "em",
-    "cause",
-    "bout",
-    "round",
-}
 _SENTENCE_STARTERS = {
     "the",
     "a",
@@ -335,167 +356,6 @@ _INITIAL_STOPWORDS = {
     "item",
     "book",
     "act",
-}
-_CLAUSE_PUNCT = {",", ";", ":"}
-_SENT_PUNCT = {".", "!", "?"}
-_CLOSING_PUNCT = "\"')]}"+ "\u201d\u2019"
-_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
-_ROMAN_CANONICAL_RE = re.compile(
-    r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$"
-)
-_ROMAN_HEADING_RE = re.compile(
-    r"\b(?P<label>(?:chapter(?:s)?|book(?:s)?|part(?:s)?|volume(?:s)?|vol(?:s)?|section(?:s)?|act(?:s)?|scene(?:s)?|appendix(?:es)?|appendices)\.?)"
-    r"\s+(?P<num>[IVXLCDM]+(?:\s*(?:,\s*(?:and|or)\s+|,\s*|\s+(?:and|or|&)\s+)[IVXLCDM]+)*)\b",
-    re.IGNORECASE,
-)
-_ROMAN_LEADING_TITLE_RE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<num>[IVXLCDM]+)(?P<trail>[^A-Za-z0-9\n]*)[ \t]*\n"
-    r"(?=[ \t]*[A-Z])",
-    re.IGNORECASE,
-)
-_ROMAN_STANDALONE_RE = re.compile(r"^(?P<num>[IVXLCDM]+)(?P<trail>[^A-Za-z0-9]*)$", re.IGNORECASE)
-_ROMAN_COLON_HEADING_RE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<num>[IVXLCDM]+)(?P<sep>\s*:\s*)",
-    re.IGNORECASE | re.MULTILINE,
-)
-_ROMAN_TOKEN_RE = re.compile(r"\b[IVXLCDM]+\b", re.IGNORECASE)
-_ROMAN_I_DETERMINERS = {
-    "a",
-    "an",
-    "another",
-    "any",
-    "each",
-    "every",
-    "his",
-    "her",
-    "its",
-    "my",
-    "no",
-    "our",
-    "some",
-    "that",
-    "the",
-    "their",
-    "this",
-    "your",
-}
-_ROMAN_HEADING_TRAIL_PUNCT = (
-    _SENT_PUNCT
-    | _CLAUSE_PUNCT
-    | set(_CLOSING_PUNCT)
-    | {"-", "\u2013", "\u2014"}
-)
-_SECTION_BREAK_NEWLINES = 3
-_TITLE_BREAK_NEWLINES = 5
-_SECTION_BREAK_PAD_MULTIPLIER = 3
-_TITLE_BREAK_PAD_MULTIPLIER = 5
-_CHAPTER_BREAK_PAD_MULTIPLIER = _TITLE_BREAK_PAD_MULTIPLIER
-_WORD_ONES = (
-    "zero",
-    "one",
-    "two",
-    "three",
-    "four",
-    "five",
-    "six",
-    "seven",
-    "eight",
-    "nine",
-    "ten",
-    "eleven",
-    "twelve",
-    "thirteen",
-    "fourteen",
-    "fifteen",
-    "sixteen",
-    "seventeen",
-    "eighteen",
-    "nineteen",
-)
-_WORD_TENS = (
-    "",
-    "",
-    "twenty",
-    "thirty",
-    "forty",
-    "fifty",
-    "sixty",
-    "seventy",
-    "eighty",
-    "ninety",
-)
-_NUMBER_LABEL_RE = re.compile(
-    r"\b(?P<label>(?:fig(?:ure)?|table|chapter|section|part|vol(?:ume)?|no|appendix|eq|equation))\.?"
-    r"\s+(?P<num>\d+(?:\.\d+)+)\b",
-    re.IGNORECASE,
-)
-_GROUPED_INT_COMMA_RE = re.compile(r"\b\d{1,3}(?:,\d{3})+\b")
-_GROUPED_INT_DOT_RE = re.compile(r"\b\d{1,3}(?:\.\d{3})+\b")
-_DECIMAL_RE = re.compile(r"\b\d+(?:\.\d+)+\b")
-_PLAIN_INT_RE = re.compile(r"\b\d+\b")
-_SIGNED_INT_RE = re.compile(r"(?<!\w)(?P<sign>[+-])(?P<num>\d+)\b")
-_YEAR_RANGE_RE = re.compile(
-    r"\b(?P<start>1\d{3}|20\d{2})\s*[–-]\s*(?P<end>\d{2,4})\b(?!\s*[–-]\s*\d)"
-)
-_YEAR_RE = re.compile(r"\b(?P<year>1\d{3}|20\d{2})\b")
-_ORDINAL_RE = re.compile(r"\b(?P<num>\d+)(?P<suffix>st|nd|rd|th)\b", re.IGNORECASE)
-_PLURAL_NUMBER_S_RE = re.compile(r"(?<!\w)(?:['’])?(?P<num>\d{1,4})(?:['’])?s\b")
-_RESIDUAL_DIGITS_RE = re.compile(r"\d+")
-_ROMAN_DECIMAL_RE = re.compile(r"\b(?P<roman>[IVXLCDM]+)\.(?P<num>\d+(?:\.\d+)*)\b")
-_CURRENCY_SYMBOL_UNITS = {
-    "$": ("dollar", "dollars"),
-    "€": ("euro", "euros"),
-    "£": ("pound", "pounds"),
-    "¥": ("yen", "yen"),
-    "₹": ("rupee", "rupees"),
-    "₽": ("ruble", "rubles"),
-    "₩": ("won", "won"),
-    "₪": ("shekel", "shekels"),
-    "₫": ("dong", "dong"),
-    "₴": ("hryvnia", "hryvnias"),
-    "₦": ("naira", "naira"),
-    "฿": ("baht", "baht"),
-    "₺": ("lira", "lira"),
-    "₱": ("peso", "pesos"),
-}
-_CURRENCY_SYMBOL_CLASS = "".join(re.escape(symbol) for symbol in _CURRENCY_SYMBOL_UNITS)
-_CURRENCY_PREFIX_RE = re.compile(
-    rf"(?<!\w)(?P<sym>[{_CURRENCY_SYMBOL_CLASS}])\s*"
-    r"(?P<amount>[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))"
-)
-_CURRENCY_SUFFIX_RE = re.compile(
-    r"(?P<amount>[+-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+))\s*"
-    rf"(?P<sym>[{_CURRENCY_SYMBOL_CLASS}])(?!\w)"
-)
-_ERA_DOTTED_REPLACEMENTS = (
-    (re.compile(r"\bB\s*\.\s*C\s*\.\s*E\s*\.?", re.IGNORECASE), "B-C-E"),
-    (re.compile(r"\bA\s*\.\s*D\s*\.?", re.IGNORECASE), "A-D"),
-    (re.compile(r"\bC\s*\.\s*E\s*\.?", re.IGNORECASE), "C-E"),
-    (re.compile(r"\bB\s*\.\s*C\s*\.(?!\s*E\s*\.?)", re.IGNORECASE), "B-C"),
-)
-_ERA_PLAIN_WITH_YEAR_RE = re.compile(
-    r"(?P<year>\b\d{1,4}(?:\s*[–-]\s*\d{1,4})?)\s+(?P<era>BCE|CE|BC|AD)\b"
-)
-_ERA_PLAIN_BEFORE_YEAR_RE = re.compile(
-    r"\b(?P<era>BCE|CE|BC|AD)\s+(?P<year>\d{1,4}(?:\s*[–-]\s*\d{1,4})?)\b"
-)
-_SCALE_WORDS = (
-    (1_000_000_000_000, "trillion"),
-    (1_000_000_000, "billion"),
-    (1_000_000, "million"),
-    (1_000, "thousand"),
-)
-READING_OVERRIDES_FILENAME = "reading-overrides.json"
-_READING_MODES = {"all", "first", "word", "word_first"}
-_READING_MODE_ALIASES = {
-    "": "word",
-    "all": "all",
-    "first": "first",
-    "word": "word",
-    "word_first": "word_first",
-    "once": "first",
-    "substring": "all",
-    "substring_first": "first",
 }
 
 
@@ -842,675 +702,6 @@ def make_chunks(text: str, max_chars: int, chunk_mode: str = "sentence") -> List
     return [text[start:end] for start, end in spans]
 
 
-_PALI_SANSKRIT_ASCII_MAP = {
-    "ā": "aa",
-    "Ā": "Aa",
-    "ī": "ii",
-    "Ī": "Ii",
-    "ū": "uu",
-    "Ū": "Uu",
-    "ṛ": "ri",
-    "Ṛ": "Ri",
-    "ṝ": "rii",
-    "Ṝ": "Rii",
-    "ḷ": "l",
-    "Ḷ": "L",
-    "ḹ": "lii",
-    "Ḹ": "Lii",
-    "ṃ": "m",
-    "Ṃ": "M",
-    "ṁ": "m",
-    "Ṁ": "M",
-    "ṅ": "ng",
-    "Ṅ": "Ng",
-    "ñ": "ny",
-    "Ñ": "Ny",
-    "ṭ": "t",
-    "Ṭ": "T",
-    "ḍ": "d",
-    "Ḍ": "D",
-    "ṇ": "n",
-    "Ṇ": "N",
-    "ś": "sh",
-    "Ś": "Sh",
-    "ṣ": "sh",
-    "Ṣ": "Sh",
-    "ḥ": "h",
-    "Ḥ": "H",
-}
-_MACRON_VOWELS = set("aAiIuUeEoO")
-_COMBINING_MACRON = "\u0304"
-
-
-def _double_vowel(base: str) -> str:
-    if base.isupper():
-        return base + base.lower()
-    return base + base
-
-
-def _normalize_combining_diacritics(text: str) -> str:
-    decomposed = unicodedata.normalize("NFD", text)
-    out: List[str] = []
-    i = 0
-    while i < len(decomposed):
-        ch = decomposed[i]
-        if unicodedata.combining(ch):
-            i += 1
-            continue
-        j = i + 1
-        marks: List[str] = []
-        while j < len(decomposed) and unicodedata.combining(decomposed[j]):
-            marks.append(decomposed[j])
-            j += 1
-        if marks and _COMBINING_MACRON in marks and ch in _MACRON_VOWELS:
-            out.append(_double_vowel(ch))
-        else:
-            out.append(ch)
-        i = j
-    return "".join(out)
-
-
-def _transliterate_pali_sanskrit(text: str) -> str:
-    if not text or text.isascii():
-        return text
-    for src, dst in _PALI_SANSKRIT_ASCII_MAP.items():
-        if src in text:
-            text = text.replace(src, dst)
-    return _normalize_combining_diacritics(text)
-
-
-_BRACKET_PAIRS = {"(": ")", "[": "]", "{": "}"}
-_CLOSE_BRACKETS = set(_BRACKET_PAIRS.values())
-_CLOSE_TO_OPEN = {v: k for k, v in _BRACKET_PAIRS.items()}
-
-
-def _strip_brackets(text: str) -> str:
-    if not text:
-        return text
-    stripped = text.strip()
-    # Strip brackets that wrap the entire chunk: "(whole chunk)" -> "whole chunk"
-    for open_b, close_b in _BRACKET_PAIRS.items():
-        if stripped.startswith(open_b) and stripped.endswith(close_b):
-            inner = stripped[1:-1]
-            # Only strip if the open bracket at start matches this close bracket
-            # and there's no unmatched nesting inside
-            depth = 0
-            matched = True
-            for ch in inner:
-                if ch == open_b:
-                    depth += 1
-                elif ch == close_b:
-                    if depth == 0:
-                        matched = False
-                        break
-                    depth -= 1
-            if matched:
-                stripped = inner
-    # Strip unpaired closing brackets (e.g. "something.)" -> "something.")
-    for close_b in _CLOSE_BRACKETS:
-        open_b = _CLOSE_TO_OPEN[close_b]
-        if close_b in stripped and open_b not in stripped:
-            stripped = stripped.replace(close_b, "")
-    # Strip closing bracket immediately after punctuation (bad for TTS)
-    stripped = re.sub(r"([.!?,;:])[\)\]\}]", r"\1", stripped)
-    return stripped
-
-
-def _strip_double_quotes(text: str) -> str:
-    if not text:
-        return text
-    return "".join(ch for ch in text if ch not in _DOUBLE_QUOTE_CHARS)
-
-
-def _strip_single_quotes(text: str) -> str:
-    if not text:
-        return text
-    out: List[str] = []
-    for idx, ch in enumerate(text):
-        if ch not in _SINGLE_QUOTE_CHARS:
-            out.append(ch)
-            continue
-        prev = text[idx - 1] if idx > 0 else ""
-        next_ch = text[idx + 1] if idx + 1 < len(text) else ""
-        if prev and next_ch and prev.isalnum() and next_ch.isalnum():
-            out.append(ch)
-            continue
-        if (not prev or not prev.isalnum()) and next_ch and next_ch.isalpha():
-            end = idx + 1
-            while end < len(text) and text[end].isalpha():
-                end += 1
-            word = text[idx + 1 : end].lower()
-            if word in _LEADING_ELISIONS:
-                out.append(ch)
-                continue
-        continue
-    return "".join(out)
-
-
-def _expand_abbreviations(text: str) -> str:
-    if not text:
-        return text
-
-    def replace(match: re.Match[str]) -> str:
-        token = match.group(1)
-        expansion = _ABBREV_EXPANSIONS.get(token.lower())
-        if not expansion:
-            return match.group(0)
-        if token.isupper():
-            return expansion.upper()
-        if token[0].isupper():
-            return expansion.capitalize()
-        return expansion
-
-    return _ABBREV_EXPANSION_RE.sub(replace, text)
-
-
-def _hyphenate_dotted_letters(seq: str) -> str:
-    segments = re.findall(r"[A-Za-z]+(?=\.)", seq)
-    letters = [ch.upper() for seg in segments for ch in seg]
-    if len(letters) < 2:
-        return seq
-    return "-".join(letters)
-
-
-def _normalize_initials_with_name(text: str) -> str:
-    if not text:
-        return text
-
-    def replace(match: re.Match[str]) -> str:
-        seq = match.group("seq")
-        name = match.group("name")
-        hyphenated = _hyphenate_dotted_letters(seq)
-        if hyphenated == seq:
-            return match.group(0)
-        return f"{hyphenated}-{name}"
-
-    return _INITIALS_WITH_NAME_RE.sub(replace, text)
-
-
-def _normalize_dotted_initialisms(text: str) -> str:
-    if not text:
-        return text
-
-    def replace(match: re.Match[str]) -> str:
-        seq = match.group("seq")
-        return _hyphenate_dotted_letters(seq)
-
-    text = _SPACED_DOTTED_INITIALISM_RE.sub(replace, text)
-    return _COMPACT_DOTTED_INITIALISM_RE.sub(replace, text)
-
-
-def _normalize_no_number_abbrev(text: str) -> str:
-    if not text:
-        return text
-    return _NO_NUMBER_ABBREV_RE.sub("number", text)
-
-
-def _normalize_page_verse_abbrev(text: str) -> str:
-    if not text:
-        return text
-
-    def replace(match: re.Match[str]) -> str:
-        token = match.group("token").lower()
-        if token == "p":
-            return "page"
-        if token == "pp":
-            return "pages"
-        if token == "v":
-            return "verse"
-        return "verses"
-
-    return _PAGE_VERSE_ABBREV_RE.sub(replace, text)
-
-
-def _url_to_spoken(match: re.Match[str]) -> str:
-    url = match.group(0)
-    # Strip trailing punctuation that likely isn't part of the URL.
-    trailing = ""
-    while url and url[-1] in ".,;:!?":
-        trailing = url[-1] + trailing
-        url = url[:-1]
-    # Tokenise: runs of alnum characters, or individual special chars.
-    tokens = re.findall(r"[a-zA-Z0-9]+|.", url)
-    parts: list[str] = []
-    for token in tokens:
-        if token in _URL_PUNCT:
-            parts.append(_URL_PUNCT[token])
-        elif token.lower() in _URL_SPELL_OUT:
-            parts.append("-".join(token.lower()))
-        else:
-            parts.append(token)
-    spoken = " ".join(parts)
-    return re.sub(r"\s+", " ", spoken).strip() + trailing
-
-
-def normalize_urls(text: str) -> str:
-    if not text:
-        return text
-    return _URL_RE.sub(_url_to_spoken, text)
-
-
-def normalize_abbreviations(text: str) -> str:
-    text = _expand_abbreviations(text)
-    text = _normalize_initials_with_name(text)
-    text = _normalize_dotted_initialisms(text)
-    text = _normalize_no_number_abbrev(text)
-    text = _normalize_page_verse_abbrev(text)
-    return _ABBREV_DOT_RE.sub(r"\1", text)
-
-
-def _roman_to_int(value: str) -> Optional[int]:
-    roman = value.upper()
-    if not roman or not _ROMAN_CANONICAL_RE.fullmatch(roman):
-        return None
-    total = 0
-    prev = 0
-    for ch in reversed(roman):
-        number = _ROMAN_VALUES.get(ch)
-        if number is None:
-            return None
-        if number < prev:
-            total -= number
-        else:
-            total += number
-            prev = number
-    return total or None
-
-
-def _int_to_words(value: int) -> str:
-    if value < 0:
-        return f"minus {_int_to_words(abs(value))}"
-    if value < 20:
-        return _WORD_ONES[value]
-    if value < 100:
-        tens, ones = divmod(value, 10)
-        if ones == 0:
-            return _WORD_TENS[tens]
-        return f"{_WORD_TENS[tens]} {_WORD_ONES[ones]}"
-    if value < 1000:
-        hundreds, rest = divmod(value, 100)
-        if rest == 0:
-            return f"{_WORD_ONES[hundreds]} hundred"
-        return f"{_WORD_ONES[hundreds]} hundred {_int_to_words(rest)}"
-    for scale, label in _SCALE_WORDS:
-        if value >= scale:
-            major, rest = divmod(value, scale)
-            if rest == 0:
-                return f"{_int_to_words(major)} {label}"
-            return f"{_int_to_words(major)} {label} {_int_to_words(rest)}"
-    return str(value)
-
-
-def _digits_to_words(value: str) -> str:
-    parts: List[str] = []
-    for ch in value:
-        if ch.isdigit():
-            parts.append(_WORD_ONES[int(ch)])
-        else:
-            parts.append(ch)
-    return " ".join(parts)
-
-
-def _int_to_ordinal_words(value: int) -> str:
-    if value < 0:
-        return f"minus {_int_to_ordinal_words(abs(value))}"
-    if value == 0:
-        return "zeroth"
-
-    cardinal = _int_to_words(value)
-    parts = cardinal.split()
-    if not parts:
-        return cardinal
-
-    last = parts[-1]
-    irregular = {
-        "one": "first",
-        "two": "second",
-        "three": "third",
-        "five": "fifth",
-        "eight": "eighth",
-        "nine": "ninth",
-        "twelve": "twelfth",
-    }
-    if last in irregular:
-        parts[-1] = irregular[last]
-    elif last.endswith("y"):
-        parts[-1] = f"{last[:-1]}ieth"
-    elif last.endswith("e"):
-        parts[-1] = f"{last}th"
-    else:
-        parts[-1] = f"{last}th"
-    return " ".join(parts)
-
-
-def _year_to_words(value: int) -> str:
-    if value < 1000 or value > 2099:
-        return _int_to_words(value)
-    if value < 2000:
-        century = value // 100
-        suffix = value % 100
-        prefix = _int_to_words(century)
-        if suffix == 0:
-            return f"{prefix} hundred"
-        if suffix < 10:
-            return f"{prefix} oh {_int_to_words(suffix)}"
-        return f"{prefix} {_int_to_words(suffix)}"
-    if value == 2000:
-        return "two thousand"
-    suffix = value - 2000
-    if suffix < 10:
-        return f"two thousand {_int_to_words(suffix)}"
-    return f"twenty {_int_to_words(suffix)}"
-
-
-def _expand_year_range_end(start: int, end_raw: str) -> Optional[int]:
-    token = end_raw.strip()
-    if not token.isdigit():
-        return None
-    if len(token) == 2:
-        year = (start // 100) * 100 + int(token)
-        if year < start:
-            year += 100
-        return year
-    if len(token) == 4:
-        return int(token)
-    return None
-
-
-def _normalize_label_numbers(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        label = match.group("label")
-        num = match.group("num")
-        parts = []
-        for piece in num.split("."):
-            try:
-                value = int(piece)
-            except ValueError:
-                parts.append(piece)
-                continue
-            parts.append(_int_to_words(value))
-        return f"{label} {' point '.join(parts)}"
-
-    return _NUMBER_LABEL_RE.sub(replace, text)
-
-
-def _normalize_grouped_numbers(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        token = match.group(0)
-        stripped = token.replace(",", "").replace(".", "")
-        try:
-            value = int(stripped)
-        except ValueError:
-            return token
-        return _int_to_words(value)
-
-    text = _GROUPED_INT_COMMA_RE.sub(replace, text)
-    text = _GROUPED_INT_DOT_RE.sub(replace, text)
-    return text
-
-
-def _normalize_decimal_numbers(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        token = match.group(0)
-        parts = token.split(".")
-        if len(parts) == 2:
-            left, right = parts
-            try:
-                left_value = int(left)
-            except ValueError:
-                return token
-            left_words = _int_to_words(left_value)
-            right_words = _digits_to_words(right)
-            return f"{left_words} point {right_words}"
-        spoken = [_number_run_to_words(part) for part in parts]
-        return " point ".join(spoken)
-
-    return _DECIMAL_RE.sub(replace, text)
-
-
-def _normalize_plain_large_numbers(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        token = match.group(0)
-        if len(token) < 7:
-            return token
-        if len(token) > 1 and token.startswith("0"):
-            return token
-        try:
-            value = int(token)
-        except ValueError:
-            return token
-        return _int_to_words(value)
-
-    return _PLAIN_INT_RE.sub(replace, text)
-
-
-def _normalize_signed_integers(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        sign = match.group("sign")
-        token = match.group("num")
-        try:
-            value = int(token)
-        except ValueError:
-            return match.group(0)
-        words = _int_to_words(value)
-        if sign == "-":
-            return f"minus {words}"
-        return f"plus {words}"
-
-    return _SIGNED_INT_RE.sub(replace, text)
-
-
-def _normalize_year_ranges(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        try:
-            start = int(match.group("start"))
-        except ValueError:
-            return match.group(0)
-        end = _expand_year_range_end(start, match.group("end"))
-        if end is None or not (1000 <= end <= 2099):
-            return match.group(0)
-        return f"{_year_to_words(start)} to {_year_to_words(end)}"
-
-    return _YEAR_RANGE_RE.sub(replace, text)
-
-
-def _normalize_plain_years(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        try:
-            year = int(match.group("year"))
-        except ValueError:
-            return match.group(0)
-        return _year_to_words(year)
-
-    return _YEAR_RE.sub(replace, text)
-
-
-def _normalize_ordinals(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        token = match.group("num")
-        try:
-            value = int(token)
-        except ValueError:
-            return match.group(0)
-        return _int_to_ordinal_words(value)
-
-    return _ORDINAL_RE.sub(replace, text)
-
-
-def _pluralize_spoken_word(word: str) -> str:
-    if not word:
-        return word
-    if word.endswith("y") and len(word) > 1 and word[-2] not in "aeiou":
-        return f"{word[:-1]}ies"
-    if word.endswith(("s", "x", "z", "ch", "sh")):
-        return f"{word}es"
-    return f"{word}s"
-
-
-def _pluralize_spoken_phrase(phrase: str) -> str:
-    parts = phrase.split()
-    if not parts:
-        return phrase
-    parts[-1] = _pluralize_spoken_word(parts[-1])
-    return " ".join(parts)
-
-
-def _normalize_plural_number_s(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        token = match.group("num")
-        try:
-            value = int(token)
-        except ValueError:
-            return match.group(0)
-        if len(token) == 4 and not token.startswith("0") and 1000 <= value <= 2099:
-            spoken = _year_to_words(value)
-        else:
-            spoken = _number_run_to_words(token)
-        return _pluralize_spoken_phrase(spoken)
-
-    return _PLURAL_NUMBER_S_RE.sub(replace, text)
-
-
-def _number_run_to_words(token: str) -> str:
-    if not token:
-        return token
-    if len(token) > 1 and token.startswith("0"):
-        return _digits_to_words(token)
-    try:
-        value = int(token)
-    except ValueError:
-        return _digits_to_words(token)
-    return _int_to_words(value)
-
-
-def _normalize_residual_digits(text: str) -> str:
-    if not text:
-        return text
-    parts: List[str] = []
-    cursor = 0
-    text_len = len(text)
-    for match in _RESIDUAL_DIGITS_RE.finditer(text):
-        start, end = match.span()
-        if cursor < start:
-            parts.append(text[cursor:start])
-        left = text[start - 1] if start > 0 else ""
-        right = text[end] if end < text_len else ""
-        replacement = _number_run_to_words(match.group(0))
-        if left and left.isalpha():
-            if not parts or not parts[-1].endswith(" "):
-                parts.append(" ")
-        parts.append(replacement)
-        if right and right.isalpha():
-            parts.append(" ")
-        cursor = end
-    if cursor < text_len:
-        parts.append(text[cursor:])
-    return "".join(parts)
-
-
-def _normalize_roman_decimal_numbers(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        roman = match.group("roman")
-        number = _roman_to_int(roman)
-        if number is None:
-            return match.group(0)
-        parts = [_int_to_words(number)]
-        for piece in match.group("num").split("."):
-            try:
-                value = int(piece)
-            except ValueError:
-                parts.append(piece)
-                continue
-            parts.append(_int_to_words(value))
-        return " point ".join(parts)
-
-    return _ROMAN_DECIMAL_RE.sub(replace, text)
-
-
-def _is_singular_currency_amount(amount: str) -> bool:
-    value = amount.replace(",", "").lstrip("+-")
-    if not value:
-        return False
-    if "." not in value:
-        return value == "1"
-    left, right = value.split(".", 1)
-    if not left:
-        left = "0"
-    return left == "1" and (not right or all(ch == "0" for ch in right))
-
-
-def _normalize_currency_amount(amount: str) -> str:
-    value = amount.replace(",", "")
-    sign = ""
-    if value.startswith(("+", "-")):
-        sign, value = value[0], value[1:]
-    if "." not in value:
-        return sign + value
-    left, right = value.split(".", 1)
-    if right and all(ch == "0" for ch in right):
-        return sign + left
-    return sign + value
-
-
-def _normalize_currency_symbols(text: str) -> str:
-    if not text:
-        return text
-
-    def replace(match: re.Match[str]) -> str:
-        symbol = match.group("sym")
-        amount = match.group("amount")
-        unit = _CURRENCY_SYMBOL_UNITS.get(symbol)
-        if not unit:
-            return match.group(0)
-        normalized_amount = _normalize_currency_amount(amount)
-        singular, plural = unit
-        noun = singular if _is_singular_currency_amount(amount) else plural
-        return f"{normalized_amount} {noun}"
-
-    text = _CURRENCY_PREFIX_RE.sub(replace, text)
-    return _CURRENCY_SUFFIX_RE.sub(replace, text)
-
-
-def _normalize_era_abbreviations(text: str) -> str:
-    if not text:
-        return text
-
-    for pattern, replacement in _ERA_DOTTED_REPLACEMENTS:
-        text = pattern.sub(replacement, text)
-
-    def hyphenate_era_letters(era: str) -> str:
-        return "-".join(ch for ch in era if ch.isalpha())
-
-    def replace_plain_with_year(match: re.Match[str]) -> str:
-        year = match.group("year")
-        era = match.group("era")
-        return f"{year} {hyphenate_era_letters(era)}"
-
-    text = _ERA_PLAIN_WITH_YEAR_RE.sub(replace_plain_with_year, text)
-
-    def replace_plain_before_year(match: re.Match[str]) -> str:
-        era = match.group("era")
-        year = match.group("year")
-        return f"{hyphenate_era_letters(era)} {year}"
-
-    return _ERA_PLAIN_BEFORE_YEAR_RE.sub(replace_plain_before_year, text)
-
-
-def normalize_numbers_for_tts(text: str) -> str:
-    text = _normalize_roman_decimal_numbers(text)
-    text = _normalize_label_numbers(text)
-    text = _normalize_grouped_numbers(text)
-    text = _normalize_decimal_numbers(text)
-    text = _normalize_plain_large_numbers(text)
-    text = _normalize_signed_integers(text)
-    text = _normalize_plural_number_s(text)
-    text = _normalize_year_ranges(text)
-    text = _normalize_plain_years(text)
-    text = _normalize_ordinals(text)
-    text = _normalize_residual_digits(text)
-    return text
-
-
 def split_tts_text_for_synthesis(text: str, max_chars: int) -> List[str]:
     if not text:
         return []
@@ -1520,392 +711,6 @@ def split_tts_text_for_synthesis(text: str, max_chars: int) -> List[str]:
     if not spans:
         return [text]
     return [text[start:end] for start, end in spans]
-
-
-def _normalize_roman_numerals(text: str) -> str:
-    def prev_word(start: int) -> Optional[str]:
-        match = re.search(r"([A-Za-z]+)\s*$", text[:start])
-        if not match:
-            return None
-        return match.group(1)
-
-    def next_word(start: int) -> Optional[str]:
-        match = re.search(r"\b([A-Za-z]+)", text[start:])
-        if not match:
-            return None
-        return match.group(1)
-
-    def next_non_space(start: int) -> str:
-        match = re.search(r"\S", text[start:])
-        if not match:
-            return ""
-        return match.group(0)
-
-    def should_convert_roman_i(match: re.Match[str]) -> bool:
-        label = match.group("label")
-        if label and label[0].isupper():
-            return True
-        prev = prev_word(match.start())
-        if prev and prev.lower() in _ROMAN_I_DETERMINERS:
-            return False
-        next_char = next_non_space(match.end())
-        if not next_char:
-            return True
-        if next_char in _ROMAN_HEADING_TRAIL_PUNCT:
-            return True
-        next_token = next_word(match.end())
-        if next_token and next_token[0].isupper():
-            return True
-        return False
-
-    def replace_heading(match: re.Match[str]) -> str:
-        numbers_text = match.group("num")
-        romans = list(_ROMAN_TOKEN_RE.finditer(numbers_text))
-        if not romans:
-            return match.group(0)
-        if len(romans) == 1:
-            roman = romans[0].group(0)
-            number = _roman_to_int(roman)
-            if number is None:
-                return match.group(0)
-            if roman.upper() == "I" and not should_convert_roman_i(match):
-                return match.group(0)
-            return f"{match.group('label')} {_int_to_words(number)}"
-
-        parts: List[str] = []
-        cursor = 0
-        for roman_match in romans:
-            start, end = roman_match.span()
-            number = _roman_to_int(roman_match.group(0))
-            if number is None:
-                return match.group(0)
-            parts.append(numbers_text[cursor:start])
-            parts.append(_int_to_words(number))
-            cursor = end
-        parts.append(numbers_text[cursor:])
-        return f"{match.group('label')} {''.join(parts)}"
-
-    def replace_leading_title(match: re.Match[str]) -> str:
-        number = _roman_to_int(match.group("num"))
-        if number is None:
-            return match.group(0)
-        trail = match.group("trail") or ""
-        return f"{match.group('indent')}{_int_to_words(number)}{trail}\n"
-
-    def replace_colon_heading(match: re.Match[str]) -> str:
-        number = _roman_to_int(match.group("num"))
-        if number is None:
-            return match.group(0)
-        return f"{match.group('indent')}{_int_to_words(number)}{match.group('sep')}"
-
-    text = _ROMAN_LEADING_TITLE_RE.sub(replace_leading_title, text, count=1)
-    text = _ROMAN_COLON_HEADING_RE.sub(replace_colon_heading, text)
-    text = _ROMAN_HEADING_RE.sub(replace_heading, text)
-    stripped = text.strip()
-    match = _ROMAN_STANDALONE_RE.fullmatch(stripped)
-    if not match:
-        return text
-    number = _roman_to_int(match.group("num"))
-    if number is None:
-        return text
-    suffix = match.group("trail") or ""
-    return f"{_int_to_words(number)}{suffix}"
-
-
-def _normalize_linebreak_pauses(text: str) -> str:
-    if "\n" not in text:
-        return text
-
-    boundary_punct = _SENT_PUNCT | _CLAUSE_PUNCT | set(_CLOSING_PUNCT)
-
-    def replace(match: re.Match[str]) -> str:
-        start = match.start()
-        end = match.end()
-        prev_char = text[start - 1] if start > 0 else ""
-        next_char = text[end] if end < len(text) else ""
-        if not prev_char or not next_char:
-            return " "
-
-        newline_count = match.group(0).count("\n")
-        if newline_count >= _SECTION_BREAK_NEWLINES:
-            if prev_char in _SENT_PUNCT:
-                return " "
-            return ". "
-
-        if prev_char in boundary_punct or next_char in boundary_punct:
-            return " "
-        return ", "
-
-    return re.sub(r"[ \t]*\n+[ \t]*", replace, text)
-
-
-def _normalize_reading_mode(value: object, *, default: str) -> str:
-    cleaned = str(value or "").strip().lower()
-    if not cleaned:
-        return default
-    mode = _READING_MODE_ALIASES.get(cleaned)
-    if mode is None or mode not in _READING_MODES:
-        raise ValueError(
-            "Reading override mode must be one of: "
-            "all, first, word, word_first."
-        )
-    return mode
-
-
-def _normalize_reading_override_entry(raw: object) -> Optional[Dict[str, Any]]:
-    if not isinstance(raw, dict):
-        return None
-
-    reading = str(
-        raw.get("reading")
-        or raw.get("replacement")
-        or raw.get("to")
-        or raw.get("value")
-        or ""
-    ).strip()
-    if not reading:
-        return None
-
-    pattern = str(raw.get("pattern") or "").strip()
-    base = str(raw.get("base") or raw.get("from") or raw.get("key") or "").strip()
-    is_regex = bool(raw.get("regex"))
-    case_sensitive = bool(raw.get("case_sensitive"))
-    mode_raw = raw.get("mode")
-
-    if pattern or (is_regex and base):
-        if not pattern:
-            pattern = base
-        mode = _normalize_reading_mode(mode_raw, default="all")
-        return {
-            "pattern": pattern,
-            "reading": reading,
-            "mode": mode,
-            "case_sensitive": case_sensitive,
-        }
-
-    if not base:
-        return None
-
-    mode = _normalize_reading_mode(mode_raw, default="word")
-    return {
-        "base": base,
-        "reading": reading,
-        "mode": mode,
-        "case_sensitive": case_sensitive,
-    }
-
-
-def _parse_reading_entry_line(line: str) -> Optional[Dict[str, Any]]:
-    raw = str(line or "").strip()
-    if not raw or raw.startswith("#"):
-        return None
-    if "＝" in raw:
-        base, reading = raw.split("＝", 1)
-    elif "=" in raw:
-        base, reading = raw.split("=", 1)
-    else:
-        return None
-    return _normalize_reading_override_entry(
-        {"base": base.strip(), "reading": reading.strip()}
-    )
-
-
-def _parse_reading_entries(raw: object) -> List[Dict[str, Any]]:
-    if isinstance(raw, dict):
-        list_like = raw.get("replacements")
-        if list_like is None:
-            list_like = raw.get("entries")
-        if list_like is None:
-            list_like = [
-                {"base": key, "reading": value}
-                for key, value in raw.items()
-                if isinstance(value, str)
-            ]
-    elif isinstance(raw, list):
-        list_like = raw
-    else:
-        list_like = []
-
-    entries: List[Dict[str, Any]] = []
-    for item in list_like:
-        entry: Optional[Dict[str, Any]] = None
-        if isinstance(item, dict):
-            entry = _normalize_reading_override_entry(item)
-        elif isinstance(item, (tuple, list)) and len(item) >= 2:
-            entry = _normalize_reading_override_entry(
-                {"base": item[0], "reading": item[1]}
-            )
-        elif isinstance(item, str):
-            entry = _parse_reading_entry_line(item)
-        if entry:
-            entries.append(entry)
-    return entries
-
-
-def _split_reading_overrides_data(
-    data: object,
-) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
-    global_entries: List[Dict[str, Any]] = []
-    chapters: Dict[str, List[Dict[str, Any]]] = {}
-    chapters_raw: object = {}
-
-    if isinstance(data, list):
-        global_entries = _parse_reading_entries(data)
-    elif isinstance(data, dict):
-        has_scoped_keys = any(
-            key in data
-            for key in ("global", "default", "*", "chapters", "replacements", "entries")
-        )
-        if "global" in data:
-            global_entries = _parse_reading_entries(data.get("global"))
-        elif "default" in data:
-            global_entries = _parse_reading_entries(data.get("default"))
-        elif "*" in data:
-            global_entries = _parse_reading_entries(data.get("*"))
-        elif "replacements" in data or "entries" in data:
-            global_entries = _parse_reading_entries(data)
-        elif not has_scoped_keys:
-            global_entries = _parse_reading_entries(data)
-
-        if "chapters" in data:
-            chapters_raw = data.get("chapters") or {}
-
-    if isinstance(chapters_raw, dict):
-        for chapter_id, raw_entries in chapters_raw.items():
-            chapter_entries = _parse_reading_entries(raw_entries)
-            if chapter_entries:
-                chapters[str(chapter_id)] = chapter_entries
-
-    return global_entries, chapters
-
-
-def _reading_overrides_path(book_dir: Path) -> Path:
-    return book_dir / READING_OVERRIDES_FILENAME
-
-
-def _load_reading_overrides(
-    book_dir: Path,
-) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
-    path = _reading_overrides_path(book_dir)
-    if not path.exists():
-        return [], {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
-    global_entries, chapter_entries = _split_reading_overrides_data(data)
-    return global_entries, chapter_entries
-
-
-def _merge_reading_overrides(
-    global_overrides: Sequence[Dict[str, Any]],
-    chapter_overrides: Sequence[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    if not global_overrides and not chapter_overrides:
-        return []
-
-    merged: Dict[str, Dict[str, Any]] = {}
-
-    def key_for(entry: Dict[str, Any]) -> str:
-        pattern = str(entry.get("pattern") or "").strip()
-        if pattern:
-            case_key = "cs1" if bool(entry.get("case_sensitive")) else "cs0"
-            mode = str(entry.get("mode") or "all")
-            return f"re:{pattern}:{mode}:{case_key}"
-        base = str(entry.get("base") or "").strip()
-        case_sensitive = bool(entry.get("case_sensitive"))
-        mode = str(entry.get("mode") or "word")
-        if not case_sensitive:
-            base = base.lower()
-        case_key = "cs1" if case_sensitive else "cs0"
-        return f"lit:{base}:{mode}:{case_key}"
-
-    def add_items(items: Sequence[Dict[str, Any]]) -> None:
-        for item in items:
-            entry = _normalize_reading_override_entry(item)
-            if not entry:
-                continue
-            merged[key_for(entry)] = entry
-
-    add_items(global_overrides)
-    add_items(chapter_overrides)
-    return list(merged.values())
-
-
-def _literal_override_pattern(base: str, mode: str) -> str:
-    escaped = re.escape(base)
-    if mode not in {"word", "word_first"}:
-        return escaped
-    # Word boundary based on ASCII word chars; this keeps punctuation-delimited tokens replaceable.
-    return rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
-
-
-def apply_reading_overrides(text: str, overrides: Sequence[Dict[str, Any]]) -> str:
-    if not text or not overrides:
-        return text
-
-    literals: List[Dict[str, Any]] = []
-    regex_entries: List[Dict[str, Any]] = []
-    for item in overrides:
-        entry = _normalize_reading_override_entry(item)
-        if not entry:
-            continue
-        if entry.get("pattern"):
-            regex_entries.append(entry)
-        else:
-            literals.append(entry)
-
-    out = text
-    for item in sorted(literals, key=lambda e: len(str(e.get("base") or "")), reverse=True):
-        base = str(item.get("base") or "")
-        reading = str(item.get("reading") or "")
-        mode = str(item.get("mode") or "word")
-        if not base or not reading:
-            continue
-        pattern = _literal_override_pattern(base, mode)
-        flags = 0 if bool(item.get("case_sensitive")) else re.IGNORECASE
-        count = 1 if mode in {"first", "word_first"} else 0
-        out = re.sub(pattern, lambda _m, value=reading: value, out, count=count, flags=flags)
-
-    for item in regex_entries:
-        pattern = str(item.get("pattern") or "")
-        reading = str(item.get("reading") or "")
-        mode = str(item.get("mode") or "all")
-        if not pattern or not reading:
-            continue
-        flags = 0 if bool(item.get("case_sensitive")) else re.IGNORECASE
-        count = 1 if mode in {"first", "word_first"} else 0
-        try:
-            out = re.sub(pattern, reading, out, count=count, flags=flags)
-        except re.error:
-            continue
-
-    return out
-
-
-def prepare_tts_text(
-    text: str,
-    reading_overrides: Optional[Sequence[Dict[str, Any]]] = None,
-) -> str:
-    text = _strip_brackets(text)
-    text = _strip_double_quotes(text)
-    text = _strip_single_quotes(text)
-    text = apply_reading_overrides(text, reading_overrides or [])
-    text = _transliterate_pali_sanskrit(text)
-    # Apply twice so users can match either original spellings (with diacritics)
-    # or transliterated forms used by Pocket-TTS.
-    text = apply_reading_overrides(text, reading_overrides or [])
-    text = normalize_urls(text)
-    text = normalize_abbreviations(text)
-    text = _normalize_era_abbreviations(text)
-    text = _normalize_roman_numerals(text)
-    text = _normalize_currency_symbols(text)
-    text = normalize_numbers_for_tts(text)
-    text = _normalize_linebreak_pauses(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if text and text[-1] not in ".!?":
-        text += "."
-    return text
 
 
 def load_text_chapters(text_path: Path) -> List[ChapterInput]:
@@ -2016,8 +821,9 @@ def write_chunk_files(
 def _require_tts() -> None:
     if torch is None or TTSModel is None:
         raise RuntimeError(
-            "Pocket-TTS dependencies are missing. Install torch and pocket-tts "
-            "or run with uv: `uv run --with pocket-tts`."
+            "torch/pocket-tts not installed. `uv sync` installs them on Apple Silicon "
+            "(where torch is the default backend); elsewhere install the extra "
+            "(`uv sync --extra torch`) and select it with NEB_TTS_BACKEND=torch."
         )
 
 
@@ -2043,13 +849,29 @@ def tensor_to_int16(audio: "torch.Tensor") -> "torch.Tensor":
     return a
 
 
+def floats_to_int16(samples: Sequence[float]) -> np.ndarray:
+    """Convert mono float audio (maneko's `list[float]`, ~[-1, 1]) to int16.
+
+    Mirrors `tensor_to_int16`'s heuristic: if the peak looks like normalized
+    float audio, scale by 32767; otherwise assume the values are already in
+    int16 range.
+    """
+    a = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if a.size == 0:
+        return np.zeros(0, dtype=np.int16)
+    max_abs = float(np.abs(a).max())
+    if max_abs <= 1.5:
+        a = np.clip(a, -1.0, 1.0) * 32767.0
+    return np.rint(a).astype(np.int16)
+
+
 def write_wav_mono_16k_or_24k(
-    path: Path, samples_i16: "torch.Tensor", sample_rate: int
+    path: Path, samples_i16: np.ndarray, sample_rate: int
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
 
-    arr = samples_i16.numpy()  # requires numpy via torch; typical torch installs include it
+    arr = np.ascontiguousarray(samples_i16, dtype=np.int16)
     data = arr.tobytes()
 
     with wave.open(str(tmp), "wb") as wf:
@@ -2059,6 +881,163 @@ def write_wav_mono_16k_or_24k(
         wf.writeframes(data)
 
     tmp.replace(path)
+
+
+# --- TTS backends --------------------------------------------------------------
+# A thin interface over the inference engine so the synth pipeline is engine
+# agnostic. The default is platform-aware (see _default_backend_name): torch on
+# Apple Silicon, maneko (native Rust/candle q8) everywhere else. Both return mono
+# int16 numpy arrays; audio assembly (concat + pause padding) is done in numpy by
+# the callers.
+
+
+class _TTSBackend:
+    name = "base"
+
+    def sample_rate(self, language: Optional[str], layers: Optional[int]) -> int:
+        raise NotImplementedError
+
+    def prepare_voice(
+        self, voice_prompt: str, language: Optional[str], layers: Optional[int]
+    ) -> Any:
+        raise NotImplementedError
+
+    def generate(
+        self,
+        voice_handle: Any,
+        text: str,
+        language: Optional[str],
+        layers: Optional[int],
+    ) -> np.ndarray:
+        raise NotImplementedError
+
+
+class ManekoBackend(_TTSBackend):
+    """Native maneko (Rust/candle q8). One resident Pocket; caches per language."""
+
+    name = "maneko"
+
+    def __init__(self) -> None:
+        if maneko is None:
+            raise RuntimeError(
+                "maneko is not installed. `uv sync` installs it everywhere except "
+                "Apple Silicon (where torch is the default backend); there, opt in "
+                "with `uv sync --extra maneko` (builds from GitHub — needs a Rust "
+                "toolchain), or use NEB_TTS_BACKEND=torch."
+            )
+        self._pocket = maneko.Pocket("cpu")
+
+    @staticmethod
+    def _stem(language: Optional[str], layers: Optional[int]) -> str:
+        return language_util.resolve_maneko_language(language, layers)
+
+    def sample_rate(self, language: Optional[str], layers: Optional[int]) -> int:
+        return int(self._pocket.sample_rate(self._stem(language, layers)))
+
+    def prepare_voice(
+        self, voice_prompt: str, language: Optional[str], layers: Optional[int]
+    ) -> Any:
+        # maneko clones lazily and caches the voice-state per (voice, language)
+        # internally, so there is nothing to precompute — just carry the path.
+        return voice_prompt
+
+    def generate(
+        self,
+        voice_handle: Any,
+        text: str,
+        language: Optional[str],
+        layers: Optional[int],
+    ) -> np.ndarray:
+        floats = self._pocket.generate(text, self._stem(language, layers), voice_handle)
+        return floats_to_int16(floats)
+
+
+class TorchBackend(_TTSBackend):
+    """Upstream pocket-tts (torch CPU). Default on Apple Silicon, where torch's
+    Accelerate/AMX GEMMs outrun maneko's q8 NEON kernels (~1.8x on an M4 Pro)."""
+
+    name = "torch"
+
+    def __init__(self) -> None:
+        _require_tts()
+        _install_tts_warning_filter()
+
+    def sample_rate(self, language: Optional[str], layers: Optional[int]) -> int:
+        return int(_load_tts_model(language, layers).sample_rate)
+
+    def prepare_voice(
+        self, voice_prompt: str, language: Optional[str], layers: Optional[int]
+    ) -> Any:
+        model = _load_tts_model(language, layers)
+        return model.get_state_for_audio_prompt(voice_prompt)
+
+    def generate(
+        self,
+        voice_handle: Any,
+        text: str,
+        language: Optional[str],
+        layers: Optional[int],
+    ) -> np.ndarray:
+        model = _load_tts_model(language, layers)
+        audio = model.generate_audio(voice_handle, text)
+        return tensor_to_int16(audio).numpy()
+
+
+_TTS_BACKENDS: Dict[str, _TTSBackend] = {}
+_TTS_BACKEND_LOCK = threading.Lock()
+
+
+def _make_backend(name: str) -> _TTSBackend:
+    if name == "maneko":
+        return ManekoBackend()
+    if name == "torch":
+        return TorchBackend()
+    raise RuntimeError(
+        f"Unknown NEB_TTS_BACKEND={name!r} (expected 'maneko', 'torch', or 'auto')."
+    )
+
+
+def _default_backend_name() -> str:
+    """Platform-aware default backend when NEB_TTS_BACKEND is unset.
+
+    Apple Silicon prefers torch (its Accelerate/AMX GEMMs beat maneko's q8 NEON
+    kernels there; pyproject installs it by default on that platform). Everywhere
+    else maneko is the fast native path.
+    """
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        if torch is not None and TTSModel is not None:
+            return "torch"
+    return "maneko"
+
+
+def _resolve_backend_name() -> str:
+    selector = (os.environ.get("NEB_TTS_BACKEND") or "").strip().lower()
+    if not selector:
+        return _default_backend_name()
+    if selector == "auto":
+        return "torch" if (torch is not None and TTSModel is not None) else "maneko"
+    if selector in ("maneko", "torch"):
+        return selector
+    raise RuntimeError(
+        f"Unknown NEB_TTS_BACKEND={selector!r} (expected 'maneko', 'torch', or 'auto')."
+    )
+
+
+def get_backend() -> _TTSBackend:
+    """Return the configured TTS backend (cached per concrete engine).
+
+    Selected by NEB_TTS_BACKEND: 'maneko', 'torch', or 'auto' (torch if installed,
+    else maneko). Unset picks a platform default: torch on Apple Silicon, maneko
+    elsewhere. Re-reads the env each call so callers/tests can switch.
+    """
+    _ensure_hf_home()
+    name = _resolve_backend_name()
+    with _TTS_BACKEND_LOCK:
+        backend = _TTS_BACKENDS.get(name)
+        if backend is None:
+            backend = _make_backend(name)
+            _TTS_BACKENDS[name] = backend
+        return backend
 
 
 def wav_duration_ms(path: Path) -> int:
@@ -2129,7 +1108,11 @@ def prepare_manifest(
     pad_ms: int,
     chunk_mode: str,
     rechunk: bool,
+    language: Optional[str] = None,
+    layers: Optional[int] = None,
 ) -> Tuple[Dict[str, Any], List[List[str]], int]:
+    language = language_util.normalize_language_tag(language)
+    layers = language_util.resolve_layers(language, layers)
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.json"
     chunk_root = out_dir / "chunks"
@@ -2230,6 +1213,8 @@ def prepare_manifest(
         manifest = {
             "created_unix": int(time.time()),
             "voice": voice,
+            "language": language,
+            "layers": int(layers),
             "max_chars": int(max_chars),
             "pad_ms": int(pad_ms),
             "chunk_mode": chunk_mode,
@@ -2238,6 +1223,8 @@ def prepare_manifest(
         atomic_write_json(manifest_path, manifest)
 
     manifest["voice"] = voice
+    manifest["language"] = language
+    manifest["layers"] = int(layers)
     manifest["max_chars"] = int(max_chars)
     manifest["pad_ms"] = int(manifest.get("pad_ms", pad_ms))
     manifest["chunk_mode"] = chunk_mode
@@ -2291,6 +1278,7 @@ def chunk_book(
     pad_ms: int = 300,
     chunk_mode: str = "sentence",
     rechunk: bool = True,
+    layers: Optional[int] = None,
 ) -> Dict[str, Any]:
     if out_dir is None:
         out_dir = book_dir / "tts"
@@ -2302,6 +1290,7 @@ def chunk_book(
             voice = DEFAULT_VOICE
 
     chapters = load_book_chapters(book_dir)
+    language = _resolve_book_language(book_dir)
     manifest, _chapter_chunks, _pad_ms = prepare_manifest(
         chapters=chapters,
         out_dir=out_dir,
@@ -2310,8 +1299,24 @@ def chunk_book(
         pad_ms=pad_ms,
         chunk_mode=chunk_mode,
         rechunk=rechunk,
+        language=language,
+        layers=layers,
     )
     return manifest
+
+
+def _resolve_book_language(book_dir: Path) -> str:
+    """Read language from <book_dir>/clean/toc.json; fallback to default."""
+    toc_path = book_dir / "clean" / "toc.json"
+    if not toc_path.exists():
+        return language_util.DEFAULT_LANGUAGE
+    try:
+        toc = json.loads(toc_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return language_util.DEFAULT_LANGUAGE
+    metadata = toc.get("metadata") if isinstance(toc, dict) else None
+    raw = metadata.get("language") if isinstance(metadata, dict) else None
+    return language_util.resolve_language(raw)
 
 
 def synthesize(
@@ -2327,8 +1332,12 @@ def synthesize(
     voice_map_path: Optional[Path] = None,
     reading_overrides_dir: Optional[Path] = None,
     base_dir: Optional[Path] = None,
+    language: Optional[str] = None,
+    layers: Optional[int] = None,
 ) -> int:
-    _require_tts()
+    backend = get_backend()
+    language = language_util.normalize_language_tag(language)
+    layers = language_util.resolve_layers(language, layers)
 
     if base_dir is None:
         base_dir = Path.cwd()
@@ -2376,6 +1385,8 @@ def synthesize(
             pad_ms=pad_ms,
             chunk_mode=chunk_mode,
             rechunk=rechunk,
+            language=language,
+            layers=layers,
         )
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
@@ -2424,33 +1435,31 @@ def synthesize(
 
     write_status(out_dir, "cloning", "Preparing voice")
 
-    tts_model = TTSModel.load_model()
-    _install_tts_warning_filter()
-    sample_rate = int(tts_model.sample_rate)
+    sample_rate = backend.sample_rate(language, layers)
     if manifest.get("sample_rate") != sample_rate:
         manifest["sample_rate"] = sample_rate
         atomic_write_json(manifest_path, manifest)
 
     voice_states: Dict[str, Any] = {}
     for voice_id, voice_prompt in voice_prompts.items():
-        voice_states[voice_id] = tts_model.get_state_for_audio_prompt(voice_prompt)
+        voice_states[voice_id] = backend.prepare_voice(voice_prompt, language, layers)
     write_status(out_dir, "synthesizing")
 
     base_pad_samples = int(round(sample_rate * (pad_ms / 1000.0)))
-    pad_tensors: Dict[int, Optional["torch.Tensor"]] = {}
+    pad_arrays: Dict[int, Optional[np.ndarray]] = {}
 
-    def pad_tensor_for(multiplier: int) -> Optional["torch.Tensor"]:
+    def pad_array_for(multiplier: int) -> Optional[np.ndarray]:
         multiplier = max(1, int(multiplier))
         if base_pad_samples <= 0:
             return None
-        if multiplier not in pad_tensors:
+        if multiplier not in pad_arrays:
             total_samples = base_pad_samples * multiplier
-            pad_tensors[multiplier] = (
-                torch.zeros(total_samples, dtype=torch.int16)
+            pad_arrays[multiplier] = (
+                np.zeros(total_samples, dtype=np.int16)
                 if total_samples > 0
                 else None
             )
-        return pad_tensors[multiplier]
+        return pad_arrays[multiplier]
 
     segment_paths: List[Path] = []
     selected_ids = set(only_chapter_ids) if only_chapter_ids else None
@@ -2513,7 +1522,9 @@ def synthesize(
                     continue
 
                 tts_text = prepare_tts_text(
-                    chunk_text, chapter_reading_map.get(chapter_id, [])
+                    chunk_text,
+                    chapter_reading_map.get(chapter_id, []),
+                    language=language,
                 )
                 if not tts_text.strip():
                     sys.stderr.write(
@@ -2539,7 +1550,7 @@ def synthesize(
 
                 sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
                 sub_total = len(sub_texts)
-                audio_parts: List["torch.Tensor"] = []
+                audio_parts: List[np.ndarray] = []
                 for sub_idx, sub_text in enumerate(sub_texts, start=1):
                     sub_text = sub_text.strip()
                     if not sub_text:
@@ -2549,25 +1560,28 @@ def synthesize(
                     with _tts_warning_context(
                         chapter_id, chunk_idx, chapter_total, sub_idx, sub_total
                     ):
-                        audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+                        audio_parts.append(
+                            backend.generate(voice_state, sub_text, language, layers)
+                        )
 
                 if not audio_parts:
                     with _tts_warning_context(chapter_id, chunk_idx, chapter_total, 1, 1):
-                        audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+                        audio_parts = [
+                            backend.generate(voice_state, tts_text, language, layers)
+                        ]
 
                 if len(audio_parts) == 1:
-                    audio = audio_parts[0]
+                    a16 = audio_parts[0]
                 else:
-                    audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
-                a16 = tensor_to_int16(audio)
+                    a16 = np.concatenate(audio_parts)
 
-                pad_tensor = pad_tensor_for(pause_multiplier)
-                if pad_tensor is not None and pad_tensor.numel() > 0:
-                    a16 = torch.cat([a16, pad_tensor], dim=0)
+                pad_array = pad_array_for(pause_multiplier)
+                if pad_array is not None and pad_array.size > 0:
+                    a16 = np.concatenate([a16, pad_array])
 
                 write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
                 segment_paths.append(seg_path)
-                dms = int(round(a16.numel() * 1000.0 / sample_rate))
+                dms = int(round(a16.size * 1000.0 / sample_rate))
 
                 # Persist progress for restartability.
                 ch_entry["durations_ms"][chunk_idx - 1] = dms
@@ -2599,7 +1613,7 @@ def synthesize_chunk(
     voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
 ) -> dict:
-    _require_tts()
+    backend = get_backend()
     if base_dir is None:
         base_dir = Path.cwd()
     if chunk_index < 0:
@@ -2709,9 +1723,9 @@ def synthesize_chunk(
         voice_id = _normalize_voice_id(entry.get("voice"), default_voice)
 
     voice_prompt = resolve_voice_prompt(voice_id, base_dir=base_dir)
-    tts_model = TTSModel.load_model()
-    _install_tts_warning_filter()
-    sample_rate = int(tts_model.sample_rate)
+    language = manifest.get("language")
+    layers = manifest.get("layers")
+    sample_rate = backend.sample_rate(language, layers)
     if manifest.get("sample_rate") != sample_rate:
         manifest["sample_rate"] = sample_rate
 
@@ -2723,7 +1737,7 @@ def synthesize_chunk(
     except (TypeError, ValueError, IndexError):
         pause_multiplier = 1
     pad_samples = base_pad_samples * pause_multiplier
-    pad_tensor = torch.zeros(pad_samples, dtype=torch.int16) if pad_samples > 0 else None
+    pad_array = np.zeros(pad_samples, dtype=np.int16) if pad_samples > 0 else None
 
     overrides_dir = out_dir
     if not _reading_overrides_path(overrides_dir).exists():
@@ -2735,7 +1749,11 @@ def synthesize_chunk(
         global_reading_overrides,
         chapter_reading_overrides.get(chapter_id, []),
     )
-    tts_text = prepare_tts_text(chunk_text, merged_reading_overrides)
+    tts_text = prepare_tts_text(
+        chunk_text,
+        merged_reading_overrides,
+        language=manifest.get("language") or "english",
+    )
     seg_path = out_dir / "segments" / chapter_id / f"{chunk_index + 1:06d}.wav"
     seg_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2751,25 +1769,28 @@ def synthesize_chunk(
             "duration_ms": 0,
         }
 
-    voice_state = tts_model.get_state_for_audio_prompt(voice_prompt)
+    voice_state = backend.prepare_voice(voice_prompt, language, layers)
     sub_texts = split_tts_text_for_synthesis(tts_text, max_chars=max_chars)
     sub_total = len(sub_texts)
-    audio_parts: List["torch.Tensor"] = []
+    audio_parts: List[np.ndarray] = []
     for sub_idx, sub_text in enumerate(sub_texts, start=1):
         with _tts_warning_context(
             chapter_id, chunk_index + 1, chunk_count, sub_idx, sub_total
         ):
-            audio_parts.append(tts_model.generate_audio(voice_state, sub_text))
+            audio_parts.append(
+                backend.generate(voice_state, sub_text, language, layers)
+            )
     if not audio_parts:
         with _tts_warning_context(chapter_id, chunk_index + 1, chunk_count, 1, 1):
-            audio_parts = [tts_model.generate_audio(voice_state, tts_text)]
+            audio_parts = [
+                backend.generate(voice_state, tts_text, language, layers)
+            ]
     if len(audio_parts) == 1:
-        audio = audio_parts[0]
+        a16 = audio_parts[0]
     else:
-        audio = torch.cat([part.flatten() for part in audio_parts], dim=0)
-    a16 = tensor_to_int16(audio)
-    if pad_tensor is not None and pad_tensor.numel() > 0:
-        a16 = torch.cat([a16, pad_tensor], dim=0)
+        a16 = np.concatenate(audio_parts)
+    if pad_array is not None and pad_array.size > 0:
+        a16 = np.concatenate([a16, pad_array])
     write_wav_mono_16k_or_24k(seg_path, a16, sample_rate=sample_rate)
 
     dms = wav_duration_ms(seg_path)
@@ -2793,6 +1814,8 @@ def synthesize_text(
     rechunk: bool = False,
     voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
+    language: Optional[str] = None,
+    layers: Optional[int] = None,
 ) -> int:
     chapters = load_text_chapters(text_path)
     return synthesize(
@@ -2806,6 +1829,8 @@ def synthesize_text(
         voice_map_path=voice_map_path,
         reading_overrides_dir=None,
         base_dir=base_dir,
+        language=language,
+        layers=layers,
     )
 
 
@@ -2819,6 +1844,8 @@ def synthesize_book(
     rechunk: bool = False,
     voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
+    language: Optional[str] = None,
+    layers: Optional[int] = None,
 ) -> int:
     if out_dir is None:
         out_dir = book_dir / "tts"
@@ -2828,18 +1855,27 @@ def synthesize_book(
     except (FileNotFoundError, ValueError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
-    return synthesize(
-        chapters=chapters,
-        voice=voice,
-        out_dir=out_dir,
-        max_chars=max_chars,
-        pad_ms=pad_ms,
-        chunk_mode=chunk_mode,
-        rechunk=rechunk,
-        voice_map_path=voice_map_path,
-        reading_overrides_dir=book_dir,
-        base_dir=base_dir,
-    )
+    resolved_language = language or _resolve_book_language(book_dir)
+    try:
+        return synthesize(
+            chapters=chapters,
+            voice=voice,
+            out_dir=out_dir,
+            max_chars=max_chars,
+            pad_ms=pad_ms,
+            chunk_mode=chunk_mode,
+            rechunk=rechunk,
+            voice_map_path=voice_map_path,
+            reading_overrides_dir=book_dir,
+            base_dir=base_dir,
+            language=resolved_language,
+            layers=layers,
+        )
+    except Exception as exc:
+        # Leave a machine-readable trace for the player UI; the traceback still
+        # goes to the log via the re-raise.
+        write_status(out_dir, "error", detail=str(exc)[:1000])
+        raise
 
 
 def synthesize_book_sample(
@@ -2852,6 +1888,8 @@ def synthesize_book_sample(
     rechunk: bool = False,
     voice_map_path: Optional[Path] = None,
     base_dir: Optional[Path] = None,
+    language: Optional[str] = None,
+    layers: Optional[int] = None,
 ) -> int:
     if out_dir is None:
         out_dir = book_dir / "tts"
@@ -2887,20 +1925,28 @@ def synthesize_book_sample(
                     break
             atomic_write_json(manifest_path, manifest)
 
-    return synthesize(
-        chapters=chapters,
-        voice=voice,
-        out_dir=out_dir,
-        max_chars=max_chars,
-        pad_ms=pad_ms,
-        chunk_mode=chunk_mode,
-        rechunk=rechunk,
-        wipe_segments=False,
-        only_chapter_ids={sample_id},
-        voice_map_path=voice_map_path,
-        reading_overrides_dir=book_dir,
-        base_dir=base_dir,
-    )
+    try:
+        return synthesize(
+            chapters=chapters,
+            voice=voice,
+            out_dir=out_dir,
+            max_chars=max_chars,
+            pad_ms=pad_ms,
+            chunk_mode=chunk_mode,
+            rechunk=rechunk,
+            wipe_segments=False,
+            only_chapter_ids={sample_id},
+            voice_map_path=voice_map_path,
+            reading_overrides_dir=book_dir,
+            base_dir=base_dir,
+            language=language or _resolve_book_language(book_dir),
+            layers=layers,
+        )
+    except Exception as exc:
+        # Leave a machine-readable trace for the player UI; the traceback still
+        # goes to the log via the re-raise.
+        write_status(out_dir, "error", detail=str(exc)[:1000])
+        raise
 
 
 # ----------------------------
@@ -2916,7 +1962,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     ap.add_argument(
         "--voice-map",
@@ -2951,6 +1997,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore existing manifest and rechunk the input text",
     )
+    ap.add_argument(
+        "--language",
+        help="Pocket-tts language override (english, french, german, italian, portuguese, spanish)",
+    )
+    ap.add_argument(
+        "--layers",
+        type=int,
+        choices=[6, 24],
+        help="Flow-LM transformer layer count (6=fast, 24=higher quality)",
+    )
     return ap
 
 
@@ -2967,6 +2023,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             chunk_mode=args.chunk_mode,
             rechunk=args.rechunk,
             voice_map_path=args.voice_map,
+            language=args.language,
+            layers=args.layers,
         )
     if not args.out:
         parser.error("--out is required when using --text")
@@ -2979,6 +2037,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
         voice_map_path=args.voice_map,
+        language=args.language,
+        layers=args.layers,
     )
 
 

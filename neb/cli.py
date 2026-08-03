@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import epub as epub_util
+from . import language as language_util
 from . import merge as merge_util
 from . import player as player_util
 from . import sanitize as sanitize_util
@@ -48,7 +49,7 @@ def _ingest_text(input_path: Path, out_dir: Path, raw_dir: Path) -> int:
     metadata = {
         "title": book_title,
         "authors": [],
-        "language": "",
+        "language": language_util.DEFAULT_LANGUAGE,
         "dates": [],
         "year": "",
         "cover": None,
@@ -73,6 +74,13 @@ def _ingest_text(input_path: Path, out_dir: Path, raw_dir: Path) -> int:
 def _ingest_epub(input_path: Path, out_dir: Path, raw_dir: Path) -> int:
     book = epub_util.read_epub(input_path)
     metadata = epub_util.extract_metadata(book)
+    try:
+        metadata["language"] = language_util.normalize_language_tag(
+            metadata.get("language")
+        )
+    except language_util.UnsupportedLanguageError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
     cover = epub_util.extract_cover_image(book)
     if cover:
         cover_path = _write_cover_image(cover, out_dir)
@@ -380,6 +388,8 @@ def _synth(args: argparse.Namespace) -> int:
             chunk_mode=args.chunk_mode,
             rechunk=args.rechunk,
             voice_map_path=voice_map,
+            language=args.language,
+            layers=args.layers,
         )
 
     if text_path is None or out_dir is None:
@@ -395,6 +405,8 @@ def _synth(args: argparse.Namespace) -> int:
         chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
         voice_map_path=voice_map,
+        language=args.language,
+        layers=args.layers,
     )
 
 
@@ -411,6 +423,21 @@ def _sample(args: argparse.Namespace) -> int:
         chunk_mode=args.chunk_mode,
         rechunk=args.rechunk,
         voice_map_path=voice_map,
+        language=args.language,
+        layers=args.layers,
+    )
+
+
+def _add_model_config_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--language",
+        help="Pocket-tts language override (english, french, german, italian, portuguese, spanish)",
+    )
+    parser.add_argument(
+        "--layers",
+        type=int,
+        choices=[6, 24],
+        help="Flow-LM transformer layer count (6=fast, 24=higher quality)",
     )
 
 
@@ -596,7 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output", required=True, help="Path to output .m4b")
     run.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     run.set_defaults(func=lambda _args: _not_implemented("run"))
 
@@ -628,7 +655,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     synth.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     synth.add_argument(
         "--voice-map",
@@ -643,6 +670,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Chunking strategy (default: sentence)",
     )
     synth.add_argument("--rechunk", action="store_true")
+    _add_model_config_args(synth)
     synth.set_defaults(func=_synth)
 
     sample = subparsers.add_parser(
@@ -655,7 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sample.add_argument(
         "--voice",
-        help="Voice prompt: built-in name, wav path, or hf:// URL",
+        help="Voice prompt: wav path or hf:// URL",
     )
     sample.add_argument(
         "--voice-map",
@@ -670,6 +698,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Chunking strategy (default: sentence)",
     )
     sample.add_argument("--rechunk", action="store_true")
+    _add_model_config_args(sample)
     sample.set_defaults(func=_sample)
 
     clone = subparsers.add_parser("clone", help="Create a voice sample from audio")

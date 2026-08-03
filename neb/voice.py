@@ -3,17 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-BUILTIN_VOICES = {
-    "alba": "hf://kyutai/tts-voices/alba-mackenna/casual.wav",
-    "marius": "hf://kyutai/tts-voices/voice-donations/Selfie.wav",
-    "javert": "hf://kyutai/tts-voices/voice-donations/Butter.wav",
-    "jean": "hf://kyutai/tts-voices/ears/p010/freeform_speech_01.wav",
-    "fantine": "hf://kyutai/tts-voices/vctk/p244_023.wav",
-    "cosette": "hf://kyutai/tts-voices/expresso/ex04-ex02_confused_001_channel1_499s.wav",
-    "eponine": "hf://kyutai/tts-voices/vctk/p262_023.wav",
-    "azelma": "hf://kyutai/tts-voices/vctk/p303_023.wav",
-}
-DEFAULT_VOICE = "alba"
+# Voice cloning is wav-only: the narrator is always a local `.wav` clone source
+# (under voices/) or an `hf://…/foo.wav` URL. pocket-tts's hosted stock voices
+# have been removed — there are no built-in named voices.
+DEFAULT_VOICE = "voices/ray.wav"
 
 
 def resolve_voice_prompt(
@@ -26,12 +19,8 @@ def resolve_voice_prompt(
     if not voice:
         voice = DEFAULT_VOICE
 
-    lowered = voice.lower()
-    if lowered == "default":
-        lowered = DEFAULT_VOICE
-
-    if lowered in BUILTIN_VOICES:
-        return BUILTIN_VOICES[lowered]
+    if voice.lower() == "default":
+        voice = DEFAULT_VOICE
 
     if voice.startswith("hf://"):
         return voice
@@ -43,8 +32,7 @@ def resolve_voice_prompt(
     if candidate.exists():
         return str(candidate)
 
-    choices = ", ".join(sorted(BUILTIN_VOICES))
     raise ValueError(
-        f"Voice prompt not found: {voice}. Use a built-in voice ({choices}), "
-        "a wav file path, or an hf:// URL."
+        f"Voice prompt not found: {voice}. Pass a wav file path (e.g. voices/ray.wav) "
+        "or an hf:// URL. Create a clone source with `neb clone`."
     )

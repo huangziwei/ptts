@@ -1,5 +1,6 @@
 .DS_Store
 .codex
+.claude
 .cache
 .uv-cache
 *cache*
@@ -12,3 +13,4 @@ __pycache__/
 .venv
 AGENTS.md
 tests/epub
+bench/

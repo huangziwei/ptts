@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from neb import tts
+from neb import text as neb_text, tts
 
 
 def test_make_chunks_preserves_text() -> None:
@@ -14,98 +14,98 @@ def test_make_chunks_preserves_text() -> None:
 
 
 def test_prepare_tts_text_adds_punctuation() -> None:
-    assert tts.prepare_tts_text("Hello world") == "Hello world."
+    assert neb_text.prepare_tts_text("Hello world") == "Hello world."
 
 
 def test_normalize_urls_basic() -> None:
     assert (
-        tts.normalize_urls("https://www.example.com")
+        neb_text.normalize_urls("https://www.example.com")
         == "h-t-t-p-s colon slash slash w-w-w dot example dot com"
     )
 
 
 def test_normalize_urls_http() -> None:
     assert (
-        tts.normalize_urls("http://example.com")
+        neb_text.normalize_urls("http://example.com")
         == "h-t-t-p colon slash slash example dot com"
     )
 
 
 def test_normalize_urls_with_path() -> None:
     assert (
-        tts.normalize_urls("https://example.com/my-page/article")
+        neb_text.normalize_urls("https://example.com/my-page/article")
         == "h-t-t-p-s colon slash slash example dot com slash my dash page slash article"
     )
 
 
 def test_normalize_urls_with_query_and_fragment() -> None:
     assert (
-        tts.normalize_urls("https://example.com/search?q=hello&lang=en#top")
+        neb_text.normalize_urls("https://example.com/search?q=hello&lang=en#top")
         == "h-t-t-p-s colon slash slash example dot com slash search question mark q equals hello ampersand lang equals en hash top"
     )
 
 
 def test_normalize_urls_with_underscore() -> None:
     assert (
-        tts.normalize_urls("https://example.com/some_article")
+        neb_text.normalize_urls("https://example.com/some_article")
         == "h-t-t-p-s colon slash slash example dot com slash some underscore article"
     )
 
 
 def test_normalize_urls_trailing_punctuation() -> None:
-    result = tts.normalize_urls("See https://example.com.")
+    result = neb_text.normalize_urls("See https://example.com.")
     assert result == "See h-t-t-p-s colon slash slash example dot com."
 
 
 def test_normalize_urls_in_sentence() -> None:
-    result = tts.normalize_urls("Visit https://www.example.com/page for details.")
+    result = neb_text.normalize_urls("Visit https://www.example.com/page for details.")
     assert result == "Visit h-t-t-p-s colon slash slash w-w-w dot example dot com slash page for details."
 
 
 def test_normalize_urls_ftp() -> None:
     assert (
-        tts.normalize_urls("ftp://files.example.com")
+        neb_text.normalize_urls("ftp://files.example.com")
         == "f-t-p colon slash slash files dot example dot com"
     )
 
 
 def test_prepare_tts_text_normalizes_url() -> None:
-    result = tts.prepare_tts_text("See https://example.com for more.")
+    result = neb_text.prepare_tts_text("See https://example.com for more.")
     assert "h-t-t-p-s colon slash slash example dot com" in result
 
 
 def test_prepare_tts_text_normalizes_abbreviations() -> None:
-    assert tts.prepare_tts_text("Mr. Poe went home.") == "Mr Poe went home."
+    assert neb_text.prepare_tts_text("Mr. Poe went home.") == "Mr Poe went home."
 
 
 def test_prepare_tts_text_normalizes_roman_heading() -> None:
-    assert tts.prepare_tts_text("Chapter I") == "Chapter one."
-    assert tts.prepare_tts_text("Part IV.") == "Part four."
+    assert neb_text.prepare_tts_text("Chapter I") == "Chapter one."
+    assert neb_text.prepare_tts_text("Part IV.") == "Part four."
 
 
 def test_prepare_tts_text_normalizes_roman_title() -> None:
-    assert tts.prepare_tts_text("I") == "one."
+    assert neb_text.prepare_tts_text("I") == "one."
 
 
 def test_prepare_tts_text_normalizes_multiline_roman_title() -> None:
     text = "I\nOn Anticipation"
-    assert tts.prepare_tts_text(text) == "one, On Anticipation."
+    assert neb_text.prepare_tts_text(text) == "one, On Anticipation."
 
 
 def test_prepare_tts_text_adds_pause_for_single_newline() -> None:
     text = "First line\nSecond line"
-    assert tts.prepare_tts_text(text) == "First line, Second line."
+    assert neb_text.prepare_tts_text(text) == "First line, Second line."
 
 
 def test_prepare_tts_text_skips_roman_i_pronoun() -> None:
     text = "In this chapter I continue to investigate."
-    assert tts.prepare_tts_text(text) == text
+    assert neb_text.prepare_tts_text(text) == text
 
 
 def test_prepare_tts_text_normalizes_roman_heading_with_comma() -> None:
     text = "In chapter I, we continue."
     expected = "In chapter one, we continue."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_normalizes_plural_roman_heading_list() -> None:
@@ -117,7 +117,7 @@ def test_prepare_tts_text_normalizes_plural_roman_heading_list() -> None:
         "The remaining qualities, mindfulness and the absence of desires and discontent, "
         "will be the subjects of Chapters three and four."
     )
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_make_chunks_keeps_name_initials_together() -> None:
@@ -142,53 +142,53 @@ def test_make_chunks_splits_after_quoted_period() -> None:
 
 def test_prepare_tts_text_normalizes_label_numbers() -> None:
     assert (
-        tts.prepare_tts_text("Figure 2.1 shows")
+        neb_text.prepare_tts_text("Figure 2.1 shows")
         == "Figure two point one shows."
     )
 
 
 def test_prepare_tts_text_normalizes_standalone_dotted_numbers() -> None:
     assert (
-        tts.prepare_tts_text("1.1.2 The Preoccupation with Certainty")
+        neb_text.prepare_tts_text("1.1.2 The Preoccupation with Certainty")
         == "one point one point two The Preoccupation with Certainty."
     )
 
 
 def test_prepare_tts_text_normalizes_deep_dotted_numbers() -> None:
     assert (
-        tts.prepare_tts_text("See 1.1.1.1.1 for details.")
+        neb_text.prepare_tts_text("See 1.1.1.1.1 for details.")
         == "See one point one point one point one point one for details."
     )
 
 
 def test_prepare_tts_text_normalizes_large_numbers() -> None:
     assert (
-        tts.prepare_tts_text("Population 1,000,000")
+        neb_text.prepare_tts_text("Population 1,000,000")
         == "Population one million."
     )
     assert (
-        tts.prepare_tts_text("Population 1000000")
+        neb_text.prepare_tts_text("Population 1000000")
         == "Population one million."
     )
 
 
 def test_prepare_tts_text_normalizes_currency_symbols_corpus_examples() -> None:
     # Corpus-derived samples from `out/**/chapters/*.txt` and `out/**/tts/*.txt`.
-    assert tts.prepare_tts_text("That'll be $3.85.") == "That'll be three point eight five dollars."
+    assert neb_text.prepare_tts_text("That'll be $3.85.") == "That'll be three point eight five dollars."
     assert (
-        tts.prepare_tts_text("He can buy $50.00 worth of groceries for $6.98.")
+        neb_text.prepare_tts_text("He can buy $50.00 worth of groceries for $6.98.")
         == "He can buy fifty dollars worth of groceries for six point nine eight dollars."
     )
     assert (
-        tts.prepare_tts_text("The unused portion was $5000.")
+        neb_text.prepare_tts_text("The unused portion was $5000.")
         == "The unused portion was five thousand dollars."
     )
     assert (
-        tts.prepare_tts_text("I was paid $2978.25 for services.")
+        neb_text.prepare_tts_text("I was paid $2978.25 for services.")
         == "I was paid two thousand nine hundred seventy eight point two five dollars for services."
     )
     assert (
-        tts.prepare_tts_text("The whole town smells of $1.89 fried shrimp dinners.")
+        neb_text.prepare_tts_text("The whole town smells of $1.89 fried shrimp dinners.")
         == "The whole town smells of one point eight nine dollars fried shrimp dinners."
     )
 
@@ -215,30 +215,30 @@ def test_prepare_tts_text_normalizes_additional_currency_symbols() -> None:
         ),
     ]
     for text, expected in cases:
-        assert tts.prepare_tts_text(text) == expected
+        assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_normalizes_era_abbreviations_corpus_examples() -> None:
     assert (
-        tts.prepare_tts_text("For example, the year 586 B.C.E. is equivalent to the year 586 B.C.")
+        neb_text.prepare_tts_text("For example, the year 586 B.C.E. is equivalent to the year 586 B.C.")
         == "For example, the year five hundred eighty six B-C-E is equivalent to the year five hundred eighty six B-C."
     )
     assert (
-        tts.prepare_tts_text(
+        neb_text.prepare_tts_text(
             "The abbreviations C.E. and B.C.E. correspond to B.C. and A.D."
         )
         == "The abbreviations C-E and B-C-E correspond to B-C and A-D."
     )
     assert (
-        tts.prepare_tts_text("The date range is 1250–1050 BCE.")
+        neb_text.prepare_tts_text("The date range is 1250–1050 BCE.")
         == "The date range is twelve fifty to ten fifty B-C-E."
     )
 
 
 def test_prepare_tts_text_normalizes_era_abbreviations_extrapolated_forms() -> None:
-    assert tts.prepare_tts_text("The city fell in AD 70.") == "The city fell in A-D seventy."
-    assert tts.prepare_tts_text("The city fell in 70 AD.") == "The city fell in seventy A-D."
-    assert tts.prepare_tts_text("Use BC and AD labels.") == "Use BC and AD labels."
+    assert neb_text.prepare_tts_text("The city fell in AD 70.") == "The city fell in A-D seventy."
+    assert neb_text.prepare_tts_text("The city fell in 70 AD.") == "The city fell in seventy A-D."
+    assert neb_text.prepare_tts_text("Use BC and AD labels.") == "Use BC and AD labels."
 
 
 def test_prepare_tts_text_normalizes_all_remaining_digits() -> None:
@@ -247,22 +247,22 @@ def test_prepare_tts_text_normalizes_all_remaining_digits() -> None:
         "Model X two was released in twenty twenty six, ranked twenty first, scored plus seventeen, "
         "ratio three/four, and ticket zero zero seven."
     )
-    out = tts.prepare_tts_text(text)
+    out = neb_text.prepare_tts_text(text)
     assert out == expected
     assert not any(ch.isdigit() for ch in out)
 
 
 def test_prepare_tts_text_normalizes_decade_numbers() -> None:
     assert (
-        tts.prepare_tts_text("It lasted through the early 1850s.")
+        neb_text.prepare_tts_text("It lasted through the early 1850s.")
         == "It lasted through the early eighteen fifties."
     )
     assert (
-        tts.prepare_tts_text("By the 1990s and '80s, things changed.")
+        neb_text.prepare_tts_text("By the 1990s and '80s, things changed.")
         == "By the nineteen nineties and eighties, things changed."
     )
     assert (
-        tts.prepare_tts_text("The 1850's debates still matter.")
+        neb_text.prepare_tts_text("The 1850's debates still matter.")
         == "The eighteen fifties debates still matter."
     )
 
@@ -270,25 +270,25 @@ def test_prepare_tts_text_normalizes_decade_numbers() -> None:
 def test_prepare_tts_text_transliterates_pali_sanskrit() -> None:
     text = "Saṃyukta-āgama, Dīrgha-āgama, Saḷāyatanavibhaṅga-sutta, and Nibbāna."
     expected = "Samyukta-aagama, Diirgha-aagama, Salaayatanavibhangga-sutta, and Nibbaana."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_expands_abbreviations() -> None:
     text = "Prof. Smith references Fig. 1.1."
     expected = "Professor Smith references Figure one point one."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_expands_etc() -> None:
     text = "Lists and so on, etc."
     expected = "Lists and so on, et cetera."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_expands_latin_abbrev() -> None:
     text = "This is, i.e., the key point; e.g. a sample."
     expected = "This is, that is, the key point; for example a sample."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_expands_additional_latin_abbrev() -> None:
@@ -297,22 +297,22 @@ def test_prepare_tts_text_expands_additional_latin_abbrev() -> None:
         "Artifacts dated circa eighteen twenty six are discussed by Smith and others; "
         "compare in the same place."
     )
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_expands_latin_reference_abbrev() -> None:
     text = "Use op. cit., loc. cit., n.b., and q.v. here."
     expected = "Use in the work cited, in the place cited, note well, and which see here."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_expands_et_seq_forms() -> None:
     assert (
-        tts.prepare_tts_text("Read chapters 2 et seq. for details.")
+        neb_text.prepare_tts_text("Read chapters 2 et seq. for details.")
         == "Read chapters two and the following for details."
     )
     assert (
-        tts.prepare_tts_text("Read chapters 2 et seqq. for details.")
+        neb_text.prepare_tts_text("Read chapters 2 et seqq. for details.")
         == "Read chapters two and the following for details."
     )
 
@@ -320,19 +320,19 @@ def test_prepare_tts_text_expands_et_seq_forms() -> None:
 def test_prepare_tts_text_expands_vs_viz() -> None:
     text = "Compare A vs. B; viz. the minimal case."
     expected = "Compare A versus B; namely the minimal case."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_normalizes_dotted_initialisms() -> None:
     text = "S. T. Joshi wrote in the U.S., U.K., and U.N."
     expected = "S-T-Joshi wrote in the U-S, U-K, and U-N."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_normalizes_no_number_abbrev() -> None:
     text = "See No. 5 for details."
     expected = "See number five for details."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_normalizes_page_verse_abbrev() -> None:
@@ -341,13 +341,13 @@ def test_prepare_tts_text_normalizes_page_verse_abbrev() -> None:
         "See page eighteen seventy eight, pages nineteen seventy one to nineteen seventy seven, "
         "verse five, and verses six-seven."
     )
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_keeps_pm_abbrev() -> None:
     text = "Meeting at 5 p.m."
     expected = "Meeting at five p.m."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -368,31 +368,31 @@ def test_prepare_tts_text_keeps_pm_abbrev() -> None:
     ],
 )
 def test_prepare_tts_text_strips_brackets(text: str, expected: str) -> None:
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_strips_double_quotes() -> None:
     text = 'He said "bible" should be read aloud.'
     expected = "He said bible should be read aloud."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_strips_single_quotes_but_keeps_apostrophes() -> None:
     text = "He said 'bible' should not change don't."
     expected = "He said bible should not change don't."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_keeps_leading_elisions() -> None:
     text = "'Tis the season."
     expected = "'Tis the season."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_normalizes_roman_decimal() -> None:
     text = "See I.1 and II.3 in the appendix."
     expected = "See one point one and two point three in the appendix."
-    assert tts.prepare_tts_text(text) == expected
+    assert neb_text.prepare_tts_text(text) == expected
 
 
 def test_prepare_tts_text_applies_reading_overrides() -> None:
@@ -402,14 +402,14 @@ def test_prepare_tts_text_applies_reading_overrides() -> None:
         {"base": "sati", "reading": "sah-tee"},
     ]
     expected = "soot-ta and sah-tee appear in this sentence."
-    assert tts.prepare_tts_text(text, overrides) == expected
+    assert neb_text.prepare_tts_text(text, overrides) == expected
 
 
 def test_prepare_tts_text_reading_overrides_word_boundary_default() -> None:
     text = "Sati appears, but satisfaction should not change."
     overrides = [{"base": "sati", "reading": "sah-tee"}]
     expected = "sah-tee appears, but satisfaction should not change."
-    assert tts.prepare_tts_text(text, overrides) == expected
+    assert neb_text.prepare_tts_text(text, overrides) == expected
 
 
 def test_tts_warning_filter_adds_chunk_context_for_cross_thread_warning(caplog) -> None:
@@ -442,20 +442,20 @@ def test_prepare_tts_text_applies_diacritic_pattern_before_transliteration() -> 
     overrides = [
         {"pattern": r"\bsatipa(?:ṭṭhāna|tthana)\b", "reading": "sah-tee-pat-ta-na"}
     ]
-    assert tts.prepare_tts_text(text, overrides) == "sah-tee-pat-ta-na."
+    assert neb_text.prepare_tts_text(text, overrides) == "sah-tee-pat-ta-na."
 
 
 def test_apply_reading_overrides_first_mode() -> None:
     text = "sutta sutta sutta"
     overrides = [{"base": "sutta", "reading": "soot-ta", "mode": "first"}]
-    assert tts.apply_reading_overrides(text, overrides) == "soot-ta sutta sutta"
+    assert neb_text.apply_reading_overrides(text, overrides) == "soot-ta sutta sutta"
 
 
 def test_merge_reading_overrides_prefers_chapter() -> None:
     global_overrides = [{"base": "sati", "reading": "sah-tee"}]
     chapter_overrides = [{"base": "sati", "reading": "sah-ti"}]
-    merged = tts._merge_reading_overrides(global_overrides, chapter_overrides)
-    assert tts.apply_reading_overrides("sati", merged) == "sah-ti"
+    merged = neb_text._merge_reading_overrides(global_overrides, chapter_overrides)
+    assert neb_text.apply_reading_overrides("sati", merged) == "sah-ti"
 
 
 def test_load_reading_overrides(tmp_path: Path) -> None:
@@ -474,7 +474,7 @@ def test_load_reading_overrides(tmp_path: Path) -> None:
     }
     path = tmp_path / "reading-overrides.json"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    global_overrides, chapter_overrides = tts._load_reading_overrides(tmp_path)
+    global_overrides, chapter_overrides = neb_text._load_reading_overrides(tmp_path)
     assert global_overrides == [
         {"base": "sutta", "reading": "soot-ta", "mode": "word", "case_sensitive": False},
         {
@@ -792,3 +792,264 @@ def test_prepare_manifest_backfills_chapter_boundary_pause_for_existing_manifest
     )
 
     assert manifest["chapters"][0]["pause_multipliers"][-1] == 5
+
+
+def test_prepare_manifest_stores_language_default(tmp_path: Path) -> None:
+    chapter = tts.ChapterInput(
+        index=1,
+        id="0001-test",
+        title="Test",
+        text="Hello world",
+        path=None,
+    )
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=[chapter],
+        out_dir=tmp_path / "out",
+        voice="voice.wav",
+        max_chars=50,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+    )
+    assert manifest["language"] == "english"
+
+
+def test_prepare_manifest_stores_explicit_language(tmp_path: Path) -> None:
+    chapter = tts.ChapterInput(
+        index=1,
+        id="0001-test",
+        title="Test",
+        text="Bonjour le monde",
+        path=None,
+    )
+    out_dir = tmp_path / "out"
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=[chapter],
+        out_dir=out_dir,
+        voice="voice.wav",
+        max_chars=50,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+        language="fr",
+    )
+    assert manifest["language"] == "french"
+    round_trip = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert round_trip["language"] == "french"
+
+
+def test_resolve_book_language_reads_toc_metadata(tmp_path: Path) -> None:
+    book_dir = tmp_path / "book"
+    clean_dir = book_dir / "clean"
+    clean_dir.mkdir(parents=True)
+    (clean_dir / "toc.json").write_text(
+        json.dumps({"metadata": {"language": "de-DE"}, "chapters": []}),
+        encoding="utf-8",
+    )
+    assert tts._resolve_book_language(book_dir) == "german"
+
+
+def test_resolve_book_language_falls_back_on_missing_toc(tmp_path: Path) -> None:
+    assert tts._resolve_book_language(tmp_path / "nowhere") == "english"
+
+
+def test_prepare_manifest_stores_default_layers(tmp_path: Path) -> None:
+    chapter = tts.ChapterInput(
+        index=1,
+        id="0001-test",
+        title="Test",
+        text="Hello world",
+        path=None,
+    )
+    out_dir = tmp_path / "out"
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=[chapter],
+        out_dir=out_dir,
+        voice="voice.wav",
+        max_chars=50,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+    )
+    assert manifest["layers"] == 6
+    round_trip = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert round_trip["layers"] == 6
+
+
+def test_prepare_manifest_stores_explicit_layers(tmp_path: Path) -> None:
+    chapter = tts.ChapterInput(
+        index=1,
+        id="0001-test",
+        title="Test",
+        text="Guten Tag",
+        path=None,
+    )
+    out_dir = tmp_path / "out"
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=[chapter],
+        out_dir=out_dir,
+        voice="voice.wav",
+        max_chars=50,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+        language="de",
+        layers=6,
+    )
+    assert manifest["language"] == "german"
+    assert manifest["layers"] == 6
+
+
+def test_prepare_manifest_coerces_unavailable_layers(tmp_path: Path) -> None:
+    chapter = tts.ChapterInput(
+        index=1,
+        id="0001-test",
+        title="Test",
+        text="Hello world",
+        path=None,
+    )
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=[chapter],
+        out_dir=tmp_path / "out",
+        voice="voice.wav",
+        max_chars=50,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+        language="english",
+        layers=24,
+    )
+    assert manifest["layers"] == 6
+
+
+def test_prepare_manifest_coerces_french_to_24_layers(tmp_path: Path) -> None:
+    chapter = tts.ChapterInput(
+        index=1,
+        id="0001-test",
+        title="Test",
+        text="Bonjour",
+        path=None,
+    )
+    manifest, _chunks, _pad_ms = tts.prepare_manifest(
+        chapters=[chapter],
+        out_dir=tmp_path / "out",
+        voice="voice.wav",
+        max_chars=50,
+        pad_ms=300,
+        chunk_mode="sentence",
+        rechunk=False,
+        language="french",
+        layers=6,
+    )
+    assert manifest["language"] == "french"
+    assert manifest["layers"] == 24
+
+
+def test_floats_to_int16_scales_normalized_audio() -> None:
+    import numpy as np
+
+    out = tts.floats_to_int16([0.0, 1.0, -1.0, 0.5])
+    assert out.dtype == np.int16
+    assert out.tolist() == [0, 32767, -32767, 16384]
+
+
+def test_floats_to_int16_passes_through_int16_range_values() -> None:
+    # Peaks well outside [-1, 1] are treated as already-scaled samples.
+    out = tts.floats_to_int16([0.0, 1000.0, -2000.0])
+    assert out.tolist() == [0, 1000, -2000]
+
+
+def test_floats_to_int16_empty() -> None:
+    out = tts.floats_to_int16([])
+    assert out.size == 0
+
+
+def test_resolve_backend_name_defaults_to_torch_on_apple_silicon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEB_TTS_BACKEND", raising=False)
+    monkeypatch.setattr(tts.sys, "platform", "darwin")
+    monkeypatch.setattr(tts.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(tts, "torch", object())
+    monkeypatch.setattr(tts, "TTSModel", object())
+    assert tts._resolve_backend_name() == "torch"
+    # Without torch installed the default falls back to maneko even there.
+    monkeypatch.setattr(tts, "torch", None)
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_defaults_to_maneko_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEB_TTS_BACKEND", raising=False)
+    monkeypatch.setattr(tts, "torch", object())
+    monkeypatch.setattr(tts, "TTSModel", object())
+    monkeypatch.setattr(tts.sys, "platform", "linux")
+    assert tts._resolve_backend_name() == "maneko"
+    # Intel macs (including Rosetta pythons) also default to maneko.
+    monkeypatch.setattr(tts.sys, "platform", "darwin")
+    monkeypatch.setattr(tts.platform, "machine", lambda: "x86_64")
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEB_TTS_BACKEND", "torch")
+    assert tts._resolve_backend_name() == "torch"
+    monkeypatch.setenv("NEB_TTS_BACKEND", "MANEKO")  # case-insensitive
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_auto_prefers_torch_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEB_TTS_BACKEND", "auto")
+    monkeypatch.setattr(tts, "torch", object())
+    monkeypatch.setattr(tts, "TTSModel", object())
+    assert tts._resolve_backend_name() == "torch"
+    monkeypatch.setattr(tts, "torch", None)
+    assert tts._resolve_backend_name() == "maneko"
+
+
+def test_resolve_backend_name_rejects_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEB_TTS_BACKEND", "bogus")
+    with pytest.raises(RuntimeError):
+        tts._resolve_backend_name()
+
+
+def test_ensure_hf_token_visible_exports_user_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hf_home = tmp_path / "repo-cache"
+    hf_home.mkdir()
+    fake_home = tmp_path / "home"
+    token_file = fake_home / ".cache" / "huggingface" / "token"
+    token_file.parent.mkdir(parents=True)
+    token_file.write_text("hf_secret\n", encoding="utf-8")
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_TOKEN_PATH", raising=False)
+    monkeypatch.setattr(tts.Path, "home", lambda: fake_home)
+    tts._ensure_hf_token_visible()
+    assert tts.os.environ.get("HF_TOKEN") == "hf_secret"
+
+
+def test_ensure_hf_token_visible_prefers_active_hf_home_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hf_home = tmp_path / "repo-cache"
+    hf_home.mkdir()
+    (hf_home / "token").write_text("local", encoding="utf-8")
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_TOKEN_PATH", raising=False)
+    tts._ensure_hf_token_visible()
+    assert "HF_TOKEN" not in tts.os.environ
+
+
+def test_ensure_hf_token_visible_respects_explicit_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "explicit")
+    monkeypatch.setenv("HF_HOME", "/nonexistent")
+    tts._ensure_hf_token_visible()
+    assert tts.os.environ["HF_TOKEN"] == "explicit"

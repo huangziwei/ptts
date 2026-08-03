@@ -503,6 +503,46 @@ def test_chapters_from_toc_entries_single_file_chapters_unaffected() -> None:
     assert chapters[1].text == "Chapter two."
 
 
+def test_chapters_from_toc_entries_merges_non_split_multi_file_chapters() -> None:
+    """A chapter whose TOC anchor is a title-only page followed by several
+    body files with arbitrary (non-split) names should capture every spine
+    item up to the next TOC anchor. Mirrors trade EPUBs that give each section
+    its own file (e.g. c3W.xhtml -> c45.xhtml, c4J.xhtml ... -> cUP.xhtml)."""
+    items = [
+        _FakeDocumentItem(
+            "cA.html", "", b"<html><body><h1>I : Challenge</h1></body></html>", "cA"
+        ),
+        _FakeDocumentItem(
+            "cB.html", "", b"<html><body><p>Challenge part one.</p></body></html>", "cB"
+        ),
+        _FakeDocumentItem(
+            "cC.html", "", b"<html><body><p>Challenge part two.</p></body></html>", "cC"
+        ),
+        _FakeDocumentItem(
+            "cD.html", "", b"<html><body><h1>II : Love</h1></body></html>", "cD"
+        ),
+        _FakeDocumentItem(
+            "cE.html", "", b"<html><body><p>Love part one.</p></body></html>", "cE"
+        ),
+    ]
+    book = _FakeBook(items)
+    entries = [
+        epub_util.TocEntry(title="I : Challenge", href="cA.html"),
+        epub_util.TocEntry(title="II : Love", href="cD.html"),
+    ]
+    chapters = epub_util._chapters_from_toc_entries(book, entries)
+    assert len(chapters) == 2
+    assert chapters[0].title == "I : Challenge"
+    assert "Challenge part one" in chapters[0].text
+    assert "Challenge part two" in chapters[0].text
+    assert "Love part one" in chapters[1].text
+    # Body content must not leak across the TOC boundary.
+    assert "Love part one" not in chapters[0].text
+
+    report = epub_util.ingestion_report(book, chapters)
+    assert report["orphaned_chars"] == 0
+
+
 def test_ingestion_report_detects_orphaned_items() -> None:
     """ingestion_report should detect spine items not captured in chapters."""
     items = [
